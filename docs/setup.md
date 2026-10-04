@@ -2,51 +2,40 @@
 
 ## Requirements
 
-- **OpenSearch** — required. `memento` does not embed a store and does not ship one.
+- **OpenSearch** — you provide it: `memento` connects to an existing cluster and
+  does not embed a store. Install and configure it per the official
+  documentation (see [section 1](#1-opensearch)).
 - **Go 1.26.8+** — only if you build `memento` from source (`go build -o memento .`).
 
-`memento` talks to OpenSearch over HTTPS with basic auth. Any reachable OpenSearch
-2.x/3.x works; the setup below is what this project is developed and tested against.
+`memento` talks to OpenSearch over HTTPS with basic auth; any reachable 2.x/3.x
+works.
 
 ## 1. OpenSearch
 
-If you already have a cluster you can reach, skip to step 2.
+`memento` needs a reachable OpenSearch — it does not embed a store and does not
+ship one. Install and configure it per the official documentation; that part is
+not covered here:
 
-A single local node is enough to start — no cluster, no dedicated hardware. A full
-multi-node cluster works the same way: nothing in `memento` assumes one or the other
-(it talks to the cluster you point it at). The verified setup on the development
-machine:
+- **Install** (packages, Docker, Helm): <https://docs.opensearch.org/latest/install-and-configure/install-opensearch/index/>
+  — a single local node is enough to start.
+- **Configure** (security, TLS, users): <https://docs.opensearch.org/latest/>
 
-| What | Where |
+What `memento` expects — and what this project is developed and tested against:
+
+| What | Value |
 |---|---|
-| Package | `opensearch` 3.8.0 (Debian/Ubuntu, official apt repo) |
-| Service | `opensearch.service` (systemd), runs as user `opensearch` |
-| REST API | `https://127.0.0.1:9200` |
-| Transport | TLS with the bundled self-signed demo certificate |
-| Auth | security plugin enabled → basic auth, user `admin` |
+| Version | OpenSearch 3.8.0 (any reachable 2.x/3.x works) |
+| REST API | `https://127.0.0.1:9200` — HTTPS with the bundled demo certificate is fine (`insecure_skip_verify: true`) |
+| Auth | basic auth, user `admin` |
 
-The apt repository line used here:
+Check that it answers before continuing:
 
 ```
-deb [signed-by=/etc/apt/keyrings/opensearch.gpg] https://artifacts.opensearch.org/releases/bundle/opensearch/3.x/apt stable main
-```
-
-Full instructions for every platform (Debian, RPM, tarball, Docker, Helm):
-<https://docs.opensearch.org/latest/install-and-configure/install-opensearch/index/>
-Debian/Ubuntu specifically:
-<https://docs.opensearch.org/latest/install-and-configure/install-opensearch/debian/>
-
-Start it and check it answers:
-
-```
-sudo systemctl enable --now opensearch
 curl -k -u admin:<your-password> https://127.0.0.1:9200
 ```
 
-If you get the cluster info JSON back, the cluster is up.
-
-If you started from scratch, set the admin password during installation and
-remember it — you will put it in the `memento` config.
+If you get the cluster info JSON back, the cluster is up. Remember the admin
+password — you will put it in the `memento` config below.
 
 ## 2. Configure memento
 
@@ -118,7 +107,7 @@ memento obsolete global:demo:hello "demo removed"
 
 | Symptom | Cause / fix |
 |---|---|
-| `connection refused` | OpenSearch is not running: `systemctl status opensearch` |
+| `connection refused` | OpenSearch is not running (or not at the configured URL) — check your cluster and `opensearch_url` |
 | `x509: certificate signed by unknown authority` | Self-signed certificate: set `insecure_skip_verify: true` |
 | `401 Unauthorized` | Wrong user/password in the config file — or the security plugin was never initialized |
 | Timeout after 30s | Host unreachable (firewall, wrong host/port). `memento` gives up after 30s by design |
