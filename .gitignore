@@ -1,0 +1,26 @@
+# Binary
+memento
+
+# Config (contains auth)
+memento.conf
+opensearch_password.md
+
+# Local reference copy of opensearch-go (not part of the project)
+_ref/
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

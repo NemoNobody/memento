@@ -1,0 +1,228 @@
+package cmd
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"os/exec"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/NemoNobody/memento/internal/model"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+// serverEnvVar makes the test binary act as the MCP server child process.
+const serverEnvVar = "MEMENTO_TEST_MCP_SERVER"
+
+func TestMain(m *testing.M) {
+	if os.Getenv(serverEnvVar) == "1" {
+		// Child process: serve MCP over stdio until the client disconnects.
+		if err := runMCPServer(""); err != nil {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
+// connectTestServer spawns this test binary as an MCP server and connects to it
+// over stdio, exercising the real handshake. extraEnv entries override the
+// inherited environment.
+func connectTestServer(t *testing.T, extraEnv ...string) *mcp.ClientSession {
+	t.Helper()
+
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+	cmd := exec.Command(exe)
+	cmd.Env = append(childEnv(extraEnv), serverEnvVar+"=1")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	t.Cleanup(cancel)
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "memento-test", Version: "0"}, nil)
+	session, err := client.Connect(ctx, &mcp.CommandTransport{Command: cmd}, nil)
+	if err != nil {
+		t.Fatalf("connect to MCP server: %v", err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+	return session
+}
+
+// childEnv returns the parent environment with the overridden variables
+// removed, so the last value always wins in the child.
+func childEnv(overrides []string) []string {
+	names := map[string]bool{}
+	for _, kv := range overrides {
+		if i := strings.IndexByte(kv, '='); i > 0 {
+			names[kv[:i]] = true
+		}
+	}
+	env := make([]string, 0, len(os.Environ())+len(overrides))
+	for _, kv := range os.Environ() {
+		if i := strings.IndexByte(kv, '='); i > 0 && names[kv[:i]] {
+			continue
+		}
+		env = append(env, kv)
+	}
+	return append(env, overrides...)
+}
+
+var wantTools = []string{
+	"memento_status", "memento_search", "memento_get",
+	"memento_add", "memento_list", "memento_obsolete",
+}
+
+func TestMCPServerExposesAllTools(t *testing.T) {
+	session := connectTestServer(t)
+	ctx := context.Background()
+
+	tools, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+
+	got := map[string]string{}
+	for _, tool := range tools.Tools {
+		got[tool.Name] = tool.Description
+	}
+	for _, name := range wantTools {
+		desc, ok := got[name]
+		if !ok {
+			t.Errorf("tool %q not advertised", name)
+			continue
+		}
+		if desc == "" {
+			t.Errorf("tool %q has an empty description", name)
+		}
+	}
+	if len(got) != len(wantTools) {
+		t.Errorf("got %d tools, want %d: %v", len(got), len(wantTools), got)
+	}
+}
+
+// TestMCPServerStatusNeverFails checks the contract from PLAN §7 Phase 1:
+// memento_status must report availability instead of failing, so an agent can
+// explain the situation to the user even when OpenSearch is missing.
+func TestMCPServerStatusNeverFails(t *testing.T) {
+	session := connectTestServer(t)
+	ctx := context.Background()
+
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "memento_status"})
+	if err != nil {
+		t.Fatalf("CallTool(memento_status): %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("memento_status reported a tool error: %+v", res.Content)
+	}
+
+	// The structured result must carry the ok flag and a URL.
+	raw, err := json.Marshal(res.StructuredContent)
+	if err != nil {
+		t.Fatalf("marshal structured content: %v", err)
+	}
+	var out struct {
+		OK   bool   `json:"ok"`
+		URL  string `json:"url"`
+		Hint string `json:"hint"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("unmarshal structured content %s: %v", raw, err)
+	}
+	if out.URL == "" {
+		t.Errorf("url is empty in status output: %s", raw)
+	}
+	if !out.OK && out.Hint == "" {
+		t.Errorf("ok=false but no hint given: %s", raw)
+	}
+}
+
+// TestMCPServerStoreToolsFailWhenUnreachable is the counterpart of the status
+// contract: when the store is unreachable, the store tools must fail loudly.
+// An agent that receives an empty list instead of an error would conclude
+// "there is no such fact" — which is exactly the wrong lesson.
+func TestMCPServerStoreToolsFailWhenUnreachable(t *testing.T) {
+	session := connectTestServer(t, "OPENSEARCH_URL=https://127.0.0.1:9")
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name string
+		args map[string]any
+	}{
+		{"memento_search", map[string]any{"query": "anything"}},
+		{"memento_get", map[string]any{"key": "any:key"}},
+		{"memento_list", map[string]any{"project": "any"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: tc.name, Arguments: tc.args})
+			if err != nil {
+				t.Fatalf("CallTool(%s): %v", tc.name, err)
+			}
+			if !res.IsError {
+				t.Errorf("%s reported success with an unreachable store; "+
+					"an empty result would be mistaken for a real answer", tc.name)
+			}
+		})
+	}
+}
+
+func TestResolveStatus(t *testing.T) {
+	cases := map[string]string{
+		"":         "verified", // default: only trusted facts
+		"any":      "",         // explicit: no filter
+		"obsolete": "obsolete",
+	}
+	for in, want := range cases {
+		if got := resolveStatus(in); got != want {
+			t.Errorf("resolveStatus(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestNewFactViewCarriesTimeAndHistory pins the MCP contract: the view must
+// expose the current observation time and the history chain, and a zero
+// timestamp (facts created before observed_at existed) must map to "".
+func TestNewFactViewCarriesTimeAndHistory(t *testing.T) {
+	observed := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	f := model.Fact{
+		Key: "k", Value: "v", Category: "config", Project: "p",
+		Status:     "obsolete",
+		Source:     "experiment",
+		Notes:      "note",
+		ObservedAt: observed,
+		History: []model.HistoryEntry{
+			{Value: "old", ObservedAt: observed.Add(-time.Hour), Source: "tool:read_file"},
+			{Value: "older", Source: "doc:README"}, // zero time → ""
+		},
+	}
+
+	v := newFactView(f)
+	if v.ObservedAt != "2026-01-02T03:04:05Z" {
+		t.Errorf("ObservedAt = %q, want RFC3339", v.ObservedAt)
+	}
+	if v.Status != "obsolete" || v.Notes != "note" {
+		t.Errorf("status/notes not carried: %+v", v)
+	}
+	if len(v.History) != 2 {
+		t.Fatalf("history len = %d, want 2", len(v.History))
+	}
+	if v.History[0].Value != "old" || v.History[0].ObservedAt != "2026-01-02T02:04:05Z" ||
+		v.History[0].Source != "tool:read_file" {
+		t.Errorf("history[0] = %+v", v.History[0])
+	}
+	if v.History[1].ObservedAt != "" {
+		t.Errorf("zero observed_at must map to empty string, got %q", v.History[1].ObservedAt)
+	}
+
+	empty := newFactView(model.Fact{Key: "k", Value: "v"})
+	if empty.ObservedAt != "" {
+		t.Errorf("zero ObservedAt must map to empty string, got %q", empty.ObservedAt)
+	}
+	if len(empty.History) != 0 {
+		t.Errorf("empty history must stay empty, got %v", empty.History)
+	}
+}
