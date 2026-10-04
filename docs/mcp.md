@@ -36,8 +36,7 @@ empty. VS Code asks again whenever the server definition changes — expect a
 prompt while iterating on the config; rebuilding the `memento` binary alone does
 not change the definition.
 
-This machine registers the server definition in
-`~/.copilot/mcp-config.json`:
+A registration in `~/.copilot/mcp-config.json`:
 
 ```json
 {
@@ -80,8 +79,7 @@ Two details that matter:
   chain is `MEMENTO_CONF` → `./memento.conf` → next to the binary → `~/.memento.conf`;
   `--conf` removes the guesswork.
 
-Do not put the OpenSearch password in the MCP config: it stays in `memento.conf`,
-which is gitignored.
+Do not put the OpenSearch password in the MCP config: it stays in `memento.conf`.
 
 ## Tools
 
@@ -128,5 +126,5 @@ Output`. The same diagnostics are available from a shell as `memento status`.
 | Registered, but the server never starts | Waiting for a chat-message autostart pass or a trust confirmation — or it collided with another `memento` registration (same name in two scopes) |
 | Server starts, tools return `ok=false` | OpenSearch unreachable — the hint names the URL and the config file used. See `docs/setup.md` |
 | `status` shows a config file you did not expect | The lookup chain found another file; pass `--conf` explicitly |
-| Tools work in one project but not another | The server is user-wide, so this should not happen — check the MCP output log for a start-up error |
+| Tools work in one project but not another | The registration is user-wide; check the MCP output log for a start-up error |
 | Writes fail with "the cluster is blocking writes" | Cluster-side block (disk flood stage or a read-only index). Free space or ask the cluster owner; see `docs/setup.md` |

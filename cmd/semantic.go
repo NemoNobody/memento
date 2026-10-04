@@ -13,11 +13,10 @@ var semanticFlags struct {
 func SemanticCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "semantic <query>",
-		Short: "Semantic search facts (needs embeddings)",
+		Short: "Semantic search facts (not available yet)",
 		Args:  cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("semantic: %q (top_k=%d)\n", args[0], semanticFlags.topK)
-			fmt.Println("  semantic search needs an embedding model; not yet wired up")
+			fmt.Println("semantic search is not available yet: it needs an embedding model")
 		},
 	}
 	cmd.Flags().IntVarP(&semanticFlags.topK, "top-k", "k", 5, "number of results")

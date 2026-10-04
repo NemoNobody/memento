@@ -17,7 +17,7 @@ Paste this into your always-on rules:
 - Before re-verifying something → `memento_search <query>` / `memento_get <key>`; after verifying something new → `memento_add`.
 - Value changed → correct via the same key; the old value moves to history. A key names a stable subject, not a value (`proj:api:port`, not `proj:api:v1`).
 - Qualifiers and doubts → `notes` ("checked the dev config only"). Subject gone → `memento_obsolete <key> [reason]`.
-- **Never store secrets** (passwords, tokens, keys) — the store is plaintext.
+- **Never store secrets** (passwords, tokens, keys) — the store is plaintext with no filter; the rule is on you.
 - Store unreachable → say so (via `memento_status`); never silently re-verify and never retry in a loop.
 ```
 
@@ -96,8 +96,9 @@ eternity for a token.
 
 ### Security
 
-- The store is **plaintext**. Never store passwords, tokens, keys, or customer
-  data.
+- The store is **plaintext** and nothing filters what is written: never store
+  passwords, tokens, keys, or customer data. This rule is on you, not on the
+  store.
 - Do not echo secrets in the conversation.
 
 ### Degradation (store unreachable)

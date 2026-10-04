@@ -50,8 +50,8 @@ Two things to know:
 
 ## Backfilling `observed_at`
 
-Facts created before the field existed have none. Backfill from `updated_at`,
-the same fallback the correction script uses:
+Facts created before the field existed have none. Backfill from `updated_at` —
+the same fallback `memento` uses when a fact's value changes:
 
 ```bash
 curl -k -u admin:<your-password> -H 'Content-Type: application/json' \

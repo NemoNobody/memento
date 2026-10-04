@@ -105,7 +105,7 @@ func TestMCPServerExposesAllTools(t *testing.T) {
 	}
 }
 
-// TestMCPServerStatusNeverFails checks the contract from PLAN §7 Phase 1:
+// TestMCPServerStatusNeverFails checks the status contract:
 // memento_status must report availability instead of failing, so an agent can
 // explain the situation to the user even when OpenSearch is missing.
 func TestMCPServerStatusNeverFails(t *testing.T) {

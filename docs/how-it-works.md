@@ -23,7 +23,7 @@ document keyed by its `key` (the key is the document ID).
 | `history` | object (`enabled: false`) | past observations `[{value, observed_at, source}]` — stored, never indexed |
 
 Note: `embedding` is **not** part of the current mapping — the knn plugin is not
-registered. It is reserved for semantic search (see PLAN §4.8).
+registered. It is reserved for semantic search.
 
 ### Key conventions
 
@@ -87,12 +87,12 @@ old value in `history`.
 memento semantic <query> [--top-k 5]
 ```
 
-Semantic search. Requires an embedding model; not wired yet.
+Semantic search. Not available yet (requires an embedding model).
 
 ## Auth
 
-The CLI uses **Basic auth** (user + password) by default. Connection and
-auth settings come from a config file:
+The CLI uses **Basic auth** (user + password). Connection and auth settings
+come from a config file:
 
 - `memento.conf` (current dir)
 - `~/.memento.conf`
@@ -101,24 +101,12 @@ auth settings come from a config file:
 Env vars override the file: `OPENSEARCH_URL`, `OPENSEARCH_USER`,
 `OPENSEARCH_PASSWORD`, `MEMENTO_INDEX`.
 
-### Other auth options (OpenSearch)
-
-OpenSearch supports several auth mechanisms. The CLI currently uses Basic
-auth; the others are available if you need them:
-
-- **API keys (tokens).** Short-lived (max 90 days), created via
-  `POST /_plugins/_security/api/apitokens`. The token is returned once and
-  must be rotated. Good for CI / short-lived jobs, less convenient for a
-  long-lived CLI.
-- **mTLS.** Client certificates; no password in the config. Most secure,
-  more setup.
-- **Kerberos / LDAP / JWT.** For enterprise / SSO setups.
-
-For a long-lived local CLI, Basic auth via a config file is the simplest
-and most practical.
+OpenSearch also offers API keys, mTLS, and enterprise SSO (Kerberos / LDAP /
+JWT), but `memento` speaks **Basic auth only** — user and password in the
+config.
 
 ## Notes
 
 - `insecure_skip_verify` is `true` by default because the local OpenSearch
   uses a self-signed cert. Set it to `false` for a trusted CA.
-- The index is created automatically on first run (`EnsureIndex`).
+- The index is created automatically on first run.

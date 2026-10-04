@@ -80,7 +80,7 @@ memento search "api port"
 | `memento search <query> [--project <p>] [--category <c>] [--status <s>]` | Full-text search over values and notes |
 | `memento list <project>` | List all facts for a project |
 | `memento obsolete <key> [reason]` | Mark a fact obsolete because its subject is gone (reason appended to notes) |
-| `memento semantic <query> [--top-k 5]` | Semantic search (needs an embedding model, not wired yet) |
+| `memento semantic <query> [--top-k 5]` | Semantic search (needs an embedding model; not available yet) |
 | `memento status` | Check connectivity and show the effective configuration |
 | `memento mcp` | Run as an MCP server over stdio |
 
@@ -117,7 +117,9 @@ to start; a proper cluster works the same way. How to point `memento` at a
 cluster: [docs/setup.md](docs/setup.md). Schema and design:
 [docs/how-it-works.md](docs/how-it-works.md).
 
-**Never store secrets** (passwords, tokens, private keys): the index is plaintext.
+**Secrets do not belong in facts** (passwords, tokens, private keys) — a rule for
+agents and humans, not a guarantee: the store is plaintext, and nothing filters
+what gets written.
 
 ## License
 

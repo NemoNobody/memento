@@ -20,7 +20,7 @@ not covered here:
   — a single local node is enough to start.
 - **Configure** (security, TLS, users): <https://docs.opensearch.org/latest/>
 
-What `memento` expects — and what this project is developed and tested against:
+What `memento` expects:
 
 | What | Value |
 |---|---|
@@ -66,8 +66,8 @@ chmod 600 ~/.memento.conf
 - `insecure_skip_verify: true` is needed for the bundled self-signed certificate.
   For anything shared, use a proper certificate and set it to `false`.
 - The index is created automatically on first use — you do not have to create it.
-- A malformed config file is an error, not a silent fallback: `memento` tells you
-  which file it tried to read.
+- A malformed config file fails loudly — `memento` prints which file it tried to
+  read.
 
 Environment variables override the file:
 `OPENSEARCH_URL`, `OPENSEARCH_USER`, `OPENSEARCH_PASSWORD`,
@@ -110,17 +110,15 @@ memento obsolete global:demo:hello "demo removed"
 | `connection refused` | OpenSearch is not running (or not at the configured URL) — check your cluster and `opensearch_url` |
 | `x509: certificate signed by unknown authority` | Self-signed certificate: set `insecure_skip_verify: true` |
 | `401 Unauthorized` | Wrong user/password in the config file — or the security plugin was never initialized |
-| Timeout after 30s | Host unreachable (firewall, wrong host/port). `memento` gives up after 30s by design |
-| `status` shows an unexpected config file | Lookup order: run with `--conf`, or set `MEMENTO_CONF` |
-| Search finds nothing right after `add` | Should not happen: writes wait for a refresh. If it does, call `memento status` and report it |
-| `search` cannot find a fact by its key | By design: search covers `value` and `notes`, not keys. Use `memento get <key>` |
+| Timeout after 30s | Host unreachable (firewall, wrong host/port) — requests time out after 30s |
+| `status` shows an unexpected config file | The lookup chain picked another file — pass `--conf <path>`, or set `MEMENTO_CONF` |
+| `search` misses a fact by its key | Search covers `value` and `notes`, not keys — use `memento get <key>` |
 
 ## Security notes
 
-- **`memento.conf` contains a password.** The repository `.gitignore` excludes
-  `memento.conf` — do not force-add it. Keep the file at mode `600`.
-- **Never store secrets as facts** (passwords, tokens, private keys). The index is
-  plaintext and facts are meant to be readable by agents.
+- **Secrets do not belong in facts** (passwords, tokens, private keys): the index
+  is plaintext, and "no secrets" is a rule for agents and humans — not a built-in
+  protection.
 - Change the default `admin` password before the cluster is reachable by anyone else.
 - `insecure_skip_verify: true` disables certificate verification. It is fine for a
   local node with the demo certificate and wrong for anything shared.

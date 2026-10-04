@@ -8,7 +8,7 @@ import (
 	"strconv"
 )
 
-// Config holds configuration for the facts CLI.
+// Config holds configuration for the memento CLI.
 type Config struct {
 	OpenSearchURL      string `json:"opensearch_url"`
 	OpenSearchUser     string `json:"opensearch_user"`
