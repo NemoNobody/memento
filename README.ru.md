@@ -1,5 +1,7 @@
 # memento
 
+[![CI](https://github.com/NemoNobody/memento/actions/workflows/ci.yml/badge.svg)](https://github.com/NemoNobody/memento/actions/workflows/ci.yml)
+
 Персистентная память с provenance — для AI-агентов (и людей).
 
 [English version](README.md)
@@ -24,10 +26,16 @@
 
 ## Быстрый старт
 
-Сборка (Go 1.21+):
+Сборка (Go 1.25.9+):
 
 ```
 go build -o memento .
+```
+
+Или установка напрямую (когда модуль станет публичным и получит тег):
+
+```
+go install github.com/NemoNobody/memento@latest
 ```
 
 Настройка: скопируйте `memento.conf.example` в `memento.conf` (или

@@ -1,5 +1,7 @@
 # memento
 
+[![CI](https://github.com/NemoNobody/memento/actions/workflows/ci.yml/badge.svg)](https://github.com/NemoNobody/memento/actions/workflows/ci.yml)
+
 Persistent, provenance-carrying memory for AI agents (and humans).
 
 [Русская версия](README.ru.md)
@@ -25,10 +27,16 @@ judges trust and staleness in context.
 
 ## Quick start
 
-Build (Go 1.21+):
+Build (Go 1.25.9+):
 
 ```
 go build -o memento .
+```
+
+Or install directly (once the module is public and tagged):
+
+```
+go install github.com/NemoNobody/memento@latest
 ```
 
 Configure: copy `memento.conf.example` to `memento.conf` (or `~/.memento.conf`)
