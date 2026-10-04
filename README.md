@@ -25,7 +25,7 @@ judges trust and staleness in context.
 
 ## Quick start
 
-Build (Go 1.25.9+):
+Build (Go 1.26.8+):
 
 ```
 go build -o memento .

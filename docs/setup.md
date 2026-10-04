@@ -3,7 +3,7 @@
 ## Requirements
 
 - **OpenSearch** — required. `memento` does not embed a store and does not ship one.
-- **Go 1.25.9+** — only if you build `memento` from source (`go build -o memento .`).
+- **Go 1.26.8+** — only if you build `memento` from source (`go build -o memento .`).
 
 `memento` talks to OpenSearch over HTTPS with basic auth. Any reachable OpenSearch
 2.x/3.x works; the setup below is what this project is developed and tested against.
