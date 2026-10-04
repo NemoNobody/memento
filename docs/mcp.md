@@ -101,6 +101,9 @@ The store tools deliberately **fail** when OpenSearch is unreachable, while
 for "no such fact": that is what would make an agent re-verify everything it
 already knew.
 
+An importable rule for agents — when to consult and update memory — is in
+[rules/memento.md](../rules/memento.md).
+
 ## Verify it works
 
 1. Command Palette → `MCP: List Servers` — `memento` should be listed and running.
