@@ -22,8 +22,8 @@ document keyed by its `key` (the key is the document ID).
 | `notes` | text | free-text qualifiers (omitted when empty; obsolete reasons appended here) |
 | `history` | object (`enabled: false`) | past observations `[{value, observed_at, source}]` — stored, never indexed |
 
-Note: `embedding` is **not** part of the current mapping — the knn plugin is not
-registered. It is reserved for semantic search.
+Note: `embedding` is **not** part of the current mapping — `memento` does not
+compute embeddings yet. It is reserved for semantic search.
 
 ### Key conventions
 

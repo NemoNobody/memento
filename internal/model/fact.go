@@ -27,8 +27,8 @@ type Fact struct {
 	Source     string         `json:"source" yaml:"source"`
 	Notes      string         `json:"notes,omitempty" yaml:"notes,omitempty"`
 	History    []HistoryEntry `json:"history,omitempty" yaml:"history,omitempty"`
-	// Embedding is reserved for semantic search; the knn plugin is not
-	// registered yet, so it is never written (omitempty).
+	// Embedding is reserved for semantic search; with no embedding model
+	// configured it is never written (omitempty).
 	Embedding []float32 `json:"embedding,omitempty" yaml:"embedding,omitempty"`
 }
 
