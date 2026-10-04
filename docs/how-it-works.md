@@ -22,14 +22,13 @@ document keyed by its `key` (the key is the document ID).
 | `notes` | text | free-text qualifiers (omitted when empty; obsolete reasons appended here) |
 | `history` | object (`enabled: false`) | past observations `[{value, observed_at, source}]` — stored, never indexed |
 
-Note: `embedding` is **not** part of the current mapping — `memento` does not
-compute embeddings yet. It is reserved for semantic search.
-
 ### Key conventions
 
 - `key` is the document ID. Re-adding the same key is an idempotent upsert:
   a new value moves the old one to `history`; the same value updates notes only.
-- `key` should be stable and unique per fact: `project:area:location:detail`.
+- `key` should be stable, unique per fact, and written in **predictable English**
+  (`project:area:location:detail`) — a later session must be able to guess it
+  without searching.
 - `value` is the human-readable fact.
 
 ## Commands
@@ -80,14 +79,6 @@ Marks the fact `obsolete` because its subject is gone (file deleted, endpoint
 removed). The value and `observed_at` are kept; the reason is appended to
 `notes`. Use `add` instead when the value merely changed — corrections keep the
 old value in `history`.
-
-### semantic
-
-```
-memento semantic <query> [--top-k 5]
-```
-
-Semantic search. Not available yet (requires an embedding model).
 
 ## Auth
 

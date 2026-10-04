@@ -25,8 +25,6 @@ func allCommands() []cmdCase {
 		{"obsolete", ObsoleteCmd, "obsolete <key> [reason]", 1, 2, nil},
 		{"search", SearchCmd, "search <query>", 1, 1,
 			map[string]string{"project": "p", "category": "c", "status": "s"}},
-		{"semantic", SemanticCmd, "semantic <query>", 1, 1,
-			map[string]string{"top-k": "k"}},
 	}
 }
 
@@ -157,22 +155,6 @@ func TestSearchCmdFlagDefaultsAndParse(t *testing.T) {
 	}
 }
 
-func TestSemanticCmdFlagDefaultsAndParse(t *testing.T) {
-	t.Cleanup(func() { semanticFlags.topK = 5 })
-
-	cmd := SemanticCmd()
-	if got := cmd.Flags().Lookup("top-k").DefValue; got != "5" {
-		t.Errorf("top-k default = %q, want 5", got)
-	}
-
-	if err := cmd.Flags().Parse([]string{"-k", "10"}); err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if semanticFlags.topK != 10 {
-		t.Errorf("topK = %d, want 10", semanticFlags.topK)
-	}
-}
-
 func TestRootCmdRegistersSubcommands(t *testing.T) {
 	root := NewRootCmd()
 	if root.Use != "memento" {
@@ -180,7 +162,7 @@ func TestRootCmdRegistersSubcommands(t *testing.T) {
 	}
 	want := map[string]bool{
 		"add": false, "get": false, "list": false,
-		"obsolete": false, "search": false, "semantic": false,
+		"obsolete": false, "search": false,
 	}
 	for _, c := range root.Commands() {
 		if _, ok := want[c.Name()]; ok {

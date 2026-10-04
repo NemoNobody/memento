@@ -27,9 +27,6 @@ type Fact struct {
 	Source     string         `json:"source" yaml:"source"`
 	Notes      string         `json:"notes,omitempty" yaml:"notes,omitempty"`
 	History    []HistoryEntry `json:"history,omitempty" yaml:"history,omitempty"`
-	// Embedding is reserved for semantic search; with no embedding model
-	// configured it is never written (omitempty).
-	Embedding []float32 `json:"embedding,omitempty" yaml:"embedding,omitempty"`
 }
 
 // NewFact creates a new fact with a generated ID and timestamps.

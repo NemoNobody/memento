@@ -23,7 +23,6 @@ func NewRootCmd() *cobra.Command {
 		AddCmd(),
 		ObsoleteCmd(),
 		ListCmd(),
-		SemanticCmd(),
 		StatusCmd(),
 		McpCmd(),
 	)

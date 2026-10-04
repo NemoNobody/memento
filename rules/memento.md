@@ -15,7 +15,7 @@ Paste this into your always-on rules:
 ```
 - Start of a session in a project → `memento_list <project>` (always).
 - Before re-verifying something → `memento_search <query>` / `memento_get <key>`; after verifying something new → `memento_add`.
-- Value changed → correct via the same key; the old value moves to history. A key names a stable subject, not a value (`proj:api:port`, not `proj:api:v1`).
+- Value changed → correct via the same key; the old value moves to history. A key names a stable subject — predictable English, not a value (`proj:api:port`, not `proj:api:v1`).
 - Qualifiers and doubts → `notes` ("checked the dev config only"). Subject gone → `memento_obsolete <key> [reason]`.
 - **Never store secrets** (passwords, tokens, keys) — the store is plaintext with no filter; the rule is on you.
 - Store unreachable → say so (via `memento_status`); never silently re-verify and never retry in a loop.
@@ -48,7 +48,9 @@ staleness in context. The store never decides.
 ### The key is the identity
 
 - A key names a stable subject or role, not its current value.
-- Format `project:area:detail`: `demo:api:port`, `myrepo:config:opensearch_url`.
+- Keys are plain **English and predictable** — the next session must be able to
+  guess the key without searching. Format `project:area:detail`:
+  `demo:api:port`, `myrepo:config:opensearch_url`.
 - "Same fact or a different one" is decided by the key. Value changed — same
   key, a correction; subject changed — a different key.
 
