@@ -103,6 +103,13 @@ just its compact block — into `AGENTS.md`, `.github/copilot-instructions.md`,
 `.cursor/rules/`, or your editor's always-on instructions. It tells the agent
 when to consult and update memory, and how to keep it honest.
 
+## Dashboards
+
+`dashboards/memento-dashboard.ndjson` — a ready-made OpenSearch Dashboards
+overview: totals, breakdowns by status/project/category/source, observation
+activity, the oldest observations (re-verification queue), and facts with
+notes. Import instructions and caveats: [docs/dashboard.md](docs/dashboard.md).
+
 ## Storage
 
 Facts live in a single OpenSearch index (default `memento`). One node is enough
