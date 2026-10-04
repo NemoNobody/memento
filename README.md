@@ -86,6 +86,13 @@ notes only.
 and `memento_obsolete` directly. Registration and troubleshooting:
 [docs/mcp.md](docs/mcp.md).
 
+## Use with agents
+
+An importable rule lives in [rules/memento.md](rules/memento.md): copy it — or
+just its compact block — into `AGENTS.md`, `.github/copilot-instructions.md`,
+`.cursor/rules/`, or your editor's always-on instructions. It tells the agent
+when to consult and update memory, and how to keep it honest.
+
 ## Storage
 
 Facts live in a single OpenSearch index (default `memento`). One node is enough

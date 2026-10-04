@@ -85,6 +85,13 @@ memento search "api port"
 `memento_list` и `memento_obsolete` напрямую. Регистрация и диагностика:
 [docs/mcp.md](docs/mcp.md).
 
+## Для агентов
+
+Готовое правило — [rules/memento.md](rules/memento.md): скопируйте его (или
+только компактный блок) в `AGENTS.md`, `.github/copilot-instructions.md`,
+`.cursor/rules/` или always-on инструкции вашего редактора. Оно объясняет агенту,
+когда заглядывать в память, когда её обновлять — и как не соврать.
+
 ## Хранилище
 
 Факты лежат в одном индексе OpenSearch (по умолчанию `memento`). Для старта
