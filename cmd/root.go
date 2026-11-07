@@ -31,6 +31,7 @@ func NewRootCmd() *cobra.Command {
 		FetchCmd(),
 		DocCmd(),
 		DocsCmd(),
+		CredsCmd(),
 		McpCmd(),
 	)
 	return root
