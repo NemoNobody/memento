@@ -75,6 +75,7 @@ func childEnv(overrides []string) []string {
 var wantTools = []string{
 	"memento_status", "memento_search", "memento_get",
 	"memento_add", "memento_list", "memento_keys", "memento_prune", "memento_obsolete",
+	"memento_fetch_doc", "memento_get_doc", "memento_search_docs",
 }
 
 func TestMCPServerExposesAllTools(t *testing.T) {
@@ -157,6 +158,9 @@ func TestMCPServerStoreToolsFailWhenUnreachable(t *testing.T) {
 		{"memento_get", map[string]any{"key": "any:key"}},
 		{"memento_list", map[string]any{"project": "any"}},
 		{"memento_prune", map[string]any{"key": "any:key", "confirm": true}},
+		{"memento_fetch_doc", map[string]any{"url": "https://example.com/x"}},
+		{"memento_get_doc", map[string]any{"hash": "abc123"}},
+		{"memento_search_docs", map[string]any{"query": "anything"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: tc.name, Arguments: tc.args})
@@ -166,6 +170,48 @@ func TestMCPServerStoreToolsFailWhenUnreachable(t *testing.T) {
 			if !res.IsError {
 				t.Errorf("%s reported success with an unreachable store; "+
 					"an empty result would be mistaken for a real answer", tc.name)
+			}
+		})
+	}
+}
+
+// TestMCPServerDocToolsValidateOffline pins the offline validation contract:
+// a bad input is the caller's problem, not an availability problem. The store
+// is unreachable on purpose: the tools must reject the input BEFORE touching
+// it, so the agent gets an actionable message ("the host is not allowed"),
+// not a store timeout.
+func TestMCPServerDocToolsValidateOffline(t *testing.T) {
+	session := connectTestServer(t,
+		"OPENSEARCH_URL=https://127.0.0.1:9",
+		"MEMENTO_FETCH_HOSTS=allowed.example.com",
+	)
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name string
+		args map[string]any
+		want string
+	}{
+		{"memento_fetch_doc", map[string]any{"url": ""}, "empty url"},
+		{"memento_fetch_doc", map[string]any{"url": "ftp://allowed.example.com/x"}, "scheme"},
+		{"memento_fetch_doc", map[string]any{"url": "https://denied.example.com/x"}, "fetch_allow_hosts"},
+		{"memento_search_docs", map[string]any{"query": ""}, "query"},
+		{"memento_get_doc", map[string]any{"hash": ""}, "hash"},
+	} {
+		t.Run(tc.name+" "+tc.want, func(t *testing.T) {
+			res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: tc.name, Arguments: tc.args})
+			if err != nil {
+				t.Fatalf("CallTool(%s): %v", tc.name, err)
+			}
+			if !res.IsError {
+				t.Fatalf("%s accepted invalid input: %+v", tc.name, tc.args)
+			}
+			text := toolText(res)
+			if !strings.Contains(text, tc.want) {
+				t.Errorf("error must mention %q, got: %s", tc.want, text)
+			}
+			if strings.Contains(text, "127.0.0.1:9") {
+				t.Errorf("validation ran after the store was reached: %s", text)
 			}
 		})
 	}

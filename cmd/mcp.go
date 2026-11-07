@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/NemoNobody/memento/internal/client"
@@ -148,6 +150,36 @@ func runMCPServer(confPath string) error {
 			"merely changed — corrections move the old value to history. The value " +
 			"is kept for reference; the reason is appended to notes.",
 	}, s.obsolete)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "memento_fetch_doc",
+		Description: "Fetch a web page, store its full snapshot in the docs index, " +
+			"and return the outline (hash, title, sections). A second fetch of the " +
+			"same URL returns the stored snapshot (cached=true) until its TTL " +
+			"expires; refresh=true forces a new download. Section text is read with " +
+			"memento_get_doc; the raw page is never returned (context economy). " +
+			"Requests send no cookies and no credentials; a host outside " +
+			"fetch_allow_hosts is rejected before the request. GitHub URLs that " +
+			"match a local clone resolve to a local path (local=true) with no " +
+			"network and no store write.",
+	}, s.fetchDoc)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "memento_get_doc",
+		Description: "Read a stored document snapshot by hash: the outline by " +
+			"default, section=N for one section's text, full=true for every section " +
+			"(prefer one section: full bloats the context). Never touches the " +
+			"network: stale=true means the snapshot is past its TTL — refresh it " +
+			"with memento_fetch_doc before quoting.",
+	}, s.getDoc)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "memento_search_docs",
+		Description: "BM25 search over stored page snapshots (section text only; " +
+			"the raw html is write-only and never searched). Returns hash+url+title+" +
+			"snippet per doc; pull full text with memento_get_doc. Complements " +
+			"memento_search, which searches verified facts, not pages.",
+	}, s.searchDocs)
 
 	err := srv.Run(context.Background(), &mcp.StdioTransport{})
 	if errors.Is(err, io.EOF) {
@@ -549,4 +581,219 @@ func (s *mcpServer) prune(ctx context.Context, req *mcp.CallToolRequest, in prun
 		return nil, pruneOutput{}, storeError("memento_prune", err)
 	}
 	return nil, pruneOutput{Key: in.Key, HistoryTotal: total, Keep: keep, Removed: removed, Pruned: true}, nil
+}
+
+// --- page snapshots (docs index) ---
+
+type fetchDocInput struct {
+	URL     string `json:"url" jsonschema:"page url to fetch; a missing scheme becomes https, utm_* parameters are stripped"`
+	Project string `json:"project,omitempty" jsonschema:"tag the document with this project"`
+	Refresh bool   `json:"refresh,omitempty" jsonschema:"force a fresh download even when a stored snapshot exists"`
+
+	// ConfirmSecret bypasses a guard hit at secret_guard=ask, the same
+	// contract as memento_add: page text is untrusted and can quote
+	// credential-like strings.
+	ConfirmSecret bool `json:"confirm_secret,omitempty" jsonschema:"confirm a guard hit is a false positive (secret_guard=ask only); set only after the user approved the exact finding"`
+}
+
+type docSectionOutline struct {
+	Order   int    `json:"order" jsonschema:"section number for memento_get_doc"`
+	Heading string `json:"heading"`
+	Chars   int    `json:"chars" jsonschema:"text length in runes"`
+}
+
+func newDocOutline(d *model.Doc) []docSectionOutline {
+	out := make([]docSectionOutline, 0, len(d.Sections))
+	for _, s := range d.Sections {
+		out = append(out, docSectionOutline{Order: s.Order, Heading: s.Heading, Chars: len([]rune(s.Text))})
+	}
+	return out
+}
+
+type fetchDocOutput struct {
+	Hash      string              `json:"hash,omitempty" jsonschema:"document id for memento_get_doc"`
+	URL       string              `json:"url,omitempty"`
+	Title     string              `json:"title,omitempty"`
+	Project   string              `json:"project,omitempty"`
+	FetchedAt string              `json:"fetched_at,omitempty"`
+	ExpiresAt string              `json:"expires_at,omitempty"`
+	Stale     bool                `json:"stale,omitempty" jsonschema:"past TTL: re-fetch with memento_fetch_doc before quoting"`
+	Cached    bool                `json:"cached,omitempty" jsonschema:"true when the stored snapshot was returned without a network request"`
+	Truncated bool                `json:"truncated,omitempty" jsonschema:"extraction hit a limit: the stored text is a prefix"`
+	Sections  []docSectionOutline `json:"sections,omitempty" jsonschema:"outline: pull a section with memento_get_doc(hash, section)"`
+
+	// GitHub local-clone resolution: the answer is a file on this machine.
+	Local bool   `json:"local,omitempty" jsonschema:"true when the url resolved to a file in a local git clone: Path is the file; nothing was fetched"`
+	Path  string `json:"path,omitempty" jsonschema:"local clone file path when local=true"`
+}
+
+func (s *mcpServer) fetchDoc(ctx context.Context, req *mcp.CallToolRequest, in fetchDocInput) (*mcp.CallToolResult, fetchDocOutput, error) {
+	// Validate before any store contact: a bad url, a denied host, a robots
+	// verdict is the caller's problem, not an availability problem.
+	rawURL, err := client.NormalizeURL(in.URL)
+	if err != nil {
+		return nil, fetchDocOutput{}, err
+	}
+	cfg, err := config.LoadConfigFrom(s.confPath)
+	if err != nil {
+		return nil, fetchDocOutput{}, err
+	}
+	if err := client.HostAllowed(cfg, rawURL); err != nil {
+		return nil, fetchDocOutput{}, err
+	}
+	if p, ok := client.GitHubLocal(cfg, rawURL); ok {
+		// The content is in a local clone: hand out the path. No fetch, no
+		// store write: the repo mapping is machine-specific and must never
+		// enter the shared index.
+		return nil, fetchDocOutput{Local: true, Path: p}, nil
+	}
+	c, err := client.NewClient(cfg) // FetchDoc ensures the docs index itself
+	if err != nil {
+		return nil, fetchDocOutput{}, storeError("memento_fetch_doc", err)
+	}
+	doc, cached, err := c.FetchDoc(ctx, rawURL, in.Project, in.Refresh,
+		func(d *model.Doc) error {
+			// Guard after extraction, before the store write.
+			return guardFetch(d, cfg.SecretGuard, in.ConfirmSecret)
+		})
+	if err != nil {
+		return nil, fetchDocOutput{}, err
+	}
+	now := time.Now().UTC()
+	out := fetchDocOutput{
+		Hash:      doc.URLHash,
+		URL:       doc.URL,
+		Title:     doc.Title,
+		Project:   doc.Project,
+		FetchedAt: rfc3339OrEmpty(doc.FetchedAt),
+		ExpiresAt: rfc3339OrEmpty(doc.ExpiresAt),
+		Stale:     doc.Stale(now),
+		Cached:    cached,
+		Truncated: doc.Truncated,
+		Sections:  newDocOutline(doc),
+	}
+	return nil, out, nil
+}
+
+type getDocInput struct {
+	Hash string `json:"hash" jsonschema:"document id from memento_fetch_doc/memento_search_docs"`
+
+	// Section is a pointer: 0 is a valid section number, and its absence
+	// must mean "outline only".
+	Section *int `json:"section,omitempty" jsonschema:"section number to return in full (from the outline); omit for the outline only"`
+	Full    bool `json:"full,omitempty" jsonschema:"return every section (bloats the context; prefer one section)"`
+}
+
+type getDocOutput struct {
+	Found     bool                `json:"found" jsonschema:"false when no stored doc has this hash"`
+	Hash      string              `json:"hash,omitempty"`
+	URL       string              `json:"url,omitempty"`
+	Title     string              `json:"title,omitempty"`
+	Stale     bool                `json:"stale,omitempty" jsonschema:"past TTL: refresh with memento_fetch_doc before quoting"`
+	Truncated bool                `json:"truncated,omitempty" jsonschema:"extraction hit a limit: the stored text is a prefix"`
+	Sections  []docSectionOutline `json:"sections,omitempty" jsonschema:"outline: heading + length per section"`
+
+	SectionText string `json:"section_text,omitempty" jsonschema:"the text of the requested section"`
+	FullText    string `json:"full_text,omitempty" jsonschema:"every section, delimited by headers (full=true)"`
+}
+
+func (s *mcpServer) getDoc(ctx context.Context, req *mcp.CallToolRequest, in getDocInput) (*mcp.CallToolResult, getDocOutput, error) {
+	if strings.TrimSpace(in.Hash) == "" {
+		return nil, getDocOutput{}, errors.New("memento_get_doc: hash is required")
+	}
+	c, err := s.newClient(ctx)
+	if err != nil {
+		return nil, getDocOutput{}, storeError("memento_get_doc", err)
+	}
+	doc, err := c.GetDocByHash(ctx, in.Hash)
+	if errors.Is(err, client.ErrNotFound) {
+		return nil, getDocOutput{Found: false}, nil
+	}
+	if err != nil {
+		return nil, getDocOutput{}, storeError("memento_get_doc", err)
+	}
+	now := time.Now().UTC()
+	out := getDocOutput{
+		Found:     true,
+		Hash:      doc.URLHash,
+		URL:       doc.URL,
+		Title:     doc.Title,
+		Stale:     doc.Stale(now),
+		Truncated: doc.Truncated,
+		Sections:  newDocOutline(doc),
+	}
+	if in.Full {
+		var b strings.Builder
+		for _, sec := range doc.Sections {
+			b.WriteString("--- [")
+			b.WriteString(strconv.Itoa(sec.Order))
+			b.WriteString("] ")
+			b.WriteString(sec.Heading)
+			b.WriteString(" ---\n")
+			b.WriteString(sec.Text)
+			b.WriteString("\n")
+		}
+		out.FullText = b.String()
+	}
+	if in.Section != nil {
+		for _, sec := range doc.Sections {
+			if sec.Order == *in.Section {
+				out.SectionText = sec.Text
+				return nil, out, nil
+			}
+		}
+		return nil, getDocOutput{}, fmt.Errorf("memento_get_doc: doc %s has no section %d (the outline lists %d sections)",
+			doc.URLHash, *in.Section, len(doc.Sections))
+	}
+	return nil, out, nil
+}
+
+type searchDocsInput struct {
+	Query   string `json:"query" jsonschema:"text to search in stored document sections (the raw html is never searched)"`
+	Project string `json:"project,omitempty" jsonschema:"limit to documents tagged with this project"`
+	Limit   int    `json:"limit,omitempty" jsonschema:"max documents to return (default 5, cap 20): the context budget for search results"`
+}
+
+type docHitView struct {
+	Hash    string `json:"hash" jsonschema:"document id for memento_get_doc"`
+	URL     string `json:"url"`
+	Title   string `json:"title"`
+	Stale   bool   `json:"stale" jsonschema:"past TTL: refresh with memento_fetch_doc before quoting"`
+	Snippet string `json:"snippet,omitempty" jsonschema:"first section, whitespace-collapsed and capped"`
+}
+
+type docsHitsOutput struct {
+	Count int          `json:"count"`
+	Docs  []docHitView `json:"docs"`
+}
+
+func (s *mcpServer) searchDocs(ctx context.Context, req *mcp.CallToolRequest, in searchDocsInput) (*mcp.CallToolResult, docsHitsOutput, error) {
+	if strings.TrimSpace(in.Query) == "" {
+		return nil, docsHitsOutput{}, errors.New("memento_search_docs: query is required")
+	}
+	limit := in.Limit
+	if limit <= 0 {
+		limit = 5
+	}
+	if limit > 20 {
+		limit = 20
+	}
+	c, err := s.newClient(ctx)
+	if err != nil {
+		return nil, docsHitsOutput{}, storeError("memento_search_docs", err)
+	}
+	docs, err := c.SearchDocs(ctx, in.Query, in.Project, limit)
+	if err != nil {
+		return nil, docsHitsOutput{}, storeError("memento_search_docs", err)
+	}
+	now := time.Now().UTC()
+	hits := make([]docHitView, 0, len(docs))
+	for _, d := range docs {
+		h := docHitView{Hash: d.URLHash, URL: d.URL, Title: d.Title, Stale: d.Stale(now)}
+		if len(d.Sections) > 0 {
+			h.Snippet = snippet(d.Sections[0].Text, 300)
+		}
+		hits = append(hits, h)
+	}
+	return nil, docsHitsOutput{Count: len(hits), Docs: hits}, nil
 }
