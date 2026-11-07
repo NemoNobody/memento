@@ -1,10 +1,21 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+// removeFile deletes path for test cleanup. A real removal failure fails the
+// test (it can leave a stray memento.conf next to the test binary and skew
+// later tests); a file that is already gone is fine.
+func removeFile(t *testing.T, path string) {
+	t.Helper()
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("remove %s: %v", path, err)
+	}
+}
 
 // chdir switches the working directory and returns a cleanup function that
 // restores it. Call the returned func at the end of each test (or via t.Cleanup).
@@ -318,7 +329,7 @@ func TestFindConfigPath(t *testing.T) {
 	}
 
 	// case 3: executable-dir memento.conf wins (no cwd file).
-	os.Remove(cwdFile)
+	removeFile(t, cwdFile)
 	execPath, err := os.Executable()
 	if err != nil {
 		t.Skipf("os.Executable: %v", err)
@@ -327,26 +338,26 @@ func TestFindConfigPath(t *testing.T) {
 	if err := os.WriteFile(execConf, []byte(`{}`), 0644); err != nil {
 		t.Fatalf("write exec memento.conf: %v", err)
 	}
-	defer os.Remove(execConf)
+	t.Cleanup(func() { removeFile(t, execConf) })
 	if p := FindConfigPath(); p != execConf {
 		t.Errorf("exec path = %q, want %s", p, execConf)
 	}
 
 	// case 4: home .memento.conf wins (no cwd or exec file).
-	os.Remove(execConf)
+	removeFile(t, execConf)
 	homeDir := t.TempDir()
 	t.Setenv("HOME", homeDir)
 	homeFile := filepath.Join(homeDir, ".memento.conf")
 	if err := os.WriteFile(homeFile, []byte(`{}`), 0644); err != nil {
 		t.Fatalf("write home .memento.conf: %v", err)
 	}
-	defer os.Remove(homeFile)
+	t.Cleanup(func() { removeFile(t, homeFile) })
 	if p := FindConfigPath(); p != homeFile {
 		t.Errorf("home path = %q, want %s", p, homeFile)
 	}
 
 	// case 5: nothing found.
-	os.Remove(homeFile)
+	removeFile(t, homeFile)
 	t.Setenv("HOME", t.TempDir())
 	if p := FindConfigPath(); p != "" {
 		t.Errorf("no-file path = %q, want empty", p)
