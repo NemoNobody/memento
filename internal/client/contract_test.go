@@ -40,6 +40,13 @@ type fakeOpenSearch struct {
 
 // newFakeClient starts a fake cluster and returns a client pointed at it.
 func newFakeClient(t *testing.T, respond func(r recordedRequest) (int, string)) (*Client, *fakeOpenSearch) {
+	return newFakeClientCfg(t, nil, respond)
+}
+
+// newFakeClientCfg is newFakeClient with a hook to override config values
+// (e.g. HistoryLimit) after the defaults are applied.
+func newFakeClientCfg(t *testing.T, mutate func(*config.Config),
+	respond func(r recordedRequest) (int, string)) (*Client, *fakeOpenSearch) {
 	t.Helper()
 
 	fake := &fakeOpenSearch{respond: respond}
@@ -63,11 +70,15 @@ func newFakeClient(t *testing.T, respond func(r recordedRequest) (int, string)) 
 	}))
 	t.Cleanup(fake.Close)
 
-	c, err := NewClient(&config.Config{
+	cfg := &config.Config{
 		OpenSearchURL:      fake.URL,
 		IndexName:          "memento",
 		InsecureSkipVerify: true,
-	})
+	}
+	if mutate != nil {
+		mutate(cfg)
+	}
+	c, err := NewClient(cfg)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -358,6 +369,145 @@ func TestAddBlockedWriteIsActionable(t *testing.T) {
 		if !strings.Contains(msg, want) {
 			t.Errorf("message %q missing %q", msg, want)
 		}
+	}
+}
+
+// TestAddCorrectionCarriesHistoryLimit pins the per-key retention contract:
+// the correction script trims the oldest history beyond params.history_limit,
+// so the limit value must ship with every scripted update. Without it, state
+// keys corrected daily would grow one key's history without bound.
+func TestAddCorrectionCarriesHistoryLimit(t *testing.T) {
+	var updateBody string
+	c, fake := newFakeClientCfg(t, func(cfg *config.Config) { cfg.HistoryLimit = 10 },
+		func(r recordedRequest) (int, string) {
+			switch {
+			case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
+				return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
+					"fact_id":"existing-id","key":"k","value":"old",
+					"created_at":"2020-01-01T00:00:00Z","updated_at":"2020-01-01T00:00:00Z",
+					"observed_at":"2020-01-01T00:00:00Z"}}`
+			case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+				updateBody = r.Body
+				return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+			}
+			return http.StatusInternalServerError, `{"status":500,"error":"unexpected"}`
+		})
+
+	if _, err := c.Add(context.Background(), model.NewFact("k", "new value", "config", "p", "test:contract", "")); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	updates := fake.requestsFor(http.MethodPost, "/memento/_update/k")
+	if len(updates) != 1 {
+		t.Fatalf("expected one scripted update, got %d", len(updates))
+	}
+	var req map[string]any
+	if err := json.Unmarshal([]byte(updateBody), &req); err != nil {
+		t.Fatalf("update body is not JSON: %v (%s)", err, updateBody)
+	}
+	script, ok := req["script"].(map[string]any)
+	if !ok {
+		t.Fatalf("update body has no script: %s", updateBody)
+	}
+	params, _ := script["params"].(map[string]any)
+	if params["history_limit"] != float64(10) {
+		t.Errorf("params.history_limit = %v, want 10", params["history_limit"])
+	}
+	src, _ := script["source"].(string)
+	if !strings.Contains(src, "history_limit") {
+		t.Errorf("script does not apply the retention limit: %s", src)
+	}
+}
+
+// TestPruneScriptedUpdate pins the prune contract: it is a scripted update
+// that keeps the newest tail of history, touches neither value nor
+// observed_at, refreshes for read-after-write, and reports the removed count.
+func TestPruneScriptedUpdate(t *testing.T) {
+	var updateBody string
+	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
+		switch {
+		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
+			return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
+				"key":"k","value":"v","category":"config","project":"p","status":"verified",
+				"history":[{"value":"h1"},{"value":"h2"},{"value":"h3"},{"value":"h4"},{"value":"h5"}]}}`
+		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+			updateBody = r.Body
+			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+		}
+		return http.StatusInternalServerError, `{"status":500,"error":"unexpected"}`
+	})
+
+	removed, err := c.Prune(context.Background(), "k", 2)
+	if err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+	if removed != 3 {
+		t.Errorf("removed = %d, want 3", removed)
+	}
+
+	updates := fake.requestsFor(http.MethodPost, "/memento/_update/k")
+	if len(updates) != 1 {
+		t.Fatalf("expected one scripted update, got %d", len(updates))
+	}
+	if got := updates[0].Query.Get("refresh"); got != "wait_for" {
+		t.Errorf("refresh = %q, want wait_for", got)
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal([]byte(updateBody), &req); err != nil {
+		t.Fatalf("update body is not JSON: %v (%s)", err, updateBody)
+	}
+	script, ok := req["script"].(map[string]any)
+	if !ok {
+		t.Fatalf("update body has no script: %s", updateBody)
+	}
+	src, _ := script["source"].(string)
+	if !strings.Contains(src, "subList") {
+		t.Errorf("script does not keep the newest tail of history: %s", src)
+	}
+	params, _ := script["params"].(map[string]any)
+	if params["keep"] != float64(2) {
+		t.Errorf("params.keep = %v, want 2", params["keep"])
+	}
+	// The current value is never touched: only history and updated_at change.
+	if strings.Contains(src, "value = ") {
+		t.Errorf("prune script must not overwrite the value: %s", src)
+	}
+}
+
+// TestPruneNoWriteWhenWithinLimit: within the limit there is nothing to drop,
+// so nothing is written — updated_at must not move on a no-op.
+func TestPruneNoWriteWhenWithinLimit(t *testing.T) {
+	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
+		if r.Method == http.MethodGet && r.Path == "/memento/_doc/k" {
+			return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
+				"key":"k","value":"v","category":"config","project":"p","status":"verified",
+				"history":[{"value":"h1"},{"value":"h2"}]}}`
+		}
+		return http.StatusInternalServerError, `{"status":500,"error":"unexpected"}`
+	})
+
+	removed, err := c.Prune(context.Background(), "k", 5)
+	if err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+	if removed != 0 {
+		t.Errorf("removed = %d, want 0", removed)
+	}
+	if updates := fake.requestsFor(http.MethodPost, "/memento/_update/k"); len(updates) != 0 {
+		t.Errorf("prune within the limit wrote %d times; a no-op must not touch the document", len(updates))
+	}
+}
+
+// TestPruneMissingFactIsNotFound keeps the handlers' errors.Is checks working:
+// a missing key must arrive as ErrNotFound, not as a write error.
+func TestPruneMissingFactIsNotFound(t *testing.T) {
+	c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+		return http.StatusNotFound, `{"status":404,"error":"document_missing_exception"}`
+	})
+
+	if _, err := c.Prune(context.Background(), "nope", 1); !errors.Is(err, ErrNotFound) {
+		t.Errorf("err = %v, want ErrNotFound", err)
 	}
 }
 

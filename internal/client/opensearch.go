@@ -168,11 +168,19 @@ func (c *Client) EnsureIndex(ctx context.Context) error {
 // appended to history before the new value replaces it. Facts created before
 // observed_at/history existed have neither, so the script falls back to
 // updated_at and initialises the array.
+//
+// After the append, the oldest entries beyond params.history_limit are dropped:
+// a correction must not grow one key's history without bound (state keys get
+// corrected daily, and history ships inside every get/list response).
+// history_limit <= 0 means "keep everything".
 const addCorrectionScript = `
 def obs = ctx._source.observed_at != null ? ctx._source.observed_at : ctx._source.updated_at;
 def src = ctx._source.source != null ? ctx._source.source : '';
 if (ctx._source.history == null) { ctx._source.history = new ArrayList(); }
 ctx._source.history.add(['value': ctx._source.value, 'observed_at': obs, 'source': src]);
+if (params.history_limit > 0) {
+  while (ctx._source.history.size() > params.history_limit) { ctx._source.history.remove(0); }
+}
 ctx._source.value = params.value;
 ctx._source.observed_at = params.observed_at;
 ctx._source.source = params.source;
@@ -236,11 +244,12 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (created bool, err erro
 			"lang":   "painless",
 			"source": addCorrectionScript,
 			"params": map[string]interface{}{
-				"value":       f.Value,
-				"observed_at": f.ObservedAt.UTC().Format(time.RFC3339),
-				"source":      f.Source,
-				"notes":       f.Notes,
-				"updated_at":  now,
+				"value":         f.Value,
+				"observed_at":   f.ObservedAt.UTC().Format(time.RFC3339),
+				"source":        f.Source,
+				"notes":         f.Notes,
+				"updated_at":    now,
+				"history_limit": c.cfg.HistoryLimit,
 			},
 		},
 	})
@@ -325,6 +334,57 @@ func (c *Client) Obsolete(ctx context.Context, key, reason string) error {
 		return wrapWriteError("obsolete fact", err)
 	}
 	return nil
+}
+
+// pruneHistoryScript keeps only the newest params.keep history entries.
+// History is oldest-first, so the kept tail is the most recent observations.
+const pruneHistoryScript = `
+def h = ctx._source.history;
+if (h != null && h.size() > params.keep) {
+  ctx._source.history = new ArrayList(h.subList(h.size() - params.keep, h.size()));
+}
+ctx._source.updated_at = params.updated_at;
+`
+
+// Prune drops history entries beyond the newest keep, keeping the current
+// value untouched. It returns the number of entries removed. Like every
+// destructive call it must sit behind an explicit user confirmation — the
+// barrier lives in the CLI (--yes) and the MCP tool (confirm=true).
+func (c *Client) Prune(ctx context.Context, key string, keep int) (int, error) {
+	if keep < 0 {
+		return 0, fmt.Errorf("prune: keep must be >= 0, got %d", keep)
+	}
+	existing, err := c.Get(ctx, key)
+	if err != nil {
+		return 0, fmt.Errorf("prune fact: %w", err)
+	}
+	removed := len(existing.History) - keep
+	if removed <= 0 {
+		return 0, nil // nothing beyond the limit: no write, no updated_at move
+	}
+	body, _ := json.Marshal(map[string]interface{}{
+		"script": map[string]interface{}{
+			"lang":   "painless",
+			"source": pruneHistoryScript,
+			"params": map[string]interface{}{
+				"keep":       keep,
+				"updated_at": time.Now().UTC().Format(time.RFC3339),
+			},
+		},
+	})
+	_, err = c.api.Update(ctx, opensearchapi.UpdateReq{
+		Index:      c.cfg.IndexName,
+		DocumentID: key,
+		Body:       bytes.NewReader(body),
+		Params:     opensearchapi.UpdateParams{Refresh: "wait_for"},
+	})
+	if err != nil {
+		if isNotFound(err) {
+			return 0, fmt.Errorf("prune %w: %q", ErrNotFound, key)
+		}
+		return 0, wrapWriteError("prune fact", err)
+	}
+	return removed, nil
 }
 
 // buildSearchBody builds the search query body for a keyword search.

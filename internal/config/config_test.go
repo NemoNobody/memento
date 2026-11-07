@@ -32,6 +32,7 @@ func clearEnv(t *testing.T) {
 		"OPENSEARCH_USER",
 		"OPENSEARCH_PASSWORD",
 		"MEMENTO_INDEX",
+		"MEMENTO_HISTORY_LIMIT",
 	} {
 		t.Setenv(k, "")
 	}
@@ -51,6 +52,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.IndexName != "memento" {
 		t.Errorf("IndexName = %q, want memento", cfg.IndexName)
 	}
+	if cfg.HistoryLimit != 20 {
+		t.Errorf("HistoryLimit = %d, want default 20", cfg.HistoryLimit)
+	}
 }
 
 func TestLoadConfig_NoFileNoEnv(t *testing.T) {
@@ -67,6 +71,9 @@ func TestLoadConfig_NoFileNoEnv(t *testing.T) {
 	}
 	if cfg.IndexName != "memento" {
 		t.Errorf("IndexName = %q, want memento (no file)", cfg.IndexName)
+	}
+	if cfg.HistoryLimit != 20 {
+		t.Errorf("HistoryLimit = %d, want default 20 (no file)", cfg.HistoryLimit)
 	}
 }
 
@@ -125,6 +132,58 @@ func TestLoadConfig_EnvOverride(t *testing.T) {
 	}
 	if cfg.IndexName != "envindex" {
 		t.Errorf("IndexName = %q, want env value (override)", cfg.IndexName)
+	}
+}
+
+// TestLoadConfig_HistoryLimit pins the per-key history retention knob: an
+// explicit file value overrides the default, an explicit 0 means "keep
+// everything" and must survive decoding (the *int in fileConfig exists for
+// exactly this distinction).
+func TestLoadConfig_HistoryLimit(t *testing.T) {
+	cases := []struct {
+		name string
+		file string
+		env  string
+		want int
+	}{
+		{"file override", `{"history_limit": 5}`, "", 5},
+		{"file zero keeps everything", `{"history_limit": 0}`, "", 0},
+		{"file negative disables retention", `{"history_limit": -1}`, "", -1},
+		{"env overrides file", `{"history_limit": 5}`, "7", 7},
+		{"env zero", `{}`, "0", 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			restore := chdir(t, dir)
+			defer restore()
+			clearEnv(t)
+			fc := filepath.Join(dir, "memento.conf")
+			if err := os.WriteFile(fc, []byte(tc.file), 0644); err != nil {
+				t.Fatalf("write memento.conf: %v", err)
+			}
+			if tc.env != "" {
+				t.Setenv("MEMENTO_HISTORY_LIMIT", tc.env)
+			}
+			cfg, err := LoadConfig()
+			if err != nil {
+				t.Fatalf("LoadConfig: %v", err)
+			}
+			if cfg.HistoryLimit != tc.want {
+				t.Errorf("HistoryLimit = %d, want %d", cfg.HistoryLimit, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadConfig_HistoryLimitBadEnvIsAnError(t *testing.T) {
+	dir := t.TempDir()
+	restore := chdir(t, dir)
+	defer restore()
+	clearEnv(t)
+	t.Setenv("MEMENTO_HISTORY_LIMIT", "not-a-number")
+	if _, err := LoadConfig(); err == nil {
+		t.Error("LoadConfig() = nil error for MEMENTO_HISTORY_LIMIT=not-a-number, want error")
 	}
 }
 

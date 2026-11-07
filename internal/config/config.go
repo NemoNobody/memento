@@ -15,6 +15,11 @@ type Config struct {
 	OpenSearchPassword string `json:"opensearch_password"`
 	InsecureSkipVerify bool   `json:"insecure_skip_verify"`
 	IndexName          string `json:"index_name"`
+
+	// HistoryLimit bounds per-key history on every correction: after the old
+	// value is appended, the oldest entries beyond this limit are dropped.
+	// 0 means "keep everything".
+	HistoryLimit int `json:"history_limit"`
 }
 
 // DefaultConfig returns the default configuration.
@@ -25,6 +30,7 @@ func DefaultConfig() *Config {
 		OpenSearchPassword: "",
 		InsecureSkipVerify: true,
 		IndexName:          "memento",
+		HistoryLimit:       20,
 	}
 }
 
@@ -44,7 +50,8 @@ func LoadConfig() (*Config, error) {
 //  4. ~/.memento.conf
 //
 // Env vars override the file: OPENSEARCH_URL, OPENSEARCH_USER,
-// OPENSEARCH_PASSWORD, OPENSEARCH_INSECURE_SKIP_VERIFY, MEMENTO_INDEX.
+// OPENSEARCH_PASSWORD, OPENSEARCH_INSECURE_SKIP_VERIFY, MEMENTO_INDEX,
+// MEMENTO_HISTORY_LIMIT.
 func LoadConfigFrom(explicitPath string) (*Config, error) {
 	cfg := DefaultConfig()
 	path := explicitPath
@@ -75,6 +82,13 @@ func LoadConfigFrom(explicitPath string) (*Config, error) {
 	if idx := os.Getenv("MEMENTO_INDEX"); idx != "" {
 		cfg.IndexName = idx
 	}
+	if v := os.Getenv("MEMENTO_HISTORY_LIMIT"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return nil, fmt.Errorf("MEMENTO_HISTORY_LIMIT: %w", err)
+		}
+		cfg.HistoryLimit = n
+	}
 	return cfg, nil
 }
 
@@ -87,6 +101,7 @@ type fileConfig struct {
 	OpenSearchPassword string `json:"opensearch_password"`
 	InsecureSkipVerify *bool  `json:"insecure_skip_verify"`
 	IndexName          string `json:"index_name"`
+	HistoryLimit       *int   `json:"history_limit"`
 }
 
 // loadFile reads the config file at path into cfg.
@@ -113,6 +128,9 @@ func loadFile(cfg *Config, path string) error {
 	}
 	if c.IndexName != "" {
 		cfg.IndexName = c.IndexName
+	}
+	if c.HistoryLimit != nil {
+		cfg.HistoryLimit = *c.HistoryLimit
 	}
 	return nil
 }
