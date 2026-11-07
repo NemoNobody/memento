@@ -20,8 +20,9 @@ const (
 )
 
 // dropTags are removed together with everything inside them: they carry
-// scripts and styling, not readable text.
-var dropTags = []string{"script", "style", "noscript", "template", "svg", "select", "option"}
+// scripts and styling, not readable text. head is dropped: its title is
+// taken separately (ExtractTitle), the rest (meta, link, style) is noise.
+var dropTags = []string{"script", "style", "noscript", "template", "svg", "select", "option", "head"}
 
 // blockTags end a text line in the extraction, approximating block layout.
 var blockTags = map[string]bool{
@@ -84,6 +85,25 @@ func ExtractSections(body string) (sections []model.Section, images []model.Imag
 		}
 		cur.WriteString(body[i : i+lt])
 		tagStart := i + lt
+		if strings.HasPrefix(lower[tagStart:], "<!--") {
+			// Comments are author notes, not readable content.
+			if j := strings.Index(lower[tagStart+4:], "-->"); j >= 0 {
+				i = tagStart + 4 + j + 3
+			} else {
+				i = len(body)
+			}
+			continue
+		}
+		if strings.HasPrefix(lower[tagStart:], "<!") || strings.HasPrefix(lower[tagStart:], "<?") {
+			// Declarations (doctype, CDATA, XML processing instructions) are
+			// never text: a doctype line once became a document's heading.
+			if j := strings.IndexByte(lower[tagStart:], '>'); j >= 0 {
+				i = tagStart + j + 1
+			} else {
+				i = len(body)
+			}
+			continue
+		}
 		name, tagEnd, isClose := parseTag(body, lower, tagStart)
 		if name == "" {
 			// Not a real tag ("<" in prose); keep it as text.

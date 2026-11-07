@@ -18,6 +18,29 @@ func TestExtractTitle(t *testing.T) {
 	}
 }
 
+func TestExtractSkipsDoctypeHeadComments(t *testing.T) {
+	// Live-shape page: a doctype, a head with a title, a comment. None of
+	// their text may reach the sections (a doctype line once became a
+	// document's heading; head text is noise — ExtractTitle owns the title).
+	body := `<!doctype html><html lang=en><head><meta charset=utf-8>` +
+		`<title>Doc Title</title><style>b{}</style></head>` +
+		`<body><!-- an author note, long enough to survive the min-line filter -->` +
+		`<h1>Real Head</h1><p>Real paragraph text here.</p></body></html>`
+	secs, _, _ := ExtractSections(body)
+	if len(secs) != 1 {
+		t.Fatalf("sections = %d, want 1: %+v", len(secs), secs)
+	}
+	if secs[0].Heading != "Real Head" {
+		t.Errorf("heading = %q, want the real h1 (doctype/head leaked?)", secs[0].Heading)
+	}
+	all := secs[0].Heading + secs[0].Text
+	for _, bad := range []string{"doctype", "Doc Title", "author note"} {
+		if strings.Contains(all, bad) {
+			t.Errorf("%q leaked into sections: %q", bad, all)
+		}
+	}
+}
+
 func TestExtractSectionsBasics(t *testing.T) {
 	body := `<html><body>` +
 		`<style>h1{display:none}</style>` +
