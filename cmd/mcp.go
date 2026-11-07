@@ -91,13 +91,17 @@ func runMCPServer(confPath string) error {
 		Description: "Search stored facts by text. Looks in fact values and notes " +
 			"only — it does NOT match keys, so use memento_get for an exact key. " +
 			"By default returns only trusted ('verified') facts; obsolete facts are " +
-			"superseded and must not be treated as current.",
+			"superseded and must not be treated as current. History is omitted " +
+			"unless include_history=true. Answers carry age_days/stale: a stale fact " +
+			"must be re-verified against the source before being trusted.",
 	}, s.search)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "memento_get",
 		Description: "Get one fact by its exact key. Returns found=false when there " +
-			"is no such fact (that is not an error).",
+			"is no such fact (that is not an error). History is omitted unless " +
+			"include_history=true. Answers carry age_days/stale: a stale fact must be " +
+			"re-verified against the source before being trusted.",
 	}, s.get)
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -112,8 +116,17 @@ func runMCPServer(confPath string) error {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "memento_list",
 		Description: "List the facts stored for a project. Defaults to trusted " +
-			"('verified') facts only.",
+			"('verified') facts only. History is omitted unless include_history=true.",
 	}, s.list)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "memento_prune",
+		Description: "Drop old history entries under a key, keeping the newest " +
+			"'keep' (the current value is never touched). DESTRUCTIVE: dropped " +
+			"observations are gone for good. Without confirm=true nothing is " +
+			"written — the call returns the plan. Show the plan to the user and " +
+			"re-call with confirm=true only after their explicit approval.",
+	}, s.prune)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "memento_obsolete",
@@ -161,7 +174,9 @@ type factView struct {
 	Source     string        `json:"source" jsonschema:"where it came from, e.g. tool:read_file, doc:README, user:confirmed"`
 	Notes      string        `json:"notes,omitempty" jsonschema:"qualifiers: what was checked, how far, caveats"`
 	ObservedAt string        `json:"observed_at" jsonschema:"RFC3339 when the current value was observed"`
-	History    []historyView `json:"history,omitempty" jsonschema:"previous observations, oldest first"`
+	AgeDays    int           `json:"age_days" jsonschema:"whole days since the observation; -1 when observed_at is unknown"`
+	Stale      bool          `json:"stale" jsonschema:"true when age passes the category TTL (config/endpoint 14d, location/behavior 30d, context_map never) — re-verify against the source before trusting"`
+	History    []historyView `json:"history,omitempty" jsonschema:"previous observations, oldest first; present only when include_history=true"`
 	CreatedAt  string        `json:"created_at" jsonschema:"RFC3339 creation time"`
 	UpdatedAt  string        `json:"updated_at" jsonschema:"RFC3339 last update time"`
 }
@@ -175,16 +190,13 @@ func rfc3339OrEmpty(t time.Time) string {
 	return t.Format(time.RFC3339)
 }
 
-func newFactView(f model.Fact) factView {
-	history := make([]historyView, 0, len(f.History))
-	for _, h := range f.History {
-		history = append(history, historyView{
-			Value:      h.Value,
-			ObservedAt: rfc3339OrEmpty(h.ObservedAt),
-			Source:     h.Source,
-		})
-	}
-	return factView{
+// newFactView renders a fact for the MCP contract. History ships only when
+// asked for: corrections are frequent (state keys get re-observed daily) and
+// shipping every past observation bloats the agent's context on every read.
+// Staleness is computed at read time — the store provides the evidence
+// (observed_at), the signal (stale/age_days) tells the agent to re-verify.
+func newFactView(f model.Fact, includeHistory bool) factView {
+	v := factView{
 		Key:        f.Key,
 		Value:      f.Value,
 		Category:   f.Category,
@@ -193,16 +205,29 @@ func newFactView(f model.Fact) factView {
 		Source:     f.Source,
 		Notes:      f.Notes,
 		ObservedAt: rfc3339OrEmpty(f.ObservedAt),
-		History:    history,
+		AgeDays:    f.AgeDays(time.Now().UTC()),
+		Stale:      f.Stale(time.Now().UTC()),
 		CreatedAt:  f.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:  f.UpdatedAt.Format(time.RFC3339),
 	}
+	if includeHistory {
+		history := make([]historyView, 0, len(f.History))
+		for _, h := range f.History {
+			history = append(history, historyView{
+				Value:      h.Value,
+				ObservedAt: rfc3339OrEmpty(h.ObservedAt),
+				Source:     h.Source,
+			})
+		}
+		v.History = history
+	}
+	return v
 }
 
-func newFactViews(facts []model.Fact) []factView {
+func newFactViews(facts []model.Fact, includeHistory bool) []factView {
 	views := make([]factView, 0, len(facts))
 	for _, f := range facts {
-		views = append(views, newFactView(f))
+		views = append(views, newFactView(f, includeHistory))
 	}
 	return views
 }
@@ -217,18 +242,25 @@ type factsOutput struct {
 // every call so that a broken file or an unreachable server cannot kill the
 // server process (see mcpServer). The index is ensured like the CLI does.
 func (s *mcpServer) newClient(ctx context.Context) (*client.Client, error) {
+	c, _, err := s.newClientWithConfig(ctx)
+	return c, err
+}
+
+// newClientWithConfig is newClient plus the effective config, for tools that
+// need config values beyond the connection (memento_prune's default keep).
+func (s *mcpServer) newClientWithConfig(ctx context.Context) (*client.Client, *config.Config, error) {
 	cfg, err := config.LoadConfigFrom(s.confPath)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	c, err := client.NewClient(cfg)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := c.EnsureIndex(ctx); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return c, nil
+	return c, cfg, nil
 }
 
 // storeError marks a failure as an availability problem rather than an empty
@@ -253,10 +285,11 @@ func resolveStatus(status string) string {
 }
 
 type searchInput struct {
-	Query    string `json:"query" jsonschema:"text to look for in fact values and notes (keys are not searched)"`
-	Project  string `json:"project,omitempty" jsonschema:"limit results to this project"`
-	Category string `json:"category,omitempty" jsonschema:"limit results to this category"`
-	Status   string `json:"status,omitempty" jsonschema:"limit results to this status: verified (default), obsolete, or any"`
+	Query          string `json:"query" jsonschema:"text to look for in fact values and notes (keys are not searched)"`
+	Project        string `json:"project,omitempty" jsonschema:"limit results to this project"`
+	Category       string `json:"category,omitempty" jsonschema:"limit results to this category"`
+	Status         string `json:"status,omitempty" jsonschema:"limit results to this status: verified (default), obsolete, or any"`
+	IncludeHistory bool   `json:"include_history,omitempty" jsonschema:"include the full history chain (default: current value only)"`
 }
 
 func (s *mcpServer) search(ctx context.Context, req *mcp.CallToolRequest, in searchInput) (*mcp.CallToolResult, factsOutput, error) {
@@ -268,11 +301,12 @@ func (s *mcpServer) search(ctx context.Context, req *mcp.CallToolRequest, in sea
 	if err != nil {
 		return nil, factsOutput{}, storeError("memento_search", err)
 	}
-	return nil, factsOutput{Count: len(facts), Facts: newFactViews(facts)}, nil
+	return nil, factsOutput{Count: len(facts), Facts: newFactViews(facts, in.IncludeHistory)}, nil
 }
 
 type getInput struct {
-	Key string `json:"key" jsonschema:"exact fact key"`
+	Key            string `json:"key" jsonschema:"exact fact key"`
+	IncludeHistory bool   `json:"include_history,omitempty" jsonschema:"include the full history chain (default: current value only)"`
 }
 
 type getOutput struct {
@@ -293,7 +327,7 @@ func (s *mcpServer) get(ctx context.Context, req *mcp.CallToolRequest, in getInp
 	if err != nil {
 		return nil, getOutput{}, storeError("memento_get", err)
 	}
-	v := newFactView(*f)
+	v := newFactView(*f, in.IncludeHistory)
 	return nil, getOutput{Found: true, Fact: &v}, nil
 }
 
@@ -332,8 +366,9 @@ func (s *mcpServer) add(ctx context.Context, req *mcp.CallToolRequest, in addInp
 }
 
 type listInput struct {
-	Project string `json:"project" jsonschema:"project name to list facts for"`
-	Status  string `json:"status,omitempty" jsonschema:"limit results to this status: verified (default), obsolete, or any"`
+	Project        string `json:"project" jsonschema:"project name to list facts for"`
+	Status         string `json:"status,omitempty" jsonschema:"limit results to this status: verified (default), obsolete, or any"`
+	IncludeHistory bool   `json:"include_history,omitempty" jsonschema:"include the full history chain (default: current value only)"`
 }
 
 func (s *mcpServer) list(ctx context.Context, req *mcp.CallToolRequest, in listInput) (*mcp.CallToolResult, factsOutput, error) {
@@ -356,7 +391,7 @@ func (s *mcpServer) list(ctx context.Context, req *mcp.CallToolRequest, in listI
 		}
 		facts = kept
 	}
-	return nil, factsOutput{Count: len(facts), Facts: newFactViews(facts)}, nil
+	return nil, factsOutput{Count: len(facts), Facts: newFactViews(facts, in.IncludeHistory)}, nil
 }
 
 type obsoleteInput struct {
@@ -382,4 +417,58 @@ func (s *mcpServer) obsolete(ctx context.Context, req *mcp.CallToolRequest, in o
 		return nil, obsoleteOutput{}, storeError("memento_obsolete", err)
 	}
 	return nil, obsoleteOutput{Key: in.Key, Status: "obsolete"}, nil
+}
+
+type pruneInput struct {
+	Key     string `json:"key" jsonschema:"key of the fact whose history to prune"`
+	Keep    int    `json:"keep,omitempty" jsonschema:"number of newest history entries to keep; 0 = history_limit from config"`
+	Confirm bool   `json:"confirm,omitempty" jsonschema:"must be true to write; without it only the plan is returned"`
+}
+
+type pruneOutput struct {
+	Key          string `json:"key" jsonschema:"the pruned key"`
+	HistoryTotal int    `json:"history_total" jsonschema:"history entries before the call"`
+	Keep         int    `json:"keep" jsonschema:"history entries that survive"`
+	Removed      int    `json:"removed" jsonschema:"entries deleted (0 when nothing was written)"`
+	Pruned       bool   `json:"pruned" jsonschema:"true when history was actually rewritten"`
+}
+
+// prune is destructive, so it carries the same barrier as the CLI: without
+// confirm=true the plan is returned and nothing is written. An agent must
+// relay the plan to the user and re-call only after explicit approval.
+func (s *mcpServer) prune(ctx context.Context, req *mcp.CallToolRequest, in pruneInput) (*mcp.CallToolResult, pruneOutput, error) {
+	c, cfg, err := s.newClientWithConfig(ctx)
+	if err != nil {
+		return nil, pruneOutput{}, storeError("memento_prune", err)
+	}
+	keep := in.Keep
+	if keep <= 0 {
+		keep = cfg.HistoryLimit
+		if keep <= 0 {
+			keep = 1
+		}
+	}
+	f, err := c.Get(ctx, in.Key)
+	if errors.Is(err, client.ErrNotFound) {
+		return nil, pruneOutput{}, fmt.Errorf("no fact with key %q: nothing to prune", in.Key)
+	}
+	if err != nil {
+		return nil, pruneOutput{}, storeError("memento_prune", err)
+	}
+	total := len(f.History)
+	if total <= keep {
+		return nil, pruneOutput{Key: in.Key, HistoryTotal: total, Keep: total, Removed: 0}, nil
+	}
+	if !in.Confirm {
+		// The barrier: describe the plan, write nothing.
+		return nil, pruneOutput{}, fmt.Errorf("memento_prune is destructive: key %q has %d history "+
+			"entries; keeping the newest %d would drop %d observations for good. Nothing was written. "+
+			"Show this plan to the user and re-call with confirm=true only after their approval",
+			in.Key, total, keep, total-keep)
+	}
+	removed, err := c.Prune(ctx, in.Key, keep)
+	if err != nil {
+		return nil, pruneOutput{}, storeError("memento_prune", err)
+	}
+	return nil, pruneOutput{Key: in.Key, HistoryTotal: total, Keep: keep, Removed: removed, Pruned: true}, nil
 }

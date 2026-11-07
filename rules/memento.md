@@ -17,6 +17,8 @@ Paste this into your always-on rules:
 - Before re-verifying something → `memento_search <query>` / `memento_get <key>`; after verifying something new → `memento_add`.
 - Value changed → correct via the same key; the old value moves to history. A key names a stable subject — predictable English, not a value (`proj:api:port`, not `proj:api:v1`).
 - Qualifiers and doubts → `notes` ("checked the dev config only"). Subject gone → `memento_obsolete <key> [reason]`.
+- Reads return the current value only (`stale`/`age_days` included); history needs `include_history: true`. `stale: true` → re-verify against the source before trusting.
+- `memento_prune` is destructive: without `confirm: true` it only returns the plan; show the plan to the user and confirm only after their approval.
 - **Never store secrets** (passwords, tokens, keys) — the store is plaintext with no filter; the rule is on you.
 - Store unreachable → say so (via `memento_status`); never silently re-verify and never retry in a loop.
 ```
@@ -36,6 +38,7 @@ staleness in context. The store never decides.
 | `memento_search <query>` | search in `value` and `notes` (not in keys) |
 | `memento_get <key>` | exact key (`found=false` when absent) |
 | `memento_add <key> <value> [category] [project] [source] [notes]` | upsert |
+| `memento_prune <key> [keep]` | drop old history (destructive: plan first, `confirm=true` only after the user approves) |
 | `memento_obsolete <key> [reason]` | the subject is gone |
 
 ### When to search, when to store
@@ -92,9 +95,23 @@ re-verify everything from scratch. A doubt is a note, not a status.
 
 ### Staleness is the LLM's call
 
-The store provides evidence (`source`, `observed_at`, `history`); it does not
-decide. "Old" depends on context: two years is fine for a port; a week is an
-eternity for a token.
+The store provides evidence (`source`, `observed_at`, `history`) **and a
+staleness signal** (`age_days`, `stale`, computed at read time from a
+per-category TTL: `config`/`endpoint` 14 days, `location`/`behavior` 30 days,
+`context_map` and unknown categories never). It does not decide. "Old" depends
+on context: two years is fine for a port; a week is an eternity for a token.
+`stale: true` is an instruction to re-verify against the source, not to
+discard. An unknown `observed_at` (`age_days: -1`) counts as stale for TTL'd
+categories — you cannot tell how old it is.
+
+### History is off by default
+
+Reads (`memento_get`/`memento_search`/`memento_list`) return the current value
+only; pass `include_history: true` when the chain of past observations is
+actually needed (it bloats the context). Corrections trim the oldest entries
+beyond `history_limit` (default 20). `memento_prune` trims on demand and is
+destructive: the plan comes back without `confirm: true`; write only after the
+user approves.
 
 ### Security
 

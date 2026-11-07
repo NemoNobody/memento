@@ -47,10 +47,12 @@ only") to later sessions.
 ### get
 
 ```
-memento get <key>
+memento get <key> [--history]
 ```
 
-Returns the fact for a key.
+Returns the fact for a key, plus the freshness signal (`age_days`, `stale`).
+The history chain is **off by default** (it bloats the context of agents that
+read facts on every turn); `--history` prints it.
 
 ### search
 
@@ -59,7 +61,8 @@ memento search <query> [--project <p>] [--category <c>] [--status <s>]
 ```
 
 Full-text search over `value` and `notes`, filtered by project/category/status.
-Default status is `verified`.
+Default status is `verified`. Stale facts are marked `[stale: Nd]` in the
+listing.
 
 ### list
 
@@ -67,7 +70,22 @@ Default status is `verified`.
 memento list <project>
 ```
 
-All facts for a project.
+All facts for a project. Stale facts are marked `[stale: Nd]`.
+
+### prune
+
+```
+memento prune <key> [--keep N] [--yes]
+```
+
+Drops history entries beyond the newest `N`, keeping the current value
+untouched. `N` defaults to `history_limit` from the config.
+
+Pruning is destructive (dropped observations have no undo), so it sits behind a
+barrier: **without `--yes` nothing is written** — the command prints the plan
+(how many entries exist, how many survive, how many are lost) and exits. An
+agent must show that plan to the user and re-run with `--yes` only after their
+explicit approval.
 
 ### obsolete
 
@@ -80,6 +98,38 @@ removed). The value and `observed_at` are kept; the reason is appended to
 `notes`. Use `add` instead when the value merely changed — corrections keep the
 old value in `history`.
 
+## History retention
+
+Corrections are frequent (state keys get re-observed daily), so an unbounded
+`history` array bloats every response. The correction script appends the old
+value and then trims the oldest entries beyond `history_limit` (config key
+`history_limit`, env `MEMENTO_HISTORY_LIMIT`, default 20; `0` keeps
+everything). `memento prune` applies the same idea on demand, behind a
+confirmation barrier.
+
+## Staleness
+
+The store provides the evidence (`observed_at`); the signal is computed at read
+time, so it never rots in the index. Every read (`get`, `search`, `list`, and
+the MCP tools) carries `age_days` and `stale`:
+
+| Category | TTL (days) | Rationale |
+|----------|-----------|-----------|
+| `config`, `endpoint` | 14 | values move with deploys and config edits |
+| `location`, `behavior` | 30 | files and code behavior move slower |
+| `context_map`, unknown categories | never | decisions and design notes do not rot by age |
+
+Rules:
+
+- `stale` is `age_days > TTL`; at the exact TTL a fact is still fresh.
+- A zero `observed_at` (facts predating the field) means `age_days: -1`; for
+  TTL'd categories that is **stale** — the age cannot be trusted, so re-check
+  the source. Categories without a TTL stay `stale: false`.
+- `stale: true` is an instruction to re-verify, not a verdict to discard. The
+  store provides the signal; the agent judges.
+- Nothing in `add`/`obsolete` moves `observed_at` except a real value change, so
+  a stale fact cannot be silently "re-freshed" by a notes touch.
+
 ## Auth
 
 The CLI uses **Basic auth** (user + password). Connection and auth settings
@@ -90,7 +140,7 @@ come from a config file:
 - `MEMENTO_CONF` env var
 
 Env vars override the file: `OPENSEARCH_URL`, `OPENSEARCH_USER`,
-`OPENSEARCH_PASSWORD`, `MEMENTO_INDEX`.
+`OPENSEARCH_PASSWORD`, `MEMENTO_INDEX`, `MEMENTO_HISTORY_LIMIT`.
 
 OpenSearch also offers API keys, mTLS, and enterprise SSO (Kerberos / LDAP /
 JWT), but `memento` speaks **Basic auth only** — user and password in the

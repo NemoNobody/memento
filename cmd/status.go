@@ -18,6 +18,7 @@ var statusEnvVars = []string{
 	"OPENSEARCH_PASSWORD",
 	"OPENSEARCH_INSECURE_SKIP_VERIFY",
 	"MEMENTO_INDEX",
+	"MEMENTO_HISTORY_LIMIT",
 }
 
 // statusReport is the shared diagnostics payload behind `memento status` and the
@@ -27,6 +28,7 @@ type statusReport struct {
 	OK           bool                 `json:"ok" jsonschema:"true when OpenSearch is reachable and the store is usable"`
 	URL          string               `json:"url" jsonschema:"the OpenSearch URL that was tried"`
 	Index        string               `json:"index" jsonschema:"the index name used for facts"`
+	HistoryLimit int                  `json:"history_limit" jsonschema:"per-key history retention applied on corrections; 0 keeps everything"`
 	ConfigFile   string               `json:"config_file" jsonschema:"config file actually used, empty when none was found"`
 	EnvOverrides []string             `json:"env_overrides,omitempty" jsonschema:"environment variables that override the config file"`
 	ClusterName  string               `json:"cluster_name,omitempty" jsonschema:"OpenSearch cluster name, when reachable"`
@@ -79,6 +81,7 @@ func collectStatus(ctx context.Context, confPath string) statusReport {
 	}
 	rep.URL = cfg.OpenSearchURL
 	rep.Index = cfg.IndexName
+	rep.HistoryLimit = cfg.HistoryLimit
 
 	c, err := client.NewClient(cfg)
 	if err != nil {
@@ -170,6 +173,7 @@ func printStatus(rep statusReport) {
 	}
 	fmt.Printf("url: %s\n", rep.URL)
 	fmt.Printf("index: %s\n", rep.Index)
+	fmt.Printf("history_limit: %d\n", rep.HistoryLimit)
 	if rep.OK {
 		fmt.Printf("cluster: %s (OpenSearch %s)\n", rep.ClusterName, rep.Version)
 		printStorage(rep)

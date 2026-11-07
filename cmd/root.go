@@ -22,6 +22,7 @@ func NewRootCmd() *cobra.Command {
 		GetCmd(),
 		AddCmd(),
 		ObsoleteCmd(),
+		PruneCmd(),
 		ListCmd(),
 		StatusCmd(),
 		McpCmd(),
@@ -31,17 +32,25 @@ func NewRootCmd() *cobra.Command {
 
 // newClient creates a client and ensures the index exists.
 func newClient() (*client.Client, error) {
+	c, _, err := newClientWithConfig()
+	return c, err
+}
+
+// newClientWithConfig is newClient plus the effective config, for commands
+// that need configuration values beyond the connection (e.g. prune's default
+// --keep from history_limit).
+func newClientWithConfig() (*client.Client, *config.Config, error) {
 	cfg, err := config.LoadConfig()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	c, err := client.NewClient(cfg)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	ctx := context.Background()
 	if err := c.EnsureIndex(ctx); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return c, nil
+	return c, cfg, nil
 }

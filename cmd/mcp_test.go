@@ -74,7 +74,7 @@ func childEnv(overrides []string) []string {
 
 var wantTools = []string{
 	"memento_status", "memento_search", "memento_get",
-	"memento_add", "memento_list", "memento_obsolete",
+	"memento_add", "memento_list", "memento_prune", "memento_obsolete",
 }
 
 func TestMCPServerExposesAllTools(t *testing.T) {
@@ -156,6 +156,7 @@ func TestMCPServerStoreToolsFailWhenUnreachable(t *testing.T) {
 		{"memento_search", map[string]any{"query": "anything"}},
 		{"memento_get", map[string]any{"key": "any:key"}},
 		{"memento_list", map[string]any{"project": "any"}},
+		{"memento_prune", map[string]any{"key": "any:key", "confirm": true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: tc.name, Arguments: tc.args})
@@ -183,9 +184,11 @@ func TestResolveStatus(t *testing.T) {
 	}
 }
 
-// TestNewFactViewCarriesTimeAndHistory pins the MCP contract: the view must
-// expose the current observation time and the history chain, and a zero
-// timestamp (facts created before observed_at existed) must map to "".
+// TestNewFactViewCarriesTimeAndHistory pins the MCP contract: the view exposes
+// the observation time and the staleness signal; history ships only when
+// include_history is set (default off: state keys get corrected daily and every
+// past observation bloats the agent's context). A zero timestamp (facts created
+// before observed_at existed) must map to "".
 func TestNewFactViewCarriesTimeAndHistory(t *testing.T) {
 	observed := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	f := model.Fact{
@@ -200,7 +203,7 @@ func TestNewFactViewCarriesTimeAndHistory(t *testing.T) {
 		},
 	}
 
-	v := newFactView(f)
+	v := newFactView(f, true)
 	if v.ObservedAt != "2026-01-02T03:04:05Z" {
 		t.Errorf("ObservedAt = %q, want RFC3339", v.ObservedAt)
 	}
@@ -218,11 +221,47 @@ func TestNewFactViewCarriesTimeAndHistory(t *testing.T) {
 		t.Errorf("zero observed_at must map to empty string, got %q", v.History[1].ObservedAt)
 	}
 
-	empty := newFactView(model.Fact{Key: "k", Value: "v"})
+	off := newFactView(f, false)
+	if len(off.History) != 0 {
+		t.Errorf("history must be stripped by default, got %v", off.History)
+	}
+	if off.Value != "v" {
+		t.Errorf("stripping history must not strip the current value, got %q", off.Value)
+	}
+
+	// A config observation from 2026-01-02 is far past the 14-day TTL by any
+	// plausible test date, so the staleness signal must be on.
+	if v.AgeDays <= model.TTLDays("config") {
+		t.Errorf("AgeDays = %d, want past the config TTL", v.AgeDays)
+	}
+	if !v.Stale {
+		t.Error("Stale = false for a long-past-TTL fact; the agent would trust it blindly")
+	}
+
+	// Fresh facts must not raise the signal.
+	now := time.Now().UTC()
+	fresh := model.Fact{Key: "k", Value: "v", Category: "location", ObservedAt: now}
+	fv := newFactView(fresh, false)
+	if fv.AgeDays != 0 || fv.Stale {
+		t.Errorf("fresh fact: age_days = %d, stale = %v, want 0/false", fv.AgeDays, fv.Stale)
+	}
+
+	// Pre-observed_at facts: age is unknown (-1) and TTL'd categories are stale.
+	empty := newFactView(model.Fact{Key: "k", Value: "v"}, false)
 	if empty.ObservedAt != "" {
 		t.Errorf("zero ObservedAt must map to empty string, got %q", empty.ObservedAt)
 	}
 	if len(empty.History) != 0 {
 		t.Errorf("empty history must stay empty, got %v", empty.History)
+	}
+	if empty.AgeDays != -1 {
+		t.Errorf("zero observed_at: age_days = %d, want -1", empty.AgeDays)
+	}
+	if empty.Stale {
+		t.Error("category with no TTL must not be stale when observed_at is unknown")
+	}
+	legacyConfig := newFactView(model.Fact{Key: "k", Value: "v", Category: "config"}, false)
+	if !legacyConfig.Stale {
+		t.Error("unknown observation time must be stale for TTL'd categories")
 	}
 }

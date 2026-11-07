@@ -3,5 +3,6 @@
   "opensearch_user": "your-user",
   "opensearch_password": "your-password",
   "insecure_skip_verify": true,
-  "index_name": "memento"
+  "index_name": "memento",
+  "history_limit": 20
 }

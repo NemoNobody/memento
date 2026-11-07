@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -30,8 +31,9 @@ func ListCmd() *cobra.Command {
 				fmt.Printf("no facts for project %q\n", project)
 				return
 			}
+			now := time.Now().UTC()
 			for _, f := range facts {
-				fmt.Printf("  %s: %s (status=%q)\n", f.Key, f.Value, f.Status)
+				fmt.Printf("  %s: %s (status=%q)%s\n", f.Key, f.Value, f.Status, staleMark(&f, now))
 			}
 		},
 	}

@@ -16,8 +16,13 @@ Each fact carries evidence, not verdicts:
   `experiment`, `user:confirmed`, `doc:*`;
 - **observation time** (`observed_at`): when the value was actually seen;
 - **history**: a changed value moves the old one to `history` instead of
-  overwriting it;
-- **notes**: free-text qualifiers, e.g. "checked the dev config only".
+  overwriting it; bounded per key by `history_limit` (default 20, oldest
+  entries dropped first);
+- **notes**: free-text qualifiers, e.g. "checked the dev config only";
+- **staleness**: reads compute `age_days` and `stale` from `observed_at` and a
+  per-category TTL (`config`/`endpoint` 14 days, `location`/`behavior` 30 days,
+  `context_map` and unknown categories never). `stale: true` is an instruction
+  to re-verify against the source, not to discard the fact.
 
 Two statuses: `verified` (the subject exists) and `obsolete` (the subject is
 gone — file deleted, endpoint removed). The store holds the evidence; the agent
@@ -50,14 +55,15 @@ and fill in your OpenSearch connection.
   "opensearch_user": "admin",
   "opensearch_password": "<your-password>",
   "insecure_skip_verify": true,
-  "index_name": "memento"
+  "index_name": "memento",
+  "history_limit": 20
 }
 ```
 
 The index is created automatically on first use. Env vars override the file:
 `OPENSEARCH_URL`, `OPENSEARCH_USER`, `OPENSEARCH_PASSWORD`,
-`OPENSEARCH_INSECURE_SKIP_VERIFY`, `MEMENTO_INDEX`; `MEMENTO_CONF` points at an
-explicit config file. Check the connection:
+`OPENSEARCH_INSECURE_SKIP_VERIFY`, `MEMENTO_INDEX`, `MEMENTO_HISTORY_LIMIT`;
+`MEMENTO_CONF` points at an explicit config file. Check the connection:
 
 ```
 memento status
@@ -76,9 +82,10 @@ memento search "api port"
 | Command | Description |
 |---------|-------------|
 | `memento add <key> <value> <category> [--project <p>] [--source <s>] [--notes <n>]` | Add or correct a fact (old value goes to history) |
-| `memento get <key>` | Get a fact by key |
+| `memento get <key> [--history]` | Get a fact by key (history is off by default; `--history` prints the full chain) |
 | `memento search <query> [--project <p>] [--category <c>] [--status <s>]` | Full-text search over values and notes |
 | `memento list <project>` | List all facts for a project |
+| `memento prune <key> [--keep N] [--yes]` | Drop old history entries, keeping the newest N (destructive: without `--yes` only the plan is printed) |
 | `memento obsolete <key> [reason]` | Mark a fact obsolete because its subject is gone (reason appended to notes) |
 | `memento status` | Check connectivity and show the effective configuration |
 | `memento mcp` | Run as an MCP server over stdio |
@@ -91,9 +98,10 @@ notes only.
 ## MCP server
 
 `memento mcp` speaks MCP over stdio, so agents (VS Code, others) call
-`memento_status`, `memento_search`, `memento_get`, `memento_add`, `memento_list`
-and `memento_obsolete` directly. Registration and troubleshooting:
-[docs/mcp.md](docs/mcp.md).
+`memento_status`, `memento_search`, `memento_get`, `memento_add`, `memento_list`,
+`memento_prune` and `memento_obsolete` directly. Reads omit history unless
+`include_history=true` is passed, and carry `age_days`/`stale`. Registration and
+troubleshooting: [docs/mcp.md](docs/mcp.md).
 
 ## Use with agents
 
