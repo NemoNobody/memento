@@ -74,9 +74,16 @@ chmod 600 ~/.memento.conf
 - A malformed config file fails loudly — `memento` prints which file it tried to
   read.
 
-Environment variables override the file:
+Environment variables override the file (the complete list; `memento status`
+lists the active ones by name, never by value):
 `OPENSEARCH_URL`, `OPENSEARCH_USER`, `OPENSEARCH_PASSWORD`,
-`OPENSEARCH_INSECURE_SKIP_VERIFY`, `MEMENTO_INDEX`, `MEMENTO_ALLOW_PLAINTEXT`.
+`OPENSEARCH_INSECURE_SKIP_VERIFY`, `MEMENTO_CONF`, `MEMENTO_INDEX`,
+`MEMENTO_HISTORY_LIMIT`, `MEMENTO_SECRET_GUARD`, `MEMENTO_ALLOW_PLAINTEXT`,
+`MEMENTO_DOCS_INDEX`, `MEMENTO_DOCS_TTL_DAYS`, `MEMENTO_FETCH_TIMEOUT`,
+`MEMENTO_FETCH_MAX_BYTES`, `MEMENTO_FETCH_HOSTS`, `MEMENTO_FETCH_USER_AGENT`,
+`MEMENTO_FETCH_PROXY_URL`, `MEMENTO_FETCH_PROXY_FALLBACK`,
+`MEMENTO_FETCH_RESPECT_ROBOTS`, `MEMENTO_LOCAL_REPO_ROOTS`,
+`MEMENTO_REPO_SCAN_DEPTH`.
 
 ## 3. Verify
 
@@ -90,8 +97,12 @@ Expected output:
 config file: /home/you/.memento.conf
 url: https://127.0.0.1:9200
 index: memento
+history_limit: 20
+secret_guard: reject
 password: keyring
 cluster: opensearch (OpenSearch 3.8.0)
+storage: cluster=yellow index=yellow unassigned_shards=1 data_nodes=1
+disk: busiest data node at 15% used
 status: OK
 ```
 
@@ -112,6 +123,24 @@ memento search hello
 memento list global
 memento obsolete global:demo:hello "demo removed"
 ```
+
+## 5. curl recipes (raw OpenSearch)
+
+`memento` never prints the password, so raw curl takes it from one of the
+sources:
+
+- **Keyring** (desktop; needs the tools package, e.g. `libsecret-tools` on
+  Debian/Ubuntu):
+
+  ```bash
+  curl -k -u admin:"$(secret-tool lookup service memento username 127.0.0.1:9200)" \
+       https://127.0.0.1:9200
+  ```
+
+- **Environment**: `read -rs OPENSEARCH_PASSWORD` (prompt, nothing lands in
+  history), then `curl -k -u "admin:$OPENSEARCH_PASSWORD" https://127.0.0.1:9200`.
+- **Plaintext config** (only when `allow_plaintext: true`): read
+  `opensearch_password` out of the file with your JSON tool.
 
 ## Troubleshooting
 

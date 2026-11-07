@@ -22,7 +22,7 @@ fmt:
 lint:
 	golangci-lint run ./...
 
-ci: fmt-check vet test lint
+ci: fmt-check build vet test lint
 
 fmt-check:
 	test -z "$$(gofmt -l .)"

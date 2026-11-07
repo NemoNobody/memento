@@ -67,10 +67,12 @@ listing.
 ### list
 
 ```
-memento list <project>
+memento list <project> [--prefix <p>]
 ```
 
-All facts for a project. Stale facts are marked `[stale: Nd]`.
+All facts for a project, optionally narrowed to a key prefix (navigation cap
+1000; the CLI says when the answer was truncated). Stale facts are marked
+`[stale: Nd]`.
 
 ### prune
 
@@ -163,12 +165,18 @@ Guarantees and limits:
 The CLI uses **Basic auth** (user + password). Connection and auth settings
 come from a config file:
 
-- `memento.conf` (current dir)
-- `~/.memento.conf`
+- `--conf <path>` flag (`memento mcp` and `memento status`)
 - `MEMENTO_CONF` env var
+- `memento.conf` (current dir)
+- `memento.conf` next to the binary
+- `~/.memento.conf`
 
 Env vars override the file: `OPENSEARCH_URL`, `OPENSEARCH_USER`,
-`OPENSEARCH_PASSWORD`, `MEMENTO_INDEX`, `MEMENTO_HISTORY_LIMIT`.
+`OPENSEARCH_PASSWORD`, `OPENSEARCH_INSECURE_SKIP_VERIFY`, `MEMENTO_CONF`,
+`MEMENTO_INDEX`, `MEMENTO_HISTORY_LIMIT`, `MEMENTO_SECRET_GUARD`,
+`MEMENTO_ALLOW_PLAINTEXT`, plus the `MEMENTO_FETCH_*` / `MEMENTO_DOCS_*` /
+`MEMENTO_LOCAL_REPO_ROOTS` / `MEMENTO_REPO_SCAN_DEPTH` fetch options (the
+full list lives in README and docs/setup.md).
 
 OpenSearch also offers API keys, mTLS, and enterprise SSO (Kerberos / LDAP /
 JWT), but `memento` speaks **Basic auth only** — user and password in the

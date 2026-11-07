@@ -108,17 +108,17 @@ memento docs "example"
 
 | Command | Description |
 |---------|-------------|
-| `memento add <key> <value> <category> [--project <p>] [--source <s>] [--notes <n>]` | Add or correct a fact (old value goes to history) |
+| `memento add <key> <value> <category> [--project <p>] [--source <s>] [--notes <n>] [--allow-secret]` | Add or correct a fact (old value goes to history) |
 | `memento get <key> [--history]` | Get a fact by key (history is off by default; `--history` prints the full chain) |
-| `memento search <query> [--project <p>] [--category <c>] [--status <s>]` | Full-text search over values and notes |
+| `memento search <query> [--project <p>] [--category <c>] [--status <s>] [--limit N]` | Full-text search over values and notes (`--status any` disables the status filter; `--limit 0` = up to 1000) |
 | `memento keys [prefix] [--match <s>] [--project <p>] [--status <s>]` | Find facts by key: prefix and/or substring (`*`, `?` wildcards in `--match`), across projects |
 | `memento list <project> [--prefix <p>]` | List all facts for a project, optionally narrowed to a key prefix (trailing `*` allowed) |
 | `memento prune <key> [--keep N] [--yes]` | Drop old history entries, keeping the newest N (destructive: without `--yes` only the plan is printed) |
-| `memento obsolete <key> [reason]` | Mark a fact obsolete because its subject is gone (reason appended to notes) |
-| `memento status` | Check connectivity and show the effective configuration |
+| `memento obsolete <key> [reason] [--allow-secret]` | Mark a fact obsolete because its subject is gone (reason appended to notes) |
+| `memento status [--conf <path>]` | Check connectivity and show the effective configuration (env overrides are listed by name, never values) |
 | `memento creds set\|status\|rm [--url <u>]` | Manage the OpenSearch password in the OS keyring: `set` reads a hidden prompt (piped stdin for scripts), `status` shows only the source (`env\|keyring\|file\|none`), `rm` deletes the entry; the stored value is never printed |
 | `memento fetch <url> [--refresh] [-p <p>] [--allow-secret]` | Fetch a page into the docs index and print its outline: cache-aware, section text is read on demand; github URLs that match a local clone print the file path |
-| `memento doc <hash> [n] [--full]` | Read a stored document: the outline (default), section `n`, or every section with `--full` |
+| `memento doc <hash> [n\|--section N] [--full]` | Read a stored document: the outline (default), section `n`, or every section with `--full` |
 | `memento docs <query> [--limit N] [-p <p>]` | BM25 search over stored documents (the extracted sections, never the raw page) |
 | `memento mcp` | Run as an MCP server over stdio |
 
@@ -161,6 +161,15 @@ cluster: [docs/setup.md](docs/setup.md). Schema and design:
 **Secrets do not belong in facts** (passwords, tokens, private keys) — a rule for
 agents and humans, not a guarantee: the store is plaintext, and nothing filters
 what gets written.
+
+## Platform notes
+
+The Linux keyring provider (native D-Bus Secret Service) is the daily driver
+and is exercised live. The darwin/windows providers (system Keychain /
+Credential Manager via zalando/go-keyring) are built in CI and unit-tested,
+but not smoke-tested on real Apple/Windows hardware by the author. If you are
+on those platforms and the keyring misbehaves, open an issue — reports from
+those machines are welcome.
 
 ## License
 
