@@ -166,5 +166,7 @@ sources:
   refused. `memento creds status` shows the source; neither command prints the
   value.
 - Change the default `admin` password before the cluster is reachable by anyone else.
+- The facts index is the accumulated memory — back it up (snapshot API; recipe:
+  [docs/backup.md](backup.md)). Snapshots are plaintext, like the store.
 - `insecure_skip_verify: true` disables certificate verification. It is fine for a
   local node with the demo certificate and wrong for anything shared.

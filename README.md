@@ -156,7 +156,8 @@ notes. Import instructions and caveats: [docs/dashboard.md](docs/dashboard.md).
 Facts live in a single OpenSearch index (default `memento`). One node is enough
 to start; a proper cluster works the same way. How to point `memento` at a
 cluster: [docs/setup.md](docs/setup.md). Schema and design:
-[docs/how-it-works.md](docs/how-it-works.md).
+[docs/how-it-works.md](docs/how-it-works.md). Backup and restore (the standard
+OpenSearch snapshot API): [docs/backup.md](docs/backup.md).
 
 **Secrets do not belong in facts** (passwords, tokens, private keys) — a rule for
 agents and humans, not a guarantee: the store is plaintext, and nothing filters
