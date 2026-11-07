@@ -9,6 +9,22 @@ import (
 	"github.com/NemoNobody/memento/internal/keyring"
 )
 
+// TestMain makes the keyring dispatcher safe for every test in this package:
+// the default fake never touches the real wallet. A real provider call from a
+// test binary can block on a desktop access prompt (a new app id asking the
+// wallet for an existing secret) — the suite must never depend on the
+// machine's keyring state. Keyring-specific tests install their own fakes
+// via fakeKeyring.
+func TestMain(m *testing.M) {
+	get, set, del := keyring.Get, keyring.Set, keyring.Delete
+	keyring.Get = func(string, string) (string, error) { return "", keyring.ErrNotFound }
+	keyring.Set = func(string, string, string) error { return nil }
+	keyring.Delete = func(string, string) error { return keyring.ErrNotFound }
+	code := m.Run()
+	keyring.Get, keyring.Set, keyring.Delete = get, set, del
+	os.Exit(code)
+}
+
 // removeFile deletes path for test cleanup. A real removal failure fails the
 // test (it can leave a stray memento.conf next to the test binary and skew
 // later tests); a file that is already gone is fine.

@@ -5,6 +5,8 @@ import (
 	"os"
 	"strconv"
 
+	"github.com/NemoNobody/memento/internal/config"
+
 	"github.com/spf13/cobra"
 )
 
@@ -24,12 +26,18 @@ func ObsoleteCmd() *cobra.Command {
 				reason = args[1]
 			}
 			ctx := context.Background()
-			c, cfg, err := newClientWithConfig()
+			// Guard before any store contact (same order as MCP): a rejected
+			// write must not create the index.
+			cfg, err := config.LoadConfig()
 			if err != nil {
 				fatalErr(err)
 			}
 			if err := guardCheck(cfg.SecretGuard, obsoleteFlags.allowSecret,
 				guardField{"reason", reason}); err != nil {
+				fatalErr(err)
+			}
+			c, _, err := newClientWithConfig()
+			if err != nil {
 				fatalErr(err)
 			}
 			if err := c.Obsolete(ctx, key, reason); err != nil {

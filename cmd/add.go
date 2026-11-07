@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/NemoNobody/memento/internal/config"
 	"github.com/NemoNobody/memento/internal/model"
 
 	"github.com/spf13/cobra"
@@ -26,7 +27,9 @@ func AddCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(3),
 		Run: func(cmd *cobra.Command, args []string) {
 			key, value, category := args[0], args[1], args[2]
-			c, cfg, err := newClientWithConfig()
+			// Guard before any store contact: a rejected write must not even
+			// create the index (the MCP server enforces the same order).
+			cfg, err := config.LoadConfig()
 			if err != nil {
 				fatalErr(err)
 			}
@@ -34,6 +37,10 @@ func AddCmd() *cobra.Command {
 				guardField{"value", value},
 				guardField{"notes", addFlags.notes},
 				guardField{"source", addFlags.source}); err != nil {
+				fatalErr(err)
+			}
+			c, _, err := newClientWithConfig()
+			if err != nil {
 				fatalErr(err)
 			}
 			ctx := context.Background()

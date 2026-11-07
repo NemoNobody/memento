@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/NemoNobody/memento/internal/client"
 	"github.com/NemoNobody/memento/internal/model"
 
 	"github.com/spf13/cobra"
@@ -37,6 +38,11 @@ func ListCmd() *cobra.Command {
 			}
 			if err := printFacts(os.Stdout, facts, time.Now().UTC()); err != nil {
 				fatalErr(err)
+			}
+			if len(facts) >= client.NavSizeCap {
+				if err := writeLine(os.Stdout, "truncated: showing the first "+strconv.Itoa(client.NavSizeCap)+" facts; narrow with --prefix"); err != nil {
+					fatalErr(err)
+				}
 			}
 		},
 	}

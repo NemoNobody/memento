@@ -21,8 +21,10 @@ func TestBuildSearchBody_NoFilters(t *testing.T) {
 	if _, ok := boolQ["filter"]; ok {
 		t.Error("filter present, want none")
 	}
-	if _, ok := got["size"]; ok {
-		t.Error("size present, want none for limit 0")
+	if size, ok := got["size"].(int); !ok || size != NavSizeCap {
+		// limit 0 = "no cap": an explicit size beats the server's implicit
+		// default of 10, which silently truncated the result.
+		t.Errorf("size = %v, want NavSizeCap (%d) for limit 0", got["size"], NavSizeCap)
 	}
 }
 
@@ -30,6 +32,20 @@ func TestBuildSearchBody_Limit(t *testing.T) {
 	got := buildSearchBody("hello", "", "", "", 7)
 	if size, ok := got["size"].(int); !ok || size != 7 {
 		t.Errorf("size = %v, want 7", got["size"])
+	}
+}
+
+// Navigation queries must carry an explicit size: without it OpenSearch
+// returns an arbitrary 10-hit subset with no truncation signal.
+func TestBuildNavBodiesSizeCapped(t *testing.T) {
+	bodies := map[string]map[string]interface{}{
+		"project": buildProjectBody("p", ""),
+		"keys":    buildKeysBody("p:", "", "", ""),
+	}
+	for name, body := range bodies {
+		if size, ok := body["size"].(int); !ok || size != NavSizeCap {
+			t.Errorf("%s: size = %v, want NavSizeCap (%d)", name, body["size"], NavSizeCap)
+		}
 	}
 }
 

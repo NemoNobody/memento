@@ -463,9 +463,18 @@ func buildSearchBody(query string, project, category, status string, limit int) 
 	}
 	if limit > 0 {
 		body["size"] = limit
+	} else {
+		// "no cap": size is mandatory for predictability; the server default
+		// of 10 silently truncates limit=0 queries.
+		body["size"] = NavSizeCap
 	}
 	return body
 }
+
+// NavSizeCap is the explicit size for navigation queries (list/keys) and for
+// "no cap" searches: without it OpenSearch returns 10 hits and callers
+// silently receive an arbitrary subset.
+const NavSizeCap = 1000
 
 // buildProjectBody builds the search query body for a project lookup,
 // optionally narrowed to a key prefix.
@@ -480,6 +489,7 @@ func buildProjectBody(project, prefix string) map[string]interface{} {
 	}
 	return map[string]interface{}{
 		"query": map[string]interface{}{"bool": map[string]interface{}{"filter": filters}},
+		"size":  NavSizeCap,
 	}
 }
 
@@ -506,6 +516,7 @@ func buildKeysBody(prefix, match, project, status string) map[string]interface{}
 	return map[string]interface{}{
 		"query": map[string]interface{}{"bool": map[string]interface{}{"filter": filters}},
 		"sort":  []map[string]interface{}{{"key": map[string]interface{}{"order": "asc"}}},
+		"size":  NavSizeCap,
 	}
 }
 

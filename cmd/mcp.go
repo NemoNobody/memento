@@ -279,8 +279,9 @@ func newFactViews(facts []model.Fact, includeHistory bool) []factView {
 
 // factsOutput is the list-shaped result shared by memento_search and memento_list.
 type factsOutput struct {
-	Count int        `json:"count" jsonschema:"number of facts returned"`
-	Facts []factView `json:"facts" jsonschema:"matching facts, newest first is not guaranteed"`
+	Count     int        `json:"count" jsonschema:"number of facts returned"`
+	Facts     []factView `json:"facts" jsonschema:"matching facts, newest first is not guaranteed"`
+	Truncated bool       `json:"truncated,omitempty" jsonschema:"true when the store held more matches than the navigation cap (1000): narrow the query (prefix/project/status); absent means complete"`
 }
 
 // newClient returns a client for the configured store. Config is reloaded on
@@ -450,6 +451,9 @@ func (s *mcpServer) list(ctx context.Context, req *mcp.CallToolRequest, in listI
 	if err != nil {
 		return nil, factsOutput{}, storeError("memento_list", err)
 	}
+	// The truncation signal is the raw page size: the status filter below
+	// shrinks it, and truncation must survive the filtering.
+	rawLen := len(facts)
 	// List has no server-side status filter, so apply it here to keep the
 	// "trusted only by default" guarantee.
 	if status := resolveStatus(in.Status); status != "" {
@@ -461,7 +465,7 @@ func (s *mcpServer) list(ctx context.Context, req *mcp.CallToolRequest, in listI
 		}
 		facts = kept
 	}
-	return nil, factsOutput{Count: len(facts), Facts: newFactViews(facts, in.IncludeHistory)}, nil
+	return nil, factsOutput{Count: len(facts), Truncated: rawLen >= client.NavSizeCap, Facts: newFactViews(facts, in.IncludeHistory)}, nil
 }
 
 type keysInput struct {
@@ -492,7 +496,7 @@ func (s *mcpServer) keys(ctx context.Context, req *mcp.CallToolRequest, in keysI
 	if err != nil {
 		return nil, factsOutput{}, storeError("memento_keys", err)
 	}
-	return nil, factsOutput{Count: len(facts), Facts: newFactViews(facts, in.IncludeHistory)}, nil
+	return nil, factsOutput{Count: len(facts), Truncated: len(facts) >= client.NavSizeCap, Facts: newFactViews(facts, in.IncludeHistory)}, nil
 }
 
 type obsoleteInput struct {
@@ -554,9 +558,11 @@ func (s *mcpServer) prune(ctx context.Context, req *mcp.CallToolRequest, in prun
 	keep := in.Keep
 	if keep <= 0 {
 		keep = cfg.HistoryLimit
-		if keep <= 0 {
-			keep = 1
-		}
+	}
+	if keep <= 0 {
+		// history_limit: 0 means "keep everything": silently collapsing it
+		// to 1 would destroy every history entry. Demand an explicit keep.
+		return nil, pruneOutput{}, fmt.Errorf("memento_prune: history_limit is 0 (keep everything) and no keep value was given: pass an explicit keep (e.g. keep: 5)")
 	}
 	f, err := c.Get(ctx, in.Key)
 	if errors.Is(err, client.ErrNotFound) {

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strconv"
 	"strings"
@@ -36,9 +37,11 @@ their approval.`,
 			keep := pruneFlags.keep
 			if keep <= 0 {
 				keep = cfg.HistoryLimit
-				if keep <= 0 {
-					keep = 1
-				}
+			}
+			if keep <= 0 {
+				// history_limit: 0 means "keep everything": collapsing it to 1
+				// here would destroy every history entry. Demand an explicit --keep.
+				fatalErr(errors.New("prune: history_limit is 0 (keep everything): pass an explicit --keep N"))
 			}
 			f, err := c.Get(ctx, key)
 			if err != nil {

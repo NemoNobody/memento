@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/NemoNobody/memento/internal/keyring"
 	"github.com/NemoNobody/memento/internal/model"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -17,6 +18,12 @@ import (
 // serverEnvVar makes the test binary act as the MCP server child process.
 const serverEnvVar = "MEMENTO_TEST_MCP_SERVER"
 
+// TestMain makes the cmd suite hermetic against the machine's keyring:
+// after a real `memento creds set` the dev entry (127.0.0.1:9200) exists in
+// the user's wallet, and a Go test binary asking for it triggers a desktop
+// access prompt that hangs the suite. The dispatcher default is a fake; the
+// creds tests install their own fakes via fakeKeyringCmd. In-process code
+// paths must never call the real keyring provider.
 func TestMain(m *testing.M) {
 	if os.Getenv(serverEnvVar) == "1" {
 		// Child process: serve MCP over stdio until the client disconnects.
@@ -25,7 +32,13 @@ func TestMain(m *testing.M) {
 		}
 		os.Exit(0)
 	}
-	os.Exit(m.Run())
+	get, set, del := keyring.Get, keyring.Set, keyring.Delete
+	keyring.Get = func(string, string) (string, error) { return "", keyring.ErrNotFound }
+	keyring.Set = func(string, string, string) error { return nil }
+	keyring.Delete = func(string, string) error { return keyring.ErrNotFound }
+	code := m.Run()
+	keyring.Get, keyring.Set, keyring.Delete = get, set, del
+	os.Exit(code)
 }
 
 // connectTestServer spawns this test binary as an MCP server and connects to it
@@ -38,8 +51,14 @@ func connectTestServer(t *testing.T, extraEnv ...string) *mcp.ClientSession {
 	if err != nil {
 		t.Fatalf("os.Executable: %v", err)
 	}
+	// The child is a separate process: the parent's dispatcher fake does not
+	// reach it. Pin env so the child resolves the password from env (never
+	// the keyring) and fails fast on store access (port 9 = discard).
 	cmd := exec.Command(exe)
-	cmd.Env = append(childEnv(extraEnv), serverEnvVar+"=1")
+	cmd.Env = append(childEnv(append([]string{
+		"OPENSEARCH_PASSWORD=testpw",
+		"OPENSEARCH_URL=https://127.0.0.1:9",
+	}, extraEnv...)), serverEnvVar+"=1")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)

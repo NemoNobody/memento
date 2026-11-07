@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/NemoNobody/memento/internal/client"
@@ -55,6 +56,11 @@ func KeysCmd() *cobra.Command {
 			}
 			if err := printFacts(os.Stdout, facts, time.Now().UTC()); err != nil {
 				fatalErr(err)
+			}
+			if len(facts) >= client.NavSizeCap {
+				if err := writeLine(os.Stdout, "truncated: showing the first "+strconv.Itoa(client.NavSizeCap)+" keys; narrow with prefix/--match/--project/--status"); err != nil {
+					fatalErr(err)
+				}
 			}
 		},
 	}
