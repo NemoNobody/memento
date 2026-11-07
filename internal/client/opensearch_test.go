@@ -6,7 +6,7 @@ import (
 )
 
 func TestBuildSearchBody_NoFilters(t *testing.T) {
-	got := buildSearchBody("hello world", "", "", "")
+	got := buildSearchBody("hello world", "", "", "", 0)
 	q := got["query"].(map[string]interface{})
 	boolQ := q["bool"].(map[string]interface{})
 	must := boolQ["must"].(map[string]interface{})
@@ -21,10 +21,20 @@ func TestBuildSearchBody_NoFilters(t *testing.T) {
 	if _, ok := boolQ["filter"]; ok {
 		t.Error("filter present, want none")
 	}
+	if _, ok := got["size"]; ok {
+		t.Error("size present, want none for limit 0")
+	}
+}
+
+func TestBuildSearchBody_Limit(t *testing.T) {
+	got := buildSearchBody("hello", "", "", "", 7)
+	if size, ok := got["size"].(int); !ok || size != 7 {
+		t.Errorf("size = %v, want 7", got["size"])
+	}
 }
 
 func TestBuildSearchBody_AllFilters(t *testing.T) {
-	got := buildSearchBody("hello", "proj1", "config", "verified")
+	got := buildSearchBody("hello", "proj1", "config", "verified", 0)
 	q := got["query"].(map[string]interface{})
 	boolQ := q["bool"].(map[string]interface{})
 	must := boolQ["must"].(map[string]interface{})
@@ -65,7 +75,7 @@ func TestBuildSearchBody_AllFilters(t *testing.T) {
 }
 
 func TestBuildSearchBody_SingleFilter(t *testing.T) {
-	got := buildSearchBody("hello", "", "config", "")
+	got := buildSearchBody("hello", "", "config", "", 0)
 	q := got["query"].(map[string]interface{})
 	boolQ := q["bool"].(map[string]interface{})
 	must := boolQ["must"].(map[string]interface{})

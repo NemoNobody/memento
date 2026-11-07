@@ -1,0 +1,77 @@
+package model
+
+import "time"
+
+// Section is one heading-delimited chunk of a fetched document. Documents are
+// stored as sections so an agent can pull a single part into context instead
+// of the whole page — the point of the docs index is context economy.
+type Section struct {
+	Order   int    `json:"order"`
+	Heading string `json:"heading,omitempty"`
+	Text    string `json:"text"`
+}
+
+// ImageRef records an image the page references. The binary is deliberately
+// not stored: the URL plus alt/title is enough to reopen the page, and alt
+// text is what makes the picture searchable.
+type ImageRef struct {
+	URL   string `json:"url"`
+	Alt   string `json:"alt,omitempty"`
+	Title string `json:"title,omitempty"`
+}
+
+// Doc is one fetched web page snapshot: the raw body plus extracted,
+// section-split text.
+//
+// It is deliberately NOT a Fact. A fact is a small verified claim with history
+// and trust semantics; a doc is bulk research material with a TTL. Separate
+// indices keep fact search cheap and keep page text out of the trusted-facts
+// contract. The raw HTML is stored for re-extraction and for the cache vision
+// (shared across machines), indexed=false: BM25 runs over extracted sections,
+// never over markup.
+type Doc struct {
+	URL     string `json:"url"`
+	URLHash string `json:"url_hash"`
+	// FinalURL records the URL after redirects: audit for "the link moved".
+	FinalURL string `json:"final_url,omitempty"`
+	// ContentHash is sha256 over the extracted text: dedup for the same
+	// content under different URLs (utm links, mirrors).
+	ContentHash string `json:"content_hash,omitempty"`
+	Title       string `json:"title"`
+	Project     string `json:"project,omitempty"`
+
+	FetchedAt time.Time `json:"fetched_at"`
+	// ExpiresAt is the TTL boundary; the zero value means "never expires".
+	// Past it the doc is stale: the web moved, the agent must re-fetch.
+	ExpiresAt time.Time `json:"expires_at,omitempty"`
+
+	// Size is the extracted text length in runes (what reads ship into
+	// context); SizeRaw is the stored body in bytes (disk accounting).
+	Size    int `json:"size"`
+	SizeRaw int `json:"size_raw,omitempty"`
+	// Truncated marks a doc whose extraction hit a limit: the stored text is
+	// a prefix, never a silent one.
+	Truncated bool `json:"truncated,omitempty"`
+
+	// FetchedBy is the hostname that performed the fetch and Via the route
+	// (direct|proxy): audit in the shared-store, multi-machine setup.
+	FetchedBy string `json:"fetched_by,omitempty"`
+	Via       string `json:"via,omitempty"`
+
+	// HTML is the raw body: stored for re-extraction, never indexed, and
+	// excluded from every read path (_source excludes) so it cannot leak
+	// into an agent's context by accident.
+	HTML string `json:"html,omitempty"`
+
+	Sections []Section  `json:"sections"`
+	Images   []ImageRef `json:"images,omitempty"`
+}
+
+// Stale reports whether the doc is past its TTL and must be re-fetched before
+// being quoted. A doc without an expiry is never stale.
+func (d *Doc) Stale(now time.Time) bool {
+	if d.ExpiresAt.IsZero() {
+		return false
+	}
+	return now.After(d.ExpiresAt)
+}

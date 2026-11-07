@@ -288,9 +288,10 @@ func (c *Client) Get(ctx context.Context, key string) (*model.Fact, error) {
 	return &f, nil
 }
 
-// Search performs a keyword search.
-func (c *Client) Search(ctx context.Context, query string, project, category, status string) ([]model.Fact, error) {
-	return c.search(ctx, buildSearchBody(query, project, category, status))
+// Search performs a keyword search, capped to limit hits (limit <= 0 uses the
+// server default of 10). Relevance order is OpenSearch's.
+func (c *Client) Search(ctx context.Context, query string, project, category, status string, limit int) ([]model.Fact, error) {
+	return c.search(ctx, buildSearchBody(query, project, category, status, limit))
 }
 
 // List returns all facts for a project whose key starts with prefix.
@@ -424,7 +425,9 @@ func (c *Client) Prune(ctx context.Context, key string, keep int) (int, error) {
 }
 
 // buildSearchBody builds the search query body for a keyword search.
-func buildSearchBody(query string, project, category, status string) map[string]interface{} {
+// The result budget matters as soon as one index holds bulk text (docs):
+// an uncapped search ships every hit into the caller's context.
+func buildSearchBody(query string, project, category, status string, limit int) map[string]interface{} {
 	filters := []map[string]interface{}{}
 	if project != "" {
 		filters = append(filters, map[string]interface{}{"term": map[string]interface{}{"project": project}})
@@ -449,9 +452,13 @@ func buildSearchBody(query string, project, category, status string) map[string]
 	if len(filters) > 0 {
 		boolQuery["filter"] = filters
 	}
-	return map[string]interface{}{
+	body := map[string]interface{}{
 		"query": map[string]interface{}{"bool": boolQuery},
 	}
+	if limit > 0 {
+		body["size"] = limit
+	}
+	return body
 }
 
 // buildProjectBody builds the search query body for a project lookup,

@@ -12,6 +12,7 @@ var searchFlags struct {
 	project  string
 	category string
 	status   string
+	limit    int
 }
 
 func SearchCmd() *cobra.Command {
@@ -26,7 +27,7 @@ func SearchCmd() *cobra.Command {
 			if err != nil {
 				fatalErr(err)
 			}
-			facts, err := c.Search(ctx, query, searchFlags.project, searchFlags.category, searchFlags.status)
+			facts, err := c.Search(ctx, query, searchFlags.project, searchFlags.category, searchFlags.status, searchFlags.limit)
 			if err != nil {
 				fatalErr(err)
 			}
@@ -44,5 +45,6 @@ func SearchCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&searchFlags.project, "project", "p", "", "project name")
 	cmd.Flags().StringVarP(&searchFlags.category, "category", "c", "", "category")
 	cmd.Flags().StringVarP(&searchFlags.status, "status", "s", "verified", "status")
+	cmd.Flags().IntVar(&searchFlags.limit, "limit", 10, "max hits to return (0 = no cap)")
 	return cmd
 }

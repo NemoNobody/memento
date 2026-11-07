@@ -302,6 +302,7 @@ type searchInput struct {
 	Project        string `json:"project,omitempty" jsonschema:"limit results to this project"`
 	Category       string `json:"category,omitempty" jsonschema:"limit results to this category"`
 	Status         string `json:"status,omitempty" jsonschema:"limit results to this status: verified (default), obsolete, or any"`
+	Limit          int    `json:"limit,omitempty" jsonschema:"max hits to return (default 10, cap 50): the context budget for search results"`
 	IncludeHistory bool   `json:"include_history,omitempty" jsonschema:"include the full history chain (default: current value only)"`
 }
 
@@ -310,7 +311,14 @@ func (s *mcpServer) search(ctx context.Context, req *mcp.CallToolRequest, in sea
 	if err != nil {
 		return nil, factsOutput{}, storeError("memento_search", err)
 	}
-	facts, err := c.Search(ctx, in.Query, in.Project, in.Category, resolveStatus(in.Status))
+	limit := in.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	facts, err := c.Search(ctx, in.Query, in.Project, in.Category, resolveStatus(in.Status), limit)
 	if err != nil {
 		return nil, factsOutput{}, storeError("memento_search", err)
 	}
