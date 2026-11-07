@@ -236,6 +236,9 @@ func fetchHTTP(ctx context.Context, cfg *config.Config, normalizedURL string) (c
 // text/plain is chunked directly; anything else (PDF, images, JSON feeds) is
 // rejected — silent garbage extraction is worse than an explicit error.
 func FetchPage(ctx context.Context, cfg *config.Config, normalizedURL string) (*model.Doc, error) {
+	if err := CheckRobots(ctx, cfg, normalizedURL); err != nil {
+		return nil, err
+	}
 	ct, body, finalURL, via, err := fetchHTTP(ctx, cfg, normalizedURL)
 	if err != nil {
 		return nil, err
