@@ -5,6 +5,7 @@ import (
 
 	"github.com/NemoNobody/memento/internal/client"
 	"github.com/NemoNobody/memento/internal/config"
+	"github.com/NemoNobody/memento/internal/version"
 
 	"github.com/spf13/cobra"
 )
@@ -14,8 +15,9 @@ import (
 // independent command tree.
 func NewRootCmd() *cobra.Command {
 	root := &cobra.Command{
-		Use:   "memento",
-		Short: "Verified-fact memory",
+		Use:     "memento",
+		Short:   "Verified-fact memory",
+		Version: version.Version,
 	}
 	root.AddCommand(
 		SearchCmd(),
