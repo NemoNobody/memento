@@ -88,12 +88,19 @@ Do not put the OpenSearch password in the MCP config: it stays in `memento.conf`
 | `memento_status` | Is the store reachable? What is the effective config and storage state? | **Never fails** — `ok=false` plus a hint instead, so the agent can explain the problem |
 | `memento_search` | Full-text search over fact values and notes | Trusted facts only by default; `status: "any"` includes obsolete ones; history off unless `include_history: true` |
 | `memento_get` | Exact fact by key | `found: false` when absent — not an error; history off unless `include_history: true` |
-| `memento_add` | Store a verified fact | Corrects by key: a new value moves the old one to history (trimmed to `history_limit`); the same value updates notes only |
+| `memento_add` | Store a verified fact | Corrects by key: a new value moves the old one to history (trimmed to `history_limit`); the same value updates notes only; `secret_guard` rejects credential-like text before any store contact |
 | `memento_list` | Facts of a project | Same trust default as search; history off unless `include_history: true` |
 | `memento_prune` | Drop old history entries under a key, keeping the newest `keep` | **DESTRUCTIVE** — without `confirm: true` nothing is written, the call returns the plan; show it to the user and re-call only after their approval |
-| `memento_obsolete` | Mark a fact obsolete because its subject is gone | Value is kept for reference; the reason is appended to notes. Use `memento_add` when the value merely changed |
+| `memento_obsolete` | Mark a fact obsolete because its subject is gone | Value is kept for reference; the reason is appended to notes and passes the `secret_guard`. Use `memento_add` when the value merely changed |
 
 Note: `memento_search` does **not** match keys — use `memento_get` for an exact key.
+
+The `secret_guard` (config, default `reject`) scans `memento_add` and
+`memento_obsolete` writes for credential-like text and refuses them before any
+store contact; findings come back as masked previews (the secret is never
+ echoed). At `ask`, an agent that has shown the finding to the user and got
+explicit approval re-calls with `confirm_secret: true`; at `reject` there is no
+bypass.
 
 Every read carries `age_days` and `stale` (per-category TTL: `config`/`endpoint`
 14 days, `location`/`behavior` 30 days, `context_map` and unknown categories

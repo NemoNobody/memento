@@ -6,6 +6,16 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
+)
+
+// Secret guard levels: how the write paths treat credential-like text.
+// The store is plaintext, so guarding writes is the only place a secret can
+// still be stopped. See internal/secretguard for the detector.
+const (
+	GuardReject = "reject" // never store credential-like text; no confirmation exists
+	GuardAsk    = "ask"    // store only after an explicit confirmation flag
+	GuardAllow  = "allow"  // deliberate opt-out: scan nothing
 )
 
 // Config holds configuration for the memento CLI.
@@ -20,6 +30,10 @@ type Config struct {
 	// value is appended, the oldest entries beyond this limit are dropped.
 	// 0 means "keep everything".
 	HistoryLimit int `json:"history_limit"`
+
+	// SecretGuard is one of GuardReject / GuardAsk / GuardAllow. It applies to
+	// every write path (CLI add/obsolete, MCP memento_add/memento_obsolete).
+	SecretGuard string `json:"secret_guard"`
 }
 
 // DefaultConfig returns the default configuration.
@@ -31,6 +45,7 @@ func DefaultConfig() *Config {
 		InsecureSkipVerify: true,
 		IndexName:          "memento",
 		HistoryLimit:       20,
+		SecretGuard:        GuardReject,
 	}
 }
 
@@ -51,7 +66,7 @@ func LoadConfig() (*Config, error) {
 //
 // Env vars override the file: OPENSEARCH_URL, OPENSEARCH_USER,
 // OPENSEARCH_PASSWORD, OPENSEARCH_INSECURE_SKIP_VERIFY, MEMENTO_INDEX,
-// MEMENTO_HISTORY_LIMIT.
+// MEMENTO_HISTORY_LIMIT, MEMENTO_SECRET_GUARD.
 func LoadConfigFrom(explicitPath string) (*Config, error) {
 	cfg := DefaultConfig()
 	path := explicitPath
@@ -89,6 +104,13 @@ func LoadConfigFrom(explicitPath string) (*Config, error) {
 		}
 		cfg.HistoryLimit = n
 	}
+	if v := os.Getenv("MEMENTO_SECRET_GUARD"); v != "" {
+		g, err := normalizeGuard(v)
+		if err != nil {
+			return nil, fmt.Errorf("MEMENTO_SECRET_GUARD: %w", err)
+		}
+		cfg.SecretGuard = g
+	}
 	return cfg, nil
 }
 
@@ -96,12 +118,13 @@ func LoadConfigFrom(explicitPath string) (*Config, error) {
 // key must leave the default in place. InsecureSkipVerify is a *bool so that
 // "absent" (keep default true) is distinguishable from an explicit false.
 type fileConfig struct {
-	OpenSearchURL      string `json:"opensearch_url"`
-	OpenSearchUser     string `json:"opensearch_user"`
-	OpenSearchPassword string `json:"opensearch_password"`
-	InsecureSkipVerify *bool  `json:"insecure_skip_verify"`
-	IndexName          string `json:"index_name"`
-	HistoryLimit       *int   `json:"history_limit"`
+	OpenSearchURL      string  `json:"opensearch_url"`
+	OpenSearchUser     string  `json:"opensearch_user"`
+	OpenSearchPassword string  `json:"opensearch_password"`
+	InsecureSkipVerify *bool   `json:"insecure_skip_verify"`
+	IndexName          string  `json:"index_name"`
+	HistoryLimit       *int    `json:"history_limit"`
+	SecretGuard        *string `json:"secret_guard"`
 }
 
 // loadFile reads the config file at path into cfg.
@@ -132,7 +155,25 @@ func loadFile(cfg *Config, path string) error {
 	if c.HistoryLimit != nil {
 		cfg.HistoryLimit = *c.HistoryLimit
 	}
+	if c.SecretGuard != nil {
+		g, err := normalizeGuard(*c.SecretGuard)
+		if err != nil {
+			return fmt.Errorf("config %s: secret_guard: %w", path, err)
+		}
+		cfg.SecretGuard = g
+	}
 	return nil
+}
+
+// normalizeGuard maps a configured level to its canonical form, rejecting
+// typos loudly: a silently ignored guard value is a guard that is not there.
+func normalizeGuard(v string) (string, error) {
+	g := strings.ToLower(strings.TrimSpace(v))
+	switch g {
+	case GuardReject, GuardAsk, GuardAllow:
+		return g, nil
+	}
+	return "", fmt.Errorf("must be one of reject|ask|allow, got %q", v)
 }
 
 // FindConfigPath returns the path of the config file to use, or "" when none

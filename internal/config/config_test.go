@@ -33,6 +33,7 @@ func clearEnv(t *testing.T) {
 		"OPENSEARCH_PASSWORD",
 		"MEMENTO_INDEX",
 		"MEMENTO_HISTORY_LIMIT",
+		"MEMENTO_SECRET_GUARD",
 	} {
 		t.Setenv(k, "")
 	}
@@ -54,6 +55,9 @@ func TestDefaultConfig(t *testing.T) {
 	}
 	if cfg.HistoryLimit != 20 {
 		t.Errorf("HistoryLimit = %d, want default 20", cfg.HistoryLimit)
+	}
+	if cfg.SecretGuard != GuardReject {
+		t.Errorf("SecretGuard = %q, want the safe default %q", cfg.SecretGuard, GuardReject)
 	}
 }
 
@@ -184,6 +188,69 @@ func TestLoadConfig_HistoryLimitBadEnvIsAnError(t *testing.T) {
 	t.Setenv("MEMENTO_HISTORY_LIMIT", "not-a-number")
 	if _, err := LoadConfig(); err == nil {
 		t.Error("LoadConfig() = nil error for MEMENTO_HISTORY_LIMIT=not-a-number, want error")
+	}
+}
+
+// TestLoadConfig_SecretGuard pins the guard rail: the default is the safe
+// level, file and env set it, typos fail loudly (a silently ignored guard
+// value is a guard that is not there).
+func TestLoadConfig_SecretGuard(t *testing.T) {
+	cases := []struct {
+		name string
+		file string
+		env  string
+		want string
+	}{
+		{"file ask", `{"secret_guard": "ask"}`, "", GuardAsk},
+		{"file allow", `{"secret_guard": "allow"}`, "", GuardAllow},
+		{"file canonicalizes", `{"secret_guard": "  ASK "}`, "", GuardAsk},
+		{"env overrides file", `{"secret_guard": "allow"}`, "reject", GuardReject},
+		{"env canonicalizes", `{}`, "Allow", GuardAllow},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			restore := chdir(t, dir)
+			defer restore()
+			clearEnv(t)
+			fc := filepath.Join(dir, "memento.conf")
+			if err := os.WriteFile(fc, []byte(tc.file), 0644); err != nil {
+				t.Fatalf("write memento.conf: %v", err)
+			}
+			if tc.env != "" {
+				t.Setenv("MEMENTO_SECRET_GUARD", tc.env)
+			}
+			cfg, err := LoadConfig()
+			if err != nil {
+				t.Fatalf("LoadConfig: %v", err)
+			}
+			if cfg.SecretGuard != tc.want {
+				t.Errorf("SecretGuard = %q, want %q", cfg.SecretGuard, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadConfig_SecretGuardBadValuesAreErrors(t *testing.T) {
+	dir := t.TempDir()
+	restore := chdir(t, dir)
+	defer restore()
+	clearEnv(t)
+
+	fc := filepath.Join(dir, "memento.conf")
+	if err := os.WriteFile(fc, []byte(`{"secret_guard": "permissive"}`), 0644); err != nil {
+		t.Fatalf("write memento.conf: %v", err)
+	}
+	if _, err := LoadConfig(); err == nil {
+		t.Error("LoadConfig() = nil error for secret_guard=permissive, want error")
+	}
+
+	if err := os.WriteFile(fc, []byte(`{}`), 0644); err != nil {
+		t.Fatalf("write memento.conf: %v", err)
+	}
+	t.Setenv("MEMENTO_SECRET_GUARD", "yes-please")
+	if _, err := LoadConfig(); err == nil {
+		t.Error("LoadConfig() = nil error for MEMENTO_SECRET_GUARD=yes-please, want error")
 	}
 }
 

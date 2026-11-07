@@ -20,6 +20,7 @@ var statusEnvVars = []string{
 	"OPENSEARCH_INSECURE_SKIP_VERIFY",
 	"MEMENTO_INDEX",
 	"MEMENTO_HISTORY_LIMIT",
+	"MEMENTO_SECRET_GUARD",
 }
 
 // statusReport is the shared diagnostics payload behind `memento status` and the
@@ -30,6 +31,7 @@ type statusReport struct {
 	URL          string               `json:"url" jsonschema:"the OpenSearch URL that was tried"`
 	Index        string               `json:"index" jsonschema:"the index name used for facts"`
 	HistoryLimit int                  `json:"history_limit" jsonschema:"per-key history retention applied on corrections; 0 keeps everything"`
+	SecretGuard  string               `json:"secret_guard,omitempty" jsonschema:"secret guard level in effect on writes: reject | ask | allow"`
 	ConfigFile   string               `json:"config_file" jsonschema:"config file actually used, empty when none was found"`
 	EnvOverrides []string             `json:"env_overrides,omitempty" jsonschema:"environment variables that override the config file"`
 	ClusterName  string               `json:"cluster_name,omitempty" jsonschema:"OpenSearch cluster name, when reachable"`
@@ -89,6 +91,7 @@ func collectStatus(ctx context.Context, confPath string) statusReport {
 	rep.URL = cfg.OpenSearchURL
 	rep.Index = cfg.IndexName
 	rep.HistoryLimit = cfg.HistoryLimit
+	rep.SecretGuard = cfg.SecretGuard
 
 	c, err := client.NewClient(cfg)
 	if err != nil {
@@ -201,6 +204,8 @@ func printStatus(w io.Writer, rep statusReport) error {
 	b.WriteString(rep.Index)
 	b.WriteString("\nhistory_limit: ")
 	b.WriteString(strconv.Itoa(rep.HistoryLimit))
+	b.WriteString("\nsecret_guard: ")
+	b.WriteString(rep.SecretGuard)
 	b.WriteString("\n")
 	if rep.OK {
 		b.WriteString("cluster: ")

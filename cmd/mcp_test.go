@@ -184,6 +184,109 @@ func TestResolveStatus(t *testing.T) {
 	}
 }
 
+// toolText flattens the text content of a tool result for assertions.
+func toolText(res *mcp.CallToolResult) string {
+	var b strings.Builder
+	for _, c := range res.Content {
+		if tc, ok := c.(*mcp.TextContent); ok {
+			b.WriteString(tc.Text)
+		}
+	}
+	return b.String()
+}
+
+// TestMCPServerAddSecretGuard pins the write-time guard rail end to end. The
+// store is unreachable on purpose: a rejected write must be rejected by the
+// guard before any store contact, and the guard's message must carry masked
+// previews only (the whole point is not to echo the secret into the agent's
+// context).
+func TestMCPServerAddSecretGuard(t *testing.T) {
+	const sentinel = "AKIAIOSFODNN7EXAMPLE" // the AWS documentation example key
+	storeDown := "OPENSEARCH_URL=https://127.0.0.1:9"
+	secretArgs := map[string]any{
+		"key":      "guard:test",
+		"value":    "the admin key is " + sentinel,
+		"category": "config",
+	}
+
+	t.Run("reject blocks before the store", func(t *testing.T) {
+		session := connectTestServer(t, "MEMENTO_SECRET_GUARD=reject", storeDown)
+		res, err := session.CallTool(context.Background(),
+			&mcp.CallToolParams{Name: "memento_add", Arguments: secretArgs})
+		if err != nil {
+			t.Fatalf("CallTool: %v", err)
+		}
+		if !res.IsError {
+			t.Fatal("reject mode stored credential-like text")
+		}
+		text := toolText(res)
+		if !strings.Contains(text, "secret-guard") {
+			t.Errorf("want a secret-guard error, got: %s", text)
+		}
+		if strings.Contains(text, sentinel) {
+			t.Errorf("guard message echoes the secret: %s", text)
+		}
+	})
+
+	t.Run("confirm does not bypass reject", func(t *testing.T) {
+		session := connectTestServer(t, "MEMENTO_SECRET_GUARD=reject", storeDown)
+		args := map[string]any{"confirm_secret": true}
+		for k, v := range secretArgs {
+			args[k] = v
+		}
+		res, err := session.CallTool(context.Background(),
+			&mcp.CallToolParams{Name: "memento_add", Arguments: args})
+		if err != nil {
+			t.Fatalf("CallTool: %v", err)
+		}
+		if !res.IsError || !strings.Contains(toolText(res), "secret-guard") {
+			t.Errorf("reject must ignore confirm_secret; got: %s", toolText(res))
+		}
+	})
+
+	t.Run("ask needs the confirmation flag", func(t *testing.T) {
+		session := connectTestServer(t, "MEMENTO_SECRET_GUARD=ask", storeDown)
+		res, err := session.CallTool(context.Background(),
+			&mcp.CallToolParams{Name: "memento_add", Arguments: secretArgs})
+		if err != nil {
+			t.Fatalf("CallTool: %v", err)
+		}
+		if !res.IsError {
+			t.Fatal("ask mode stored credential-like text without confirmation")
+		}
+		text := toolText(res)
+		if !strings.Contains(text, "confirm_secret") {
+			t.Errorf("ask message must name the confirmation parameter: %s", text)
+		}
+		if strings.Contains(text, sentinel) {
+			t.Errorf("guard message echoes the secret: %s", text)
+		}
+	})
+
+	t.Run("ask with confirmation reaches the store", func(t *testing.T) {
+		session := connectTestServer(t, "MEMENTO_SECRET_GUARD=ask", storeDown)
+		args := map[string]any{"confirm_secret": true}
+		for k, v := range secretArgs {
+			args[k] = v
+		}
+		res, err := session.CallTool(context.Background(),
+			&mcp.CallToolParams{Name: "memento_add", Arguments: args})
+		if err != nil {
+			t.Fatalf("CallTool: %v", err)
+		}
+		if !res.IsError {
+			t.Fatal("the store is unreachable; a success means the test wired the env wrong")
+		}
+		text := toolText(res)
+		if strings.Contains(text, "secret-guard") {
+			t.Errorf("confirmed ask must pass the guard; got: %s", text)
+		}
+		if !strings.Contains(text, "memento_add failed") {
+			t.Errorf("want the store error after the guard passed; got: %s", text)
+		}
+	})
+}
+
 // TestNewFactViewCarriesTimeAndHistory pins the MCP contract: the view exposes
 // the observation time and the staleness signal; history ships only when
 // include_history is set (default off: state keys get corrected daily and every

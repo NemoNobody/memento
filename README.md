@@ -19,6 +19,9 @@ Each fact carries evidence, not verdicts:
   overwriting it; bounded per key by `history_limit` (default 20, oldest
   entries dropped first);
 - **notes**: free-text qualifiers, e.g. "checked the dev config only";
+- **secret guard**: writes scan for credential-like text (the index is
+  plaintext) — `reject` by default, `ask` needs an explicit confirmation,
+  `allow` opts out;
 - **staleness**: reads compute `age_days` and `stale` from `observed_at` and a
   per-category TTL (`config`/`endpoint` 14 days, `location`/`behavior` 30 days,
   `context_map` and unknown categories never). `stale: true` is an instruction
@@ -56,14 +59,15 @@ and fill in your OpenSearch connection.
   "opensearch_password": "<your-password>",
   "insecure_skip_verify": true,
   "index_name": "memento",
-  "history_limit": 20
+  "history_limit": 20,
+  "secret_guard": "reject"
 }
 ```
 
 The index is created automatically on first use. Env vars override the file:
 `OPENSEARCH_URL`, `OPENSEARCH_USER`, `OPENSEARCH_PASSWORD`,
-`OPENSEARCH_INSECURE_SKIP_VERIFY`, `MEMENTO_INDEX`, `MEMENTO_HISTORY_LIMIT`;
-`MEMENTO_CONF` points at an explicit config file. Check the connection:
+`OPENSEARCH_INSECURE_SKIP_VERIFY`, `MEMENTO_INDEX`, `MEMENTO_HISTORY_LIMIT`,
+`MEMENTO_SECRET_GUARD`; `MEMENTO_CONF` points at an explicit config file. Check the connection:
 
 ```
 memento status

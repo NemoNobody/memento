@@ -110,7 +110,8 @@ func runMCPServer(confPath string) error {
 			"values, behavior. Re-use the same key to correct a fact — the old " +
 			"value moves to history. Re-adding the same value updates notes only, " +
 			"without adding a history entry. Never store secrets (passwords, " +
-			"tokens, keys): the store is plaintext.",
+			"tokens, keys): the store is plaintext and a secret_guard rejects " +
+			"credential-like text on writes.",
 	}, s.add)
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -338,6 +339,11 @@ type addInput struct {
 	Project  string `json:"project,omitempty" jsonschema:"project name; defaults to 'global'"`
 	Source   string `json:"source,omitempty" jsonschema:"where the fact came from (tool:read_file, doc:README, user:confirmed); defaults to tool:mcp"`
 	Notes    string `json:"notes,omitempty" jsonschema:"qualifiers: what was checked, how far, caveats — carried to later sessions"`
+
+	// ConfirmSecret bypasses a guard hit at secret_guard=ask. It is the agent's
+	// barrier: show the masked finding to the user first, set this only after
+	// their explicit approval. At reject it has no effect.
+	ConfirmSecret bool `json:"confirm_secret,omitempty" jsonschema:"confirm a guard hit is a false positive (secret_guard=ask only); set only after the user approved the exact finding"`
 }
 
 type addOutput struct {
@@ -352,6 +358,17 @@ func (s *mcpServer) add(ctx context.Context, req *mcp.CallToolRequest, in addInp
 	}
 	if in.Source == "" {
 		in.Source = "tool:mcp"
+	}
+	// The guard runs before any store contact: a rejected write must be
+	// rejected even when OpenSearch is down. When the config itself is
+	// broken, newClient below surfaces that error.
+	if cfg, cerr := config.LoadConfigFrom(s.confPath); cerr == nil {
+		if err := guardCheck(cfg.SecretGuard, in.ConfirmSecret,
+			guardField{"value", in.Value},
+			guardField{"notes", in.Notes},
+			guardField{"source", in.Source}); err != nil {
+			return nil, addOutput{}, err
+		}
 	}
 	c, err := s.newClient(ctx)
 	if err != nil {
@@ -397,6 +414,9 @@ func (s *mcpServer) list(ctx context.Context, req *mcp.CallToolRequest, in listI
 type obsoleteInput struct {
 	Key    string `json:"key" jsonschema:"key of the fact whose subject is gone"`
 	Reason string `json:"reason,omitempty" jsonschema:"why it is gone (file deleted, endpoint removed); appended to notes"`
+
+	// ConfirmSecret bypasses a guard hit at secret_guard=ask (see addInput).
+	ConfirmSecret bool `json:"confirm_secret,omitempty" jsonschema:"confirm a guard hit is a false positive (secret_guard=ask only); set only after the user approved the exact finding"`
 }
 
 type obsoleteOutput struct {
@@ -405,6 +425,12 @@ type obsoleteOutput struct {
 }
 
 func (s *mcpServer) obsolete(ctx context.Context, req *mcp.CallToolRequest, in obsoleteInput) (*mcp.CallToolResult, obsoleteOutput, error) {
+	if cfg, cerr := config.LoadConfigFrom(s.confPath); cerr == nil {
+		if err := guardCheck(cfg.SecretGuard, in.ConfirmSecret,
+			guardField{"reason", in.Reason}); err != nil {
+			return nil, obsoleteOutput{}, err
+		}
+	}
 	c, err := s.newClient(ctx)
 	if err != nil {
 		return nil, obsoleteOutput{}, storeError("memento_obsolete", err)

@@ -117,8 +117,10 @@ memento obsolete global:demo:hello "demo removed"
 ## Security notes
 
 - **Secrets do not belong in facts** (passwords, tokens, private keys): the index
-  is plaintext, and "no secrets" is a rule for agents and humans — not a built-in
-  protection.
+  is plaintext. The write paths scan for credential-like text and refuse it —
+  `secret_guard` in the config: `reject` (default), `ask` (confirm a false
+  positive with `--allow-secret` / `confirm_secret: true`), `allow` (scanning
+  off). Detection is best effort: the rule is still the first line of defense.
 - Change the default `admin` password before the cluster is reachable by anyone else.
 - `insecure_skip_verify: true` disables certificate verification. It is fine for a
   local node with the demo certificate and wrong for anything shared.

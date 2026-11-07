@@ -8,6 +8,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var obsoleteFlags struct {
+	allowSecret bool
+}
+
 func ObsoleteCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "obsolete <key> [reason]",
@@ -20,8 +24,12 @@ func ObsoleteCmd() *cobra.Command {
 				reason = args[1]
 			}
 			ctx := context.Background()
-			c, err := newClient()
+			c, cfg, err := newClientWithConfig()
 			if err != nil {
+				fatalErr(err)
+			}
+			if err := guardCheck(cfg.SecretGuard, obsoleteFlags.allowSecret,
+				guardField{"reason", reason}); err != nil {
 				fatalErr(err)
 			}
 			if err := c.Obsolete(ctx, key, reason); err != nil {
@@ -32,5 +40,7 @@ func ObsoleteCmd() *cobra.Command {
 			}
 		},
 	}
+	cmd.Flags().BoolVar(&obsoleteFlags.allowSecret, "allow-secret", false,
+		"confirm the flagged text is not a secret (secret_guard=ask only, after user approval)")
 	return cmd
 }

@@ -130,6 +130,34 @@ Rules:
 - Nothing in `add`/`obsolete` moves `observed_at` except a real value change, so
   a stale fact cannot be silently "re-freshed" by a notes touch.
 
+## Secret guard
+
+The index is plaintext: a secret written once is exposed in every later read
+(and in every agent context that reads it). The write paths (`add`,
+`obsolete`, and the MCP tools) scan the user-supplied text — value, notes,
+source (reason for obsolete) — for credential-like shapes: vendor token
+prefixes (`AKIA…`, `ghp_…`, `xox…`, `sk-…`, JWT, PEM headers), `Bearer`
+headers, `password = …` assignments, and long opaque strings (hex/base64).
+
+The level is `secret_guard` in the config (env `MEMENTO_SECRET_GUARD`):
+
+| Level | Behavior |
+|-------|----------|
+| `reject` (default) | credential-like text is never stored; there is no confirmation flag |
+| `ask` | the write is refused until the caller confirms the finding is a false positive: `--allow-secret` (CLI) / `confirm_secret: true` (MCP) — an agent must show the finding to the user first |
+| `allow` | scanning is off; a deliberate opt-out for shared stores |
+
+Guarantees and limits:
+
+- The guard runs **before any store contact**: a rejected write is rejected
+  even when OpenSearch is down.
+- The guard's message carries masked previews only (first 4 characters and
+  the length) — the matched text is never echoed back into the caller's
+  context. Echoing it would leak the secret a second time.
+- Detection is regex-based best effort: a secret without a recognizable shape
+  passes. A false positive is possible too — a 40-character git SHA in notes
+  matches `long-hex`; at `ask` the confirmation flag is the escape hatch.
+
 ## Auth
 
 The CLI uses **Basic auth** (user + password). Connection and auth settings
