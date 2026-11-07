@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"strings"
 
 	"github.com/opensearch-project/opensearch-go/v4/opensearchapi"
@@ -16,10 +17,16 @@ import (
 // cluster shape, so it reports what it sees and leaves interpretation to callers.
 type StorageState struct {
 	ClusterHealth string `json:"cluster_health" jsonschema:"cluster health: green | yellow | red"`
-	IndexHealth   string `json:"index_health" jsonschema:"health of the memento index: green | yellow | red"`
-	Unassigned    int    `json:"unassigned_shards" jsonschema:"number of unassigned shards in the cluster"`
-	DataNodes     int    `json:"data_nodes" jsonschema:"number of data nodes in the cluster"`
-	ReadOnlyIndex bool   `json:"index_read_only" jsonschema:"true when the index has a read-only block and rejects writes"`
+	IndexHealth   string `json:"index_health" jsonschema:"health of the memento index: green | yellow | red; empty when the index does not exist yet"`
+
+	// IndexAbsent means the facts index does not exist yet. It is a normal
+	// state on a fresh install: the index is created on the first write.
+	// It must be reported explicitly: index_health alone cannot say "absent"
+	// from "not collected".
+	IndexAbsent   bool `json:"index_absent,omitempty" jsonschema:"true when the facts index does not exist yet: it is created on the first write"`
+	Unassigned    int  `json:"unassigned_shards" jsonschema:"number of unassigned shards in the cluster"`
+	DataNodes     int  `json:"data_nodes" jsonschema:"number of data nodes in the cluster"`
+	ReadOnlyIndex bool `json:"index_read_only" jsonschema:"true when the index has a read-only block and rejects writes"`
 
 	// WorstNode is the data node with the most used disk — the one that will hit
 	// a watermark (and the read-only flood stage) first.
@@ -37,6 +44,15 @@ func (c *Client) StorageState(ctx context.Context) *StorageState {
 	st := &StorageState{}
 	var problems []string
 
+	// Probe index existence before asking anything index-scoped. A GET on
+	// _cluster/health/<index> blocks server-side until its own timeout (≈30 s)
+	// when the index is missing, so status used to hang on a fresh install.
+	// HEAD on the index answers immediately.
+	exists, err := c.indexExists(ctx)
+	if err != nil {
+		problems = append(problems, "index existence: "+err.Error())
+	}
+
 	if health, err := c.api.Cluster.Health(ctx, nil); err != nil {
 		problems = append(problems, "cluster health: "+err.Error())
 	} else {
@@ -45,11 +61,18 @@ func (c *Client) StorageState(ctx context.Context) *StorageState {
 		st.DataNodes = health.NumberOfDataNodes
 	}
 
-	idxReq := &opensearchapi.ClusterHealthReq{Indices: []string{c.cfg.IndexName}}
-	if idxHealth, err := c.api.Cluster.Health(ctx, idxReq); err != nil {
-		problems = append(problems, "index health: "+err.Error())
-	} else {
-		st.IndexHealth = idxHealth.Status
+	switch {
+	case err != nil:
+		// Existence unknown: do not risk the blocking index-scoped query.
+	case !exists:
+		st.IndexAbsent = true
+	default:
+		idxReq := &opensearchapi.ClusterHealthReq{Indices: []string{c.cfg.IndexName}}
+		if idxHealth, err := c.api.Cluster.Health(ctx, idxReq); err != nil {
+			problems = append(problems, "index health: "+err.Error())
+		} else {
+			st.IndexHealth = idxHealth.Status
+		}
 	}
 
 	if stats, err := c.api.Nodes.Stats(ctx, &opensearchapi.NodesStatsReq{Metric: []string{"fs"}}); err != nil {
@@ -58,21 +81,40 @@ func (c *Client) StorageState(ctx context.Context) *StorageState {
 		st.WorstNode, st.WorstNodeUsedPercent = worstDiskUsage(stats)
 	}
 
-	flat := true
-	get, err := c.api.Indices.Get(ctx, opensearchapi.IndicesGetReq{
-		Indices: []string{c.cfg.IndexName},
-		Params:  opensearchapi.IndicesGetParams{FlatSettings: &flat},
-	})
-	if err != nil {
-		problems = append(problems, "index settings: "+err.Error())
-	} else {
-		st.ReadOnlyIndex = readOnlyFromSettings(get)
+	if exists && err == nil {
+		flat := true
+		get, err := c.api.Indices.Get(ctx, opensearchapi.IndicesGetReq{
+			Indices: []string{c.cfg.IndexName},
+			Params:  opensearchapi.IndicesGetParams{FlatSettings: &flat},
+		})
+		if err != nil {
+			problems = append(problems, "index settings: "+err.Error())
+		} else {
+			st.ReadOnlyIndex = readOnlyFromSettings(get)
+		}
 	}
 
 	if len(problems) > 0 {
 		st.Unavailable = strings.Join(problems, "; ")
 	}
 	return st
+}
+
+// indexExists probes the facts index with HEAD /<index>. It returns found ==
+// false with a nil error only when OpenSearch answered 404, i.e. the index
+// genuinely does not exist. Any other failure (network, auth) is returned as
+// an error so the caller reports "could not check" rather than "absent".
+func (c *Client) indexExists(ctx context.Context) (bool, error) {
+	resp, err := c.api.Indices.Exists(ctx, opensearchapi.IndicesExistsReq{
+		Indices: []string{c.cfg.IndexName},
+	})
+	if err != nil {
+		if resp != nil && resp.StatusCode == http.StatusNotFound {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 // worstDiskUsage returns the data node with the highest disk usage. Nodes that

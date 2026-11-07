@@ -1,7 +1,9 @@
 package client
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -153,5 +155,110 @@ func TestWrapWriteError_PlainErrorUnchanged(t *testing.T) {
 	}
 	if !strings.Contains(msg, "boom") {
 		t.Errorf("original error text lost: %s", msg)
+	}
+}
+
+// The health probe used to call _cluster/health/<index> directly. When the index
+// does not exist, that request blocks server-side until its own timeout (~30 s),
+// which hung `memento status` on a fresh install. These tests pin the contract:
+// existence is probed first, and a missing index is reported, not queried.
+func TestStorageState_IndexAbsent(t *testing.T) {
+	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
+		switch {
+		case r.Method == http.MethodGet && r.Path == "/_cluster/health":
+			return http.StatusOK, `{"cluster_name":"test","status":"yellow","number_of_data_nodes":1,"unassigned_shards":1}`
+		case r.Method == http.MethodHead && r.Path == "/memento":
+			return http.StatusNotFound, ""
+		case r.Method == http.MethodGet && r.Path == "/_nodes/stats/fs":
+			return http.StatusOK, `{"cluster_name":"test","nodes":{"n1":{"name":"node-a","roles":["data"],"fs":{"total":{"total_in_bytes":100,"available_in_bytes":30}}}}}`
+		}
+		return http.StatusInternalServerError, `{"status":500,"error":"unexpected request: ` + r.Method + ` ` + r.Path + `"}`
+	})
+
+	st := c.StorageState(context.Background())
+
+	if !st.IndexAbsent {
+		t.Errorf("IndexAbsent = false, want true (state: %+v)", st)
+	}
+	if st.IndexHealth != "" {
+		t.Errorf("IndexHealth = %q, want empty for an absent index", st.IndexHealth)
+	}
+	if st.Unavailable != "" {
+		t.Errorf("Unavailable = %q, want empty: an absent index is not a problem", st.Unavailable)
+	}
+	if st.ClusterHealth != "yellow" {
+		t.Errorf("ClusterHealth = %q, want yellow", st.ClusterHealth)
+	}
+	if st.WorstNode != "node-a" {
+		t.Errorf("WorstNode = %q, want node-a (disk usage must still be collected)", st.WorstNode)
+	}
+	// The expensive queries must not have been issued at all.
+	for _, r := range fake.requests {
+		if strings.HasPrefix(r.Path, "/_cluster/health/memento") {
+			t.Errorf("scoped index health was queried for an absent index: %s %s", r.Method, r.Path)
+		}
+		if r.Method == http.MethodGet && r.Path == "/memento" {
+			t.Errorf("index settings were queried for an absent index: %s %s", r.Method, r.Path)
+		}
+	}
+}
+
+func TestStorageState_IndexPresent(t *testing.T) {
+	c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+		switch {
+		case r.Method == http.MethodGet && r.Path == "/_cluster/health":
+			return http.StatusOK, `{"cluster_name":"test","status":"green","number_of_data_nodes":1,"unassigned_shards":0}`
+		case r.Method == http.MethodHead && r.Path == "/memento":
+			return http.StatusOK, ""
+		case r.Method == http.MethodGet && r.Path == "/_cluster/health/memento":
+			return http.StatusOK, `{"cluster_name":"test","status":"yellow","number_of_data_nodes":1,"unassigned_shards":1}`
+		case r.Method == http.MethodGet && r.Path == "/_nodes/stats/fs":
+			return http.StatusOK, `{"cluster_name":"test","nodes":{}}`
+		case r.Method == http.MethodGet && r.Path == "/memento":
+			return http.StatusOK, `{"memento":{"settings":{"index":{"number_of_shards":"1"}}}}`
+		}
+		return http.StatusInternalServerError, `{"status":500,"error":"unexpected request: ` + r.Method + ` ` + r.Path + `"}`
+	})
+
+	st := c.StorageState(context.Background())
+
+	if st.IndexAbsent {
+		t.Errorf("IndexAbsent = true, want false for an existing index (state: %+v)", st)
+	}
+	if st.IndexHealth != "yellow" {
+		t.Errorf("IndexHealth = %q, want yellow", st.IndexHealth)
+	}
+	if st.Unavailable != "" {
+		t.Errorf("Unavailable = %q, want empty", st.Unavailable)
+	}
+}
+
+func TestStorageState_ExistsProbeFails(t *testing.T) {
+	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
+		switch {
+		case r.Method == http.MethodGet && r.Path == "/_cluster/health":
+			return http.StatusOK, `{"cluster_name":"test","status":"green","number_of_data_nodes":1,"unassigned_shards":0}`
+		case r.Method == http.MethodHead && r.Path == "/memento":
+			return http.StatusUnauthorized, `{"status":401,"error":"unauthorized"}`
+		case r.Method == http.MethodGet && r.Path == "/_nodes/stats/fs":
+			return http.StatusOK, `{"cluster_name":"test","nodes":{}}`
+		}
+		return http.StatusInternalServerError, `{"status":500,"error":"unexpected request: ` + r.Method + ` ` + r.Path + `"}`
+	})
+
+	st := c.StorageState(context.Background())
+
+	// A failed probe is "could not check", not "absent": the index is not
+	// declared missing, and the hanging scoped health must not be queried.
+	if st.IndexAbsent {
+		t.Errorf("IndexAbsent = true, want false when the probe failed (state: %+v)", st)
+	}
+	if !strings.Contains(st.Unavailable, "index existence") {
+		t.Errorf("Unavailable = %q, want a mention of the failed existence probe", st.Unavailable)
+	}
+	for _, r := range fake.requests {
+		if strings.HasPrefix(r.Path, "/_cluster/health/memento") {
+			t.Errorf("scoped index health was queried after a failed existence probe: %s %s", r.Method, r.Path)
+		}
 	}
 }

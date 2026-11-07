@@ -130,7 +130,13 @@ func collectStatus(ctx context.Context, confPath string) statusReport {
 // assuming a cluster shape: whether "yellow" matters depends on the deployment,
 // and that judgement belongs to the reader.
 func storageNote(st *client.StorageState) string {
-	if st == nil || st.IndexHealth == "" {
+	if st == nil {
+		return ""
+	}
+	if st.IndexAbsent {
+		return "index does not exist yet: it is created on the first write"
+	}
+	if st.IndexHealth == "" {
 		return ""
 	}
 	switch st.IndexHealth {
@@ -241,7 +247,11 @@ func printStorage(w io.Writer, rep statusReport) error {
 	b.WriteString("storage: cluster=")
 	b.WriteString(st.ClusterHealth)
 	b.WriteString(" index=")
-	b.WriteString(st.IndexHealth)
+	if st.IndexAbsent {
+		b.WriteString("absent")
+	} else {
+		b.WriteString(st.IndexHealth)
+	}
 	b.WriteString(" unassigned_shards=")
 	b.WriteString(strconv.Itoa(st.Unassigned))
 	b.WriteString(" data_nodes=")
