@@ -116,3 +116,77 @@ func TestMarkObsoleteWithoutReasonKeepsNotes(t *testing.T) {
 		t.Errorf("Notes = %q, want %q (an empty reason must not add a line)", f.Notes, "note")
 	}
 }
+
+func TestTTLDays(t *testing.T) {
+	cases := map[string]int{
+		"config":      14,
+		"endpoint":    14,
+		"location":    30,
+		"behavior":    30,
+		"context_map": 0,
+		"decision":    0,
+		"":            0,
+		"nonsense":    0,
+	}
+	for category, want := range cases {
+		if got := TTLDays(category); got != want {
+			t.Errorf("TTLDays(%q) = %d, want %d", category, got, want)
+		}
+	}
+}
+
+func TestAgeDays(t *testing.T) {
+	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+
+	fresh := &Fact{Category: "location", ObservedAt: now}
+	if got := fresh.AgeDays(now); got != 0 {
+		t.Errorf("observed now: AgeDays = %d, want 0", got)
+	}
+
+	// A few hours short of four days must still count as three.
+	recent := &Fact{Category: "location", ObservedAt: now.Add(-100 * time.Hour)}
+	if got := recent.AgeDays(now); got != 4 {
+		t.Errorf("observed 100h ago: AgeDays = %d, want 4", got)
+	}
+
+	// A clock skew must not produce a negative age.
+	future := &Fact{Category: "location", ObservedAt: now.Add(time.Hour)}
+	if got := future.AgeDays(now); got != 0 {
+		t.Errorf("observed in the future: AgeDays = %d, want 0", got)
+	}
+
+	// Pre-observed_at facts report -1: the age is unknown, not zero.
+	legacy := &Fact{Category: "location"}
+	if got := legacy.AgeDays(now); got != -1 {
+		t.Errorf("zero observed_at: AgeDays = %d, want -1", got)
+	}
+}
+
+func TestStale(t *testing.T) {
+	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name     string
+		category string
+		observed time.Time
+		want     bool
+	}{
+		{"config at TTL boundary is not stale", "config", now.Add(-14 * 24 * time.Hour), false},
+		{"config past TTL is stale", "config", now.Add(-15 * 24 * time.Hour), true},
+		{"endpoint past TTL is stale", "endpoint", now.Add(-40 * 24 * time.Hour), true},
+		{"location inside TTL is fresh", "location", now.Add(-29 * 24 * time.Hour), false},
+		{"location past TTL is stale", "location", now.Add(-31 * 24 * time.Hour), true},
+		// Categories without a TTL never go stale: a decision stays valid
+		// until something contradicts it, no matter its age.
+		{"no-TTL category never stales", "context_map", now.Add(-3650 * 24 * time.Hour), false},
+		// An unknown observation time is stale by definition for TTL'd
+		// categories: the agent cannot tell how old the fact is.
+		{"unknown observation stales TTL'd category", "behavior", time.Time{}, true},
+		{"unknown observation keeps no-TTL category fresh", "context_map", time.Time{}, false},
+	}
+	for _, tc := range cases {
+		f := &Fact{Category: tc.category, ObservedAt: tc.observed}
+		if got := f.Stale(now); got != tc.want {
+			t.Errorf("%s: Stale = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

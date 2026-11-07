@@ -68,3 +68,47 @@ func (f *Fact) MarkObsolete(reason string) {
 func (f *Fact) Valid() bool {
 	return f.Status == "verified"
 }
+
+// ttlDaysByCategory maps a category to the age (in days) after which a fact
+// should be re-verified before being trusted. 0 (including unknown categories)
+// means the fact never goes stale. The store provides the signal; the agent
+// judges — staleness is an instruction to re-check, not to discard.
+var ttlDaysByCategory = map[string]int{
+	"config":   14,
+	"endpoint": 14,
+	"location": 30,
+	"behavior": 30,
+}
+
+// TTLDays returns the staleness TTL in days for a category, 0 for "never".
+func TTLDays(category string) int {
+	return ttlDaysByCategory[category]
+}
+
+// AgeDays returns whole days since the last observation, or -1 when
+// observed_at is unknown (facts created before the field existed).
+func (f *Fact) AgeDays(now time.Time) int {
+	if f.ObservedAt.IsZero() {
+		return -1
+	}
+	d := int(now.Sub(f.ObservedAt) / (24 * time.Hour))
+	if d < 0 {
+		return 0
+	}
+	return d
+}
+
+// Stale reports whether the fact is past its category TTL and should be
+// re-verified. An unknown observation time is stale by definition: the agent
+// cannot tell how old it is, so it must re-read the source.
+func (f *Fact) Stale(now time.Time) bool {
+	ttl := TTLDays(f.Category)
+	if ttl == 0 {
+		return false
+	}
+	age := f.AgeDays(now)
+	if age < 0 {
+		return true
+	}
+	return age > ttl
+}
