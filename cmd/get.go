@@ -2,8 +2,10 @@ package cmd
 
 import (
 	"context"
-	"fmt"
+	"io"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/NemoNobody/memento/internal/model"
@@ -25,42 +27,74 @@ func GetCmd() *cobra.Command {
 			ctx := context.Background()
 			c, err := newClient()
 			if err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				os.Exit(1)
+				fatalErr(err)
 			}
 			f, err := c.Get(ctx, key)
 			if err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				os.Exit(1)
+				fatalErr(err)
 			}
-			now := time.Now().UTC()
-			fmt.Printf("key: %q\n", f.Key)
-			fmt.Printf("value: %s\n", f.Value)
-			fmt.Printf("category: %q\n", f.Category)
-			fmt.Printf("project: %q\n", f.Project)
-			fmt.Printf("status: %q\n", f.Status)
-			fmt.Printf("source: %q\n", f.Source)
-			if f.Notes != "" {
-				fmt.Printf("notes: %s\n", f.Notes)
-			}
-			fmt.Printf("observed_at: %s\n", displayTime(f.ObservedAt))
-			fmt.Printf("age_days: %s\n", displayAge(f.AgeDays(now)))
-			fmt.Printf("stale: %s\n", displayStale(f, now))
-			fmt.Printf("updated_at: %s\n", f.UpdatedAt.Format("2006-01-02 15:04:05"))
-			if !getFlags.history {
-				return
-			}
-			if len(f.History) > 0 {
-				fmt.Println("history:")
-				for _, h := range f.History {
-					fmt.Printf("  - %q @ %s [%s]\n", h.Value, displayTime(h.ObservedAt), h.Source)
-				}
+			if err := printFact(os.Stdout, f, time.Now().UTC(), getFlags.history); err != nil {
+				fatalErr(err)
 			}
 		},
 	}
 	cmd.Flags().BoolVar(&getFlags.history, "history", false,
 		"include the full history chain (off by default: history bloats the context)")
 	return cmd
+}
+
+// printFact renders one fact for humans on w.
+func printFact(w io.Writer, f *model.Fact, now time.Time, history bool) error {
+	var b strings.Builder
+	b.WriteString("key: ")
+	b.WriteString(strconv.Quote(f.Key))
+	b.WriteString("\n")
+	b.WriteString("value: ")
+	b.WriteString(f.Value)
+	b.WriteString("\n")
+	b.WriteString("category: ")
+	b.WriteString(strconv.Quote(f.Category))
+	b.WriteString("\n")
+	b.WriteString("project: ")
+	b.WriteString(strconv.Quote(f.Project))
+	b.WriteString("\n")
+	b.WriteString("status: ")
+	b.WriteString(strconv.Quote(f.Status))
+	b.WriteString("\n")
+	b.WriteString("source: ")
+	b.WriteString(strconv.Quote(f.Source))
+	b.WriteString("\n")
+	if f.Notes != "" {
+		b.WriteString("notes: ")
+		b.WriteString(f.Notes)
+		b.WriteString("\n")
+	}
+	b.WriteString("observed_at: ")
+	b.WriteString(displayTime(f.ObservedAt))
+	b.WriteString("\n")
+	b.WriteString("age_days: ")
+	b.WriteString(displayAge(f.AgeDays(now)))
+	b.WriteString("\n")
+	b.WriteString("stale: ")
+	b.WriteString(displayStale(f, now))
+	b.WriteString("\n")
+	b.WriteString("updated_at: ")
+	b.WriteString(f.UpdatedAt.Format("2006-01-02 15:04:05"))
+	b.WriteString("\n")
+	if history && len(f.History) > 0 {
+		b.WriteString("history:\n")
+		for _, h := range f.History {
+			b.WriteString("  - ")
+			b.WriteString(strconv.Quote(h.Value))
+			b.WriteString(" @ ")
+			b.WriteString(displayTime(h.ObservedAt))
+			b.WriteString(" [")
+			b.WriteString(h.Source)
+			b.WriteString("]\n")
+		}
+	}
+	_, err := io.WriteString(w, b.String())
+	return err
 }
 
 // displayTime renders a timestamp for humans, or "unknown" for the zero time
@@ -77,7 +111,7 @@ func displayAge(days int) string {
 	if days < 0 {
 		return "unknown"
 	}
-	return fmt.Sprintf("%d", days)
+	return strconv.Itoa(days)
 }
 
 // staleMark is the compact staleness marker for one-line listings; empty when
@@ -90,7 +124,7 @@ func staleMark(f *model.Fact, now time.Time) string {
 	if age < 0 {
 		return " [stale: observed_at unknown]"
 	}
-	return fmt.Sprintf(" [stale: %dd]", age)
+	return " [stale: " + strconv.Itoa(age) + "d]"
 }
 
 // displayStale explains the staleness verdict: past-TTL facts carry the numbers
@@ -102,11 +136,18 @@ func displayStale(f *model.Fact, now time.Time) string {
 		return "false (category has no TTL)"
 	}
 	if f.ObservedAt.IsZero() {
-		return fmt.Sprintf("true (observed_at unknown, ttl for %q is %dd)", f.Category, ttl)
+		return "true (observed_at unknown, ttl for " + strconv.Quote(f.Category) + " is " + strconv.Itoa(ttl) + "d)"
 	}
 	if f.Stale(now) {
-		return fmt.Sprintf("true (age %dd, ttl for %q is %dd) — re-verify before trusting",
-			f.AgeDays(now), f.Category, ttl)
+		var b strings.Builder
+		b.WriteString("true (age ")
+		b.WriteString(strconv.Itoa(f.AgeDays(now)))
+		b.WriteString("d, ttl for ")
+		b.WriteString(strconv.Quote(f.Category))
+		b.WriteString(" is ")
+		b.WriteString(strconv.Itoa(ttl))
+		b.WriteString("d) — re-verify before trusting")
+		return b.String()
 	}
 	return "false"
 }

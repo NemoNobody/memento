@@ -2,8 +2,10 @@ package cmd
 
 import (
 	"context"
-	"fmt"
+	"io"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/NemoNobody/memento/internal/model"
 
@@ -25,21 +27,30 @@ func AddCmd() *cobra.Command {
 			key, value, category := args[0], args[1], args[2]
 			c, err := newClient()
 			if err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				os.Exit(1)
+				fatalErr(err)
 			}
 			ctx := context.Background()
 			f := model.NewFact(key, value, category, addFlags.project, addFlags.source, addFlags.notes)
 			created, err := c.Add(ctx, f)
 			if err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				os.Exit(1)
+				fatalErr(err)
 			}
 			verb := "updated"
 			if created {
 				verb = "added"
 			}
-			fmt.Printf("%s fact: key=%q category=%q project=%q\n", verb, key, category, addFlags.project)
+			var b strings.Builder
+			b.WriteString(verb)
+			b.WriteString(" fact: key=")
+			b.WriteString(strconv.Quote(key))
+			b.WriteString(" category=")
+			b.WriteString(strconv.Quote(category))
+			b.WriteString(" project=")
+			b.WriteString(strconv.Quote(addFlags.project))
+			b.WriteString("\n")
+			if _, err := io.WriteString(os.Stdout, b.String()); err != nil {
+				fatalErr(err)
+			}
 		},
 	}
 	cmd.Flags().StringVarP(&addFlags.project, "project", "p", "global", "project name")

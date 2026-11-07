@@ -2,9 +2,13 @@ package cmd
 
 import (
 	"context"
-	"fmt"
+	"io"
 	"os"
+	"strconv"
+	"strings"
 	"time"
+
+	"github.com/NemoNobody/memento/internal/model"
 
 	"github.com/spf13/cobra"
 )
@@ -19,23 +23,40 @@ func ListCmd() *cobra.Command {
 			ctx := context.Background()
 			c, err := newClient()
 			if err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				os.Exit(1)
+				fatalErr(err)
 			}
 			facts, err := c.List(ctx, project)
 			if err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				os.Exit(1)
+				fatalErr(err)
 			}
 			if len(facts) == 0 {
-				fmt.Printf("no facts for project %q\n", project)
+				if err := writeLine(os.Stdout, "no facts for project "+strconv.Quote(project)); err != nil {
+					fatalErr(err)
+				}
 				return
 			}
-			now := time.Now().UTC()
-			for _, f := range facts {
-				fmt.Printf("  %s: %s (status=%q)%s\n", f.Key, f.Value, f.Status, staleMark(&f, now))
+			if err := printFacts(os.Stdout, facts, time.Now().UTC()); err != nil {
+				fatalErr(err)
 			}
 		},
 	}
 	return cmd
+}
+
+// printFacts renders one-line fact listings to w; shared by list and search.
+func printFacts(w io.Writer, facts []model.Fact, now time.Time) error {
+	var b strings.Builder
+	for _, f := range facts {
+		b.WriteString("  ")
+		b.WriteString(f.Key)
+		b.WriteString(": ")
+		b.WriteString(f.Value)
+		b.WriteString(" (status=")
+		b.WriteString(strconv.Quote(f.Status))
+		b.WriteString(")")
+		b.WriteString(staleMark(&f, now))
+		b.WriteString("\n")
+	}
+	_, err := io.WriteString(w, b.String())
+	return err
 }

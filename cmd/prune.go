@@ -2,8 +2,9 @@ package cmd
 
 import (
 	"context"
-	"fmt"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -30,8 +31,7 @@ their approval.`,
 			ctx := context.Background()
 			c, cfg, err := newClientWithConfig()
 			if err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				os.Exit(1)
+				fatalErr(err)
 			}
 			keep := pruneFlags.keep
 			if keep <= 0 {
@@ -42,26 +42,43 @@ their approval.`,
 			}
 			f, err := c.Get(ctx, key)
 			if err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				os.Exit(1)
+				fatalErr(err)
 			}
 			total := len(f.History)
 			if total <= keep {
-				fmt.Printf("key %q has %d history entries, keep=%d: nothing to prune\n", key, total, keep)
+				line := "key " + strconv.Quote(key) + " has " + strconv.Itoa(total) +
+					" history entries, keep=" + strconv.Itoa(keep) + ": nothing to prune"
+				if err := writeLine(os.Stdout, line); err != nil {
+					fatalErr(err)
+				}
 				return
 			}
 			if !pruneFlags.yes {
-				fmt.Printf("plan: key %q has %d history entries — keep the newest %d, drop %d.\n",
-					key, total, keep, total-keep)
-				fmt.Println("this removes the dropped observations for good; re-run with --yes to confirm")
+				var b strings.Builder
+				b.WriteString("plan: key ")
+				b.WriteString(strconv.Quote(key))
+				b.WriteString(" has ")
+				b.WriteString(strconv.Itoa(total))
+				b.WriteString(" history entries — keep the newest ")
+				b.WriteString(strconv.Itoa(keep))
+				b.WriteString(", drop ")
+				b.WriteString(strconv.Itoa(total - keep))
+				b.WriteString(".")
+				b.WriteString("\nthis removes the dropped observations for good; re-run with --yes to confirm")
+				if err := writeLine(os.Stdout, b.String()); err != nil {
+					fatalErr(err)
+				}
 				return
 			}
 			removed, err := c.Prune(ctx, key, keep)
 			if err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				os.Exit(1)
+				fatalErr(err)
 			}
-			fmt.Printf("pruned key %q: dropped %d history entries, kept the newest %d\n", key, removed, keep)
+			line := "pruned key " + strconv.Quote(key) + ": dropped " + strconv.Itoa(removed) +
+				" history entries, kept the newest " + strconv.Itoa(keep)
+			if err := writeLine(os.Stdout, line); err != nil {
+				fatalErr(err)
+			}
 		},
 	}
 	cmd.Flags().IntVar(&pruneFlags.keep, "keep", -1,

@@ -2,8 +2,8 @@ package cmd
 
 import (
 	"context"
-	"fmt"
 	"os"
+	"strconv"
 
 	"github.com/spf13/cobra"
 )
@@ -22,14 +22,14 @@ func ObsoleteCmd() *cobra.Command {
 			ctx := context.Background()
 			c, err := newClient()
 			if err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				os.Exit(1)
+				fatalErr(err)
 			}
 			if err := c.Obsolete(ctx, key, reason); err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				os.Exit(1)
+				fatalErr(err)
 			}
-			fmt.Printf("obsolete: key=%q\n", key)
+			if err := writeLine(os.Stdout, "obsolete: key="+strconv.Quote(key)); err != nil {
+				fatalErr(err)
+			}
 		},
 	}
 	return cmd

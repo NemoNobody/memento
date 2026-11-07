@@ -2,12 +2,13 @@ package cmd
 
 import (
 	"context"
-	"fmt"
+	"io"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/NemoNobody/memento/internal/client"
 	"github.com/NemoNobody/memento/internal/config"
-
 	"github.com/spf13/cobra"
 )
 
@@ -64,7 +65,13 @@ func envNote(rep statusReport) string {
 	if len(rep.EnvOverrides) == 0 {
 		return ""
 	}
-	return fmt.Sprintf(" Note: %v are set in the environment and override the file.", rep.EnvOverrides)
+	return " Note: " + listNote(rep.EnvOverrides) + " are set in the environment and override the file."
+}
+
+// listNote renders a list of names the way fmt's %v does, without the
+// reflection cost.
+func listNote(names []string) string {
+	return "[" + strings.Join(names, " ") + "]"
 }
 
 // collectStatus gathers connectivity and configuration diagnostics. It never
@@ -93,13 +100,18 @@ func collectStatus(ctx context.Context, confPath string) statusReport {
 	info, err := c.Info(ctx)
 	if err != nil {
 		rep.Error = err.Error()
-		rep.Hint = fmt.Sprintf(
-			"OpenSearch is not reachable at %s. Check that the server is running and that "+
-				"opensearch_url / opensearch_user / opensearch_password are correct (config file: %s).%s "+
-				"If OpenSearch is not set up yet, see docs/setup.md — a single node is enough to start, "+
-				"and nothing in memento assumes one or the other. "+
-				"Report this to the user; do not retry in a loop.",
-			cfg.OpenSearchURL, configPathOrNone(rep.ConfigFile), envNote(rep))
+		var b strings.Builder
+		b.WriteString("OpenSearch is not reachable at ")
+		b.WriteString(cfg.OpenSearchURL)
+		b.WriteString(". Check that the server is running and that opensearch_url / " +
+			"opensearch_user / opensearch_password are correct (config file: ")
+		b.WriteString(configPathOrNone(rep.ConfigFile))
+		b.WriteString(").")
+		b.WriteString(envNote(rep))
+		b.WriteString(" If OpenSearch is not set up yet, see docs/setup.md — a single node is " +
+			"enough to start, and nothing in memento assumes one or the other. " +
+			"Report this to the user; do not retry in a loop.")
+		rep.Hint = b.String()
 		return rep
 	}
 
@@ -150,7 +162,9 @@ func StatusCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
 			rep := collectStatus(context.Background(), statusFlags.conf)
-			printStatus(rep)
+			if err := printStatus(os.Stdout, rep); err != nil {
+				fatalErr(err)
+			}
 			if !rep.OK {
 				os.Exit(1)
 			}
@@ -161,47 +175,93 @@ func StatusCmd() *cobra.Command {
 	return cmd
 }
 
-// printStatus renders a report for humans on stdout.
-func printStatus(rep statusReport) {
-	fmt.Printf("config file: %s\n", configPathOrNone(rep.ConfigFile))
+// printStatus renders a report for humans on w.
+func printStatus(w io.Writer, rep statusReport) error {
+	var b strings.Builder
+	b.WriteString("config file: ")
+	b.WriteString(configPathOrNone(rep.ConfigFile))
+	b.WriteString("\n")
 	if len(rep.EnvOverrides) > 0 {
-		fmt.Printf("env overrides: %v\n", rep.EnvOverrides)
+		b.WriteString("env overrides: ")
+		b.WriteString(listNote(rep.EnvOverrides))
+		b.WriteString("\n")
 	}
 	if rep.URL == "" {
-		fmt.Printf("status: NOT AVAILABLE\n  %s\n  hint: %s\n", rep.Error, rep.Hint)
-		return
+		b.WriteString("status: NOT AVAILABLE\n  ")
+		b.WriteString(rep.Error)
+		b.WriteString("\n  hint: ")
+		b.WriteString(rep.Hint)
+		b.WriteString("\n")
+		_, err := io.WriteString(w, b.String())
+		return err
 	}
-	fmt.Printf("url: %s\n", rep.URL)
-	fmt.Printf("index: %s\n", rep.Index)
-	fmt.Printf("history_limit: %d\n", rep.HistoryLimit)
+	b.WriteString("url: ")
+	b.WriteString(rep.URL)
+	b.WriteString("\nindex: ")
+	b.WriteString(rep.Index)
+	b.WriteString("\nhistory_limit: ")
+	b.WriteString(strconv.Itoa(rep.HistoryLimit))
+	b.WriteString("\n")
 	if rep.OK {
-		fmt.Printf("cluster: %s (OpenSearch %s)\n", rep.ClusterName, rep.Version)
-		printStorage(rep)
-		fmt.Println("status: OK")
-		return
+		b.WriteString("cluster: ")
+		b.WriteString(rep.ClusterName)
+		b.WriteString(" (OpenSearch ")
+		b.WriteString(rep.Version)
+		b.WriteString(")\n")
+		if _, err := io.WriteString(w, b.String()); err != nil {
+			return err
+		}
+		if err := printStorage(w, rep); err != nil {
+			return err
+		}
+		return writeLine(w, "status: OK")
 	}
-	fmt.Printf("status: NOT AVAILABLE\n  error: %s\n  hint: %s\n", rep.Error, rep.Hint)
+	b.WriteString("status: NOT AVAILABLE\n  error: ")
+	b.WriteString(rep.Error)
+	b.WriteString("\n  hint: ")
+	b.WriteString(rep.Hint)
+	b.WriteString("\n")
+	_, err := io.WriteString(w, b.String())
+	return err
 }
 
 // printStorage renders the storage state. Facts only — no verdicts about whether
 // a given cluster shape is expected.
-func printStorage(rep statusReport) {
+func printStorage(w io.Writer, rep statusReport) error {
 	st := rep.Storage
 	if st == nil {
-		return
+		return nil
 	}
-	fmt.Printf("storage: cluster=%s index=%s unassigned_shards=%d data_nodes=%d\n",
-		st.ClusterHealth, st.IndexHealth, st.Unassigned, st.DataNodes)
+	var b strings.Builder
+	b.WriteString("storage: cluster=")
+	b.WriteString(st.ClusterHealth)
+	b.WriteString(" index=")
+	b.WriteString(st.IndexHealth)
+	b.WriteString(" unassigned_shards=")
+	b.WriteString(strconv.Itoa(st.Unassigned))
+	b.WriteString(" data_nodes=")
+	b.WriteString(strconv.Itoa(st.DataNodes))
+	b.WriteString("\n")
 	if rep.StorageNote != "" {
-		fmt.Printf("  %s\n", rep.StorageNote)
+		b.WriteString("  ")
+		b.WriteString(rep.StorageNote)
+		b.WriteString("\n")
 	}
 	if st.WorstNode != "" {
-		fmt.Printf("disk: busiest data node %s at %.0f%% used\n", st.WorstNode, st.WorstNodeUsedPercent)
+		b.WriteString("disk: busiest data node ")
+		b.WriteString(st.WorstNode)
+		b.WriteString(" at ")
+		b.WriteString(strconv.FormatFloat(st.WorstNodeUsedPercent, 'f', 0, 64))
+		b.WriteString("% used\n")
 	}
 	if st.ReadOnlyIndex {
-		fmt.Println("warning: the index has a read-only block — writes are rejected until it is cleared")
+		b.WriteString("warning: the index has a read-only block — writes are rejected until it is cleared\n")
 	}
 	if st.Unavailable != "" {
-		fmt.Printf("storage details unavailable: %s\n", st.Unavailable)
+		b.WriteString("storage details unavailable: ")
+		b.WriteString(st.Unavailable)
+		b.WriteString("\n")
 	}
+	_, err := io.WriteString(w, b.String())
+	return err
 }

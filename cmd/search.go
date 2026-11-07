@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"time"
 
@@ -25,21 +24,20 @@ func SearchCmd() *cobra.Command {
 			ctx := context.Background()
 			c, err := newClient()
 			if err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				os.Exit(1)
+				fatalErr(err)
 			}
 			facts, err := c.Search(ctx, query, searchFlags.project, searchFlags.category, searchFlags.status)
 			if err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				os.Exit(1)
+				fatalErr(err)
 			}
 			if len(facts) == 0 {
-				fmt.Println("no matches")
+				if err := writeLine(os.Stdout, "no matches"); err != nil {
+					fatalErr(err)
+				}
 				return
 			}
-			now := time.Now().UTC()
-			for _, f := range facts {
-				fmt.Printf("  %s: %s (status=%q)%s\n", f.Key, f.Value, f.Status, staleMark(&f, now))
+			if err := printFacts(os.Stdout, facts, time.Now().UTC()); err != nil {
+				fatalErr(err)
 			}
 		},
 	}

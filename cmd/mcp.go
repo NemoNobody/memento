@@ -39,7 +39,7 @@ Config resolution: --conf flag, then MEMENTO_CONF, then the default lookup chain
 		Args: cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
 			if err := runMCPServer(mcpFlags.conf); err != nil {
-				fmt.Fprintln(os.Stderr, "memento mcp:", err)
+				_, _ = io.WriteString(os.Stderr, "memento mcp: "+err.Error()+"\n")
 				os.Exit(1)
 			}
 		},
