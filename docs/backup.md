@@ -67,15 +67,22 @@ curl -k -u "admin:$OPENSEARCH_PASSWORD" -X DELETE \
 ## 3. Restore — and verify it
 
 A backup you never restored is not a backup. Restore to new index names so the
-running store is untouched:
+running store is untouched. On a single node the cluster is `yellow` (the
+replica of the restored index can never allocate) and the plain restore
+answers 503 while it waits for allocation — set the replica count in the
+restore itself:
 
 ```bash
 curl -k -u "admin:$OPENSEARCH_PASSWORD" -X POST \
   "https://127.0.0.1:9200/_snapshot/memento-fs/backup-YYYYMMDD/_restore" \
   -H 'Content-Type: application/json' \
   -d '{"indices":"memento","include_global_state":false,
-       "rename_pattern":"memento","rename_replacement":"memento-restore-test"}'
+       "rename_pattern":"memento","rename_replacement":"memento-restore-test",
+       "index_settings":{"index.number_of_replicas":0}}'
 ```
+
+(OpenSearch `_restore` has no `wait_for_status` parameter — Elasticsearch
+recipes using it fail with 400 here.)
 
 Verify, then clean up:
 
