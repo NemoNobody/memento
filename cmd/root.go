@@ -28,6 +28,9 @@ func NewRootCmd() *cobra.Command {
 		PruneCmd(),
 		ListCmd(),
 		StatusCmd(),
+		FetchCmd(),
+		DocCmd(),
+		DocsCmd(),
 		McpCmd(),
 	)
 	return root
