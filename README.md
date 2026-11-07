@@ -60,14 +60,21 @@ and fill in your OpenSearch connection.
   "insecure_skip_verify": true,
   "index_name": "memento",
   "history_limit": 20,
-  "secret_guard": "reject"
+  "secret_guard": "reject",
+  "docs_index_name": "memento-docs",
+  "docs_ttl_days": 90
 }
 ```
 
 The index is created automatically on first use. Env vars override the file:
 `OPENSEARCH_URL`, `OPENSEARCH_USER`, `OPENSEARCH_PASSWORD`,
 `OPENSEARCH_INSECURE_SKIP_VERIFY`, `MEMENTO_INDEX`, `MEMENTO_HISTORY_LIMIT`,
-`MEMENTO_SECRET_GUARD`; `MEMENTO_CONF` points at an explicit config file. Check the connection:
+`MEMENTO_SECRET_GUARD`; `MEMENTO_CONF` points at an explicit config file. Fetch
+options (`memento fetch`): `MEMENTO_DOCS_INDEX`, `MEMENTO_DOCS_TTL_DAYS`,
+`MEMENTO_FETCH_TIMEOUT`, `MEMENTO_FETCH_MAX_BYTES`, `MEMENTO_FETCH_HOSTS`,
+`MEMENTO_FETCH_USER_AGENT`, `MEMENTO_FETCH_PROXY_URL`,
+`MEMENTO_FETCH_PROXY_FALLBACK`, `MEMENTO_FETCH_RESPECT_ROBOTS`,
+`MEMENTO_LOCAL_REPO_ROOTS`, `MEMENTO_REPO_SCAN_DEPTH`. Check the connection:
 
 ```
 memento status
@@ -79,6 +86,14 @@ Store and read back a fact:
 memento add demo:api:port "API port is 8080" endpoint -p demo -s tool:read_file
 memento get demo:api:port
 memento search "api port"
+```
+
+Fetch a web page into the docs index and read it back section by section:
+
+```
+memento fetch https://example.com/docs
+memento doc <hash-from-output> 0
+memento docs "example"
 ```
 
 ## Commands
@@ -93,6 +108,9 @@ memento search "api port"
 | `memento prune <key> [--keep N] [--yes]` | Drop old history entries, keeping the newest N (destructive: without `--yes` only the plan is printed) |
 | `memento obsolete <key> [reason]` | Mark a fact obsolete because its subject is gone (reason appended to notes) |
 | `memento status` | Check connectivity and show the effective configuration |
+| `memento fetch <url> [--refresh] [-p <p>] [--allow-secret]` | Fetch a page into the docs index and print its outline: cache-aware, section text is read on demand; github URLs that match a local clone print the file path |
+| `memento doc <hash> [n] [--full]` | Read a stored document: the outline (default), section `n`, or every section with `--full` |
+| `memento docs <query> [--limit N] [-p <p>]` | BM25 search over stored documents (the extracted sections, never the raw page) |
 | `memento mcp` | Run as an MCP server over stdio |
 
 Key convention: the key names a **stable subject**, not its current value —
@@ -104,7 +122,8 @@ notes only.
 
 `memento mcp` speaks MCP over stdio, so agents (VS Code, others) call
 `memento_status`, `memento_search`, `memento_get`, `memento_add`, `memento_list`,
-`memento_keys`, `memento_prune` and `memento_obsolete` directly. Reads omit
+`memento_keys`, `memento_prune`, `memento_obsolete`, `memento_fetch_doc`,
+`memento_get_doc` and `memento_search_docs` directly. Reads omit
 history unless
 `include_history=true` is passed, and carry `age_days`/`stale`. Registration and
 troubleshooting: [docs/mcp.md](docs/mcp.md).
