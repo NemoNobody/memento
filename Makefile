@@ -5,7 +5,10 @@ VERSION ?= dev
 LDFLAGS := -s -w -X github.com/NemoNobody/memento/internal/version.Version=$(VERSION)
 BIN     ?= memento
 
-.PHONY: build test lint fmt vet ci install clean release
+CONTAINER ?= $(shell if command -v docker >/dev/null 2>&1; then echo "docker compose"; elif command -v podman-compose >/dev/null 2>&1; then echo "podman-compose"; else echo "podman compose"; fi)
+OSFILE := docker/opensearch.yml
+
+.PHONY: build test lint fmt vet ci install clean release dev-opensearch dev-opensearch-down dev-opensearch-logs
 
 build:
 	go build -trimpath -ldflags "$(LDFLAGS)" -o $(BIN) .
@@ -33,6 +36,17 @@ fmt-check:
 install:
 	mkdir -p $(HOME)/.local/bin
 	go build -trimpath -ldflags "$(LDFLAGS)" -o $(HOME)/.local/bin/$(BIN) .
+
+# Dev/single-machine OpenSearch (roadmap 11): single node, localhost-only,
+# security plugin off (the dev rule), named data volume, snapshots on the host.
+dev-opensearch:
+	$(CONTAINER) -f $(OSFILE) up -d
+
+dev-opensearch-down:
+	$(CONTAINER) -f $(OSFILE) down
+
+dev-opensearch-logs:
+	$(CONTAINER) -f $(OSFILE) logs --tail=100
 
 clean:
 	rm -f $(BIN)

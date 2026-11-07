@@ -45,8 +45,10 @@ Or install directly (once the module is public and tagged):
 go install github.com/NemoNobody/memento@latest
 ```
 
-You also need a reachable OpenSearch (a single local node is enough) — install
-it per the [official documentation](https://docs.opensearch.org/latest/install-and-configure/install-opensearch/index/);
+You also need a reachable OpenSearch (a single local node is enough). Quickest:
+`make dev-opensearch` runs one in a container (localhost-only, named volume —
+[docs/setup.md](docs/setup.md) §2). System install per the
+[official documentation](https://docs.opensearch.org/latest/install-and-configure/install-opensearch/index/);
 see [docs/setup.md](docs/setup.md) for what `memento` expects.
 
 Configure: copy `memento.conf.example` to `memento.conf` (or `~/.memento.conf`)

@@ -37,7 +37,41 @@ curl -k -u admin:<your-password> https://127.0.0.1:9200
 If you get the cluster info JSON back, the cluster is up. Remember the admin
 password — you will put it in the `memento` config below.
 
-## 2. Configure memento
+## 2. OpenSearch in a container (dev / single-machine recipe)
+
+`make dev-opensearch` starts a single-node OpenSearch in a container
+(docker, podman-compose, podman — auto-detected). This is the fastest
+onboarding path and the dev cycle recipe:
+
+```
+make dev-opensearch          # up; data in the named volume memento-os-data
+make dev-opensearch-logs     # tail the node logs
+make dev-opensearch-down     # stop; the named volume keeps the data
+```
+
+The node binds **127.0.0.1:9200 only** and runs with the security plugin off —
+this is the dev rule: plaintext credentials are acceptable only while the node
+cannot be reached off this machine. Snapshots land in `docker/os-snapshots/`
+on the host (`path.repo` is configured). If this machine already runs
+OpenSearch on 9200, start the dev node beside it: `MEMENTO_OS_PORT=9299 make dev-opensearch`.
+
+For a dev node, `memento.conf` uses dummy credentials with plaintext allowed
+(the file is `chmod 600`, the node is localhost-only):
+
+```json
+{
+  "opensearch_url": "http://127.0.0.1:9200",
+  "opensearch_user": "dev",
+  "opensearch_password": "dev",
+  "allow_plaintext": true
+}
+```
+
+Containers love to lose data: before `make dev-opensearch-down` take a
+snapshot (repository `memento-fs` → `/snapshots` → `docker/os-snapshots/`) —
+see [backup.md](backup.md) §5.
+
+## 3. Configure memento
 
 Config lookup order:
 
@@ -85,7 +119,7 @@ lists the active ones by name, never by value):
 `MEMENTO_FETCH_RESPECT_ROBOTS`, `MEMENTO_LOCAL_REPO_ROOTS`,
 `MEMENTO_REPO_SCAN_DEPTH`.
 
-## 3. Verify
+## 4. Verify
 
 ```
 memento status
@@ -114,7 +148,7 @@ If OpenSearch is unreachable, `status` prints `NOT AVAILABLE` with the reason an
 a hint, and exits non-zero. If any environment variable is overriding the file,
 it is listed under `env overrides` — check that first when a setting looks wrong.
 
-## 4. First fact
+## 5. First fact
 
 ```
 memento add global:demo:hello "hello world" behavior
@@ -124,7 +158,7 @@ memento list global
 memento obsolete global:demo:hello "demo removed"
 ```
 
-## 5. curl recipes (raw OpenSearch)
+## 6. curl recipes (raw OpenSearch)
 
 `memento` never prints the password, so raw curl takes it from one of the
 sources:

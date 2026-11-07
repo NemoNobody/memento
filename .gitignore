@@ -1,3 +1,6 @@
+# Snapshot location of the dev-opensearch compose (docs/dev-opensearch.md)
+docker/os-snapshots/
+
 # Binary
 memento
 
