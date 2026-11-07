@@ -74,7 +74,7 @@ func childEnv(overrides []string) []string {
 
 var wantTools = []string{
 	"memento_status", "memento_search", "memento_get",
-	"memento_add", "memento_list", "memento_prune", "memento_obsolete",
+	"memento_add", "memento_list", "memento_keys", "memento_prune", "memento_obsolete",
 }
 
 func TestMCPServerExposesAllTools(t *testing.T) {
@@ -366,5 +366,24 @@ func TestNewFactViewCarriesTimeAndHistory(t *testing.T) {
 	legacyConfig := newFactView(model.Fact{Key: "k", Value: "v", Category: "config"}, false)
 	if !legacyConfig.Stale {
 		t.Error("unknown observation time must be stale for TTL'd categories")
+	}
+}
+
+// TestMCPKeysEmptyQuery pins the memento_keys guard: an empty key query is a
+// context flood, rejected before the store is touched. The store is
+// unreachable on purpose: the rejection must not depend on it.
+func TestMCPKeysEmptyQuery(t *testing.T) {
+	session := connectTestServer(t)
+	ctx := context.Background()
+
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "memento_keys",
+		Arguments: map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if !res.IsError || !strings.Contains(toolText(res), "prefix") {
+		t.Errorf("empty keys query must be rejected with a prefix hint; got: %s", toolText(res))
 	}
 }

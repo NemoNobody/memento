@@ -22,6 +22,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(
 		SearchCmd(),
 		GetCmd(),
+		KeysCmd(),
 		AddCmd(),
 		ObsoleteCmd(),
 		PruneCmd(),

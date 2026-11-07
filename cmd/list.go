@@ -25,7 +25,7 @@ func ListCmd() *cobra.Command {
 			if err != nil {
 				fatalErr(err)
 			}
-			facts, err := c.List(ctx, project)
+			facts, err := c.List(ctx, project, listFlags.prefix)
 			if err != nil {
 				fatalErr(err)
 			}
@@ -40,7 +40,13 @@ func ListCmd() *cobra.Command {
 			}
 		},
 	}
+	cmd.Flags().StringVar(&listFlags.prefix, "prefix", "",
+		"keep only keys starting with this prefix (trailing * allowed), e.g. \"<project>:state:\"")
 	return cmd
+}
+
+var listFlags struct {
+	prefix string
 }
 
 // printFacts renders one-line fact listings to w; shared by list and search.

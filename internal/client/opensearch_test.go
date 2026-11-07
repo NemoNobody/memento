@@ -90,11 +90,85 @@ func TestBuildSearchBody_SingleFilter(t *testing.T) {
 }
 
 func TestBuildProjectBody(t *testing.T) {
-	got := buildProjectBody("proj1")
+	got := buildProjectBody("proj1", "")
 	q := got["query"].(map[string]interface{})
-	term := q["term"].(map[string]interface{})
+	b := q["bool"].(map[string]interface{})
+	filters := b["filter"].([]map[string]interface{})
+	if len(filters) != 1 {
+		t.Fatalf("filters = %d, want 1 (no prefix)", len(filters))
+	}
+	term := filters[0]["term"].(map[string]interface{})
 	if term["project"].(string) != "proj1" {
 		t.Errorf("project = %v, want proj1", term["project"])
+	}
+
+	got = buildProjectBody("proj1", "proj1:state:")
+	q = got["query"].(map[string]interface{})
+	b = q["bool"].(map[string]interface{})
+	filters = b["filter"].([]map[string]interface{})
+	if len(filters) != 2 {
+		t.Fatalf("filters = %d, want 2 (project + prefix)", len(filters))
+	}
+	pfx := filters[1]["prefix"].(map[string]interface{})
+	if pfx["key"].(string) != "proj1:state:" {
+		t.Errorf("prefix key = %v, want proj1:state:", pfx["key"])
+	}
+}
+
+func TestNormalizePrefix(t *testing.T) {
+	tests := []struct {
+		in      string
+		want    string
+		wantErr bool
+	}{
+		{"", "", false},
+		{"state:", "state:", false},
+		{"state:*", "state:", false},
+		{" proj:foo:loc:* ", "proj:foo:loc:", false},
+		{"proj:*:loc", "", true},
+		{"*abc", "", true},
+	}
+	for _, tt := range tests {
+		got, err := NormalizePrefix(tt.in)
+		if tt.wantErr {
+			if err == nil {
+				t.Errorf("normalizePrefix(%q) = %q, want error", tt.in, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("normalizePrefix(%q): unexpected error %v", tt.in, err)
+			continue
+		}
+		if got != tt.want {
+			t.Errorf("normalizePrefix(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestBuildKeysBody(t *testing.T) {
+	got := buildKeysBody("proj:", "state", "memento", "verified")
+	q := got["query"].(map[string]interface{})
+	b := q["bool"].(map[string]interface{})
+	filters := b["filter"].([]map[string]interface{})
+	if len(filters) != 4 {
+		t.Fatalf("filters = %d, want 4 (prefix, wildcard, project, status)", len(filters))
+	}
+	if pfx := filters[0]["prefix"].(map[string]interface{}); pfx["key"] != "proj:" {
+		t.Errorf("prefix = %v, want proj:", pfx["key"])
+	}
+	if wc := filters[1]["wildcard"].(map[string]interface{}); wc["key"] != "*state*" {
+		t.Errorf("wildcard = %v, want *state*", wc["key"])
+	}
+	if term := filters[2]["term"].(map[string]interface{}); term["project"] != "memento" {
+		t.Errorf("project filter = %v, want memento", term["project"])
+	}
+	if term := filters[3]["term"].(map[string]interface{}); term["status"] != "verified" {
+		t.Errorf("status filter = %v, want verified", term["status"])
+	}
+	sort := got["sort"].([]map[string]interface{})
+	if order := sort[0]["key"].(map[string]interface{}); order["order"] != "asc" {
+		t.Errorf("sort = %v, want key asc", sort[0])
 	}
 }
 

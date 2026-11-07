@@ -117,8 +117,20 @@ func runMCPServer(confPath string) error {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "memento_list",
 		Description: "List the facts stored for a project. Defaults to trusted " +
-			"('verified') facts only. History is omitted unless include_history=true.",
+			"('verified') facts only. prefix keeps only keys starting with it " +
+			"(trailing * allowed; keys conventionally start with the project " +
+			"name, e.g. prefix '<project>:state:'). History is omitted unless " +
+			"include_history=true.",
 	}, s.list)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "memento_keys",
+		Description: "Find facts by key across all projects: prefix (key start, " +
+			"e.g. 'proj:foo:loc:') and/or match (key substring; * and ? wildcards). " +
+			"At least one is required; results are sorted by key. The key-level " +
+			"navigation tool — use it to scope before memento_list/get; project is " +
+			"an optional extra filter. Defaults to trusted ('verified') facts only.",
+	}, s.keys)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "memento_prune",
@@ -384,6 +396,7 @@ func (s *mcpServer) add(ctx context.Context, req *mcp.CallToolRequest, in addInp
 
 type listInput struct {
 	Project        string `json:"project" jsonschema:"project name to list facts for"`
+	Prefix         string `json:"prefix,omitempty" jsonschema:"keep only keys starting with this prefix (trailing * allowed), e.g. '<project>:state:'"`
 	Status         string `json:"status,omitempty" jsonschema:"limit results to this status: verified (default), obsolete, or any"`
 	IncludeHistory bool   `json:"include_history,omitempty" jsonschema:"include the full history chain (default: current value only)"`
 }
@@ -393,7 +406,7 @@ func (s *mcpServer) list(ctx context.Context, req *mcp.CallToolRequest, in listI
 	if err != nil {
 		return nil, factsOutput{}, storeError("memento_list", err)
 	}
-	facts, err := c.List(ctx, in.Project)
+	facts, err := c.List(ctx, in.Project, in.Prefix)
 	if err != nil {
 		return nil, factsOutput{}, storeError("memento_list", err)
 	}
@@ -407,6 +420,37 @@ func (s *mcpServer) list(ctx context.Context, req *mcp.CallToolRequest, in listI
 			}
 		}
 		facts = kept
+	}
+	return nil, factsOutput{Count: len(facts), Facts: newFactViews(facts, in.IncludeHistory)}, nil
+}
+
+type keysInput struct {
+	Prefix         string `json:"prefix,omitempty" jsonschema:"key prefix, e.g. 'proj:foo:loc:'; trailing * allowed"`
+	Match          string `json:"match,omitempty" jsonschema:"key substring; * and ? work as wildcards"`
+	Project        string `json:"project,omitempty" jsonschema:"limit to this project (default: all projects)"`
+	Status         string `json:"status,omitempty" jsonschema:"limit results to this status: verified (default), obsolete, or any"`
+	IncludeHistory bool   `json:"include_history,omitempty" jsonschema:"include the full history chain (default: current value only)"`
+}
+
+// keys is the key-level navigation tool: prefix/match on the key field, with
+// project as an optional filter. The empty-query guard lives in the client so
+// CLI and MCP share one contract.
+func (s *mcpServer) keys(ctx context.Context, req *mcp.CallToolRequest, in keysInput) (*mcp.CallToolResult, factsOutput, error) {
+	// Validate the query shape before any store contact: a bad query is the
+	// caller's problem, not an availability problem.
+	if in.Prefix == "" && in.Match == "" {
+		return nil, factsOutput{}, fmt.Errorf("memento_keys: provide a key prefix and/or a match pattern")
+	}
+	if _, err := client.NormalizePrefix(in.Prefix); err != nil {
+		return nil, factsOutput{}, fmt.Errorf("memento_keys: %w", err)
+	}
+	c, err := s.newClient(ctx)
+	if err != nil {
+		return nil, factsOutput{}, storeError("memento_keys", err)
+	}
+	facts, err := c.Keys(ctx, in.Prefix, in.Match, in.Project, resolveStatus(in.Status))
+	if err != nil {
+		return nil, factsOutput{}, storeError("memento_keys", err)
 	}
 	return nil, factsOutput{Count: len(facts), Facts: newFactViews(facts, in.IncludeHistory)}, nil
 }

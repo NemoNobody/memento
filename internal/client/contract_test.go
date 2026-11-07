@@ -570,3 +570,95 @@ func TestObsoleteMissingFactIsNotFound(t *testing.T) {
 		t.Errorf("err = %v, want ErrNotFound", err)
 	}
 }
+
+// TestListPrefixScope pins the prefix contract: the clause reaches the wire,
+// and an invalid prefix fails before any request is made.
+func TestListPrefixScope(t *testing.T) {
+	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
+		if r.Method == http.MethodPost && r.Path == "/memento/_search" {
+			return http.StatusOK, `{"hits":{"hits":[]}}`
+		}
+		return http.StatusInternalServerError, `{"status":500,"error":"unexpected request: ` + r.Method + ` ` + r.Path + `"}`
+	})
+
+	if _, err := c.List(context.Background(), "memento", "memento:state:*"); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	reqs := fake.requestsFor(http.MethodPost, "/memento/_search")
+	if len(reqs) != 1 {
+		t.Fatalf("expected one search request, got %d", len(reqs))
+	}
+	var body struct {
+		Query struct {
+			Bool struct {
+				Filter []map[string]interface{} `json:"filter"`
+			} `json:"bool"`
+		} `json:"query"`
+	}
+	if err := json.Unmarshal([]byte(reqs[0].Body), &body); err != nil {
+		t.Fatalf("unmarshal body: %v", err)
+	}
+	var prefix string
+	for _, f := range body.Query.Bool.Filter {
+		if p, ok := f["prefix"]; ok {
+			prefix = p.(map[string]interface{})["key"].(string)
+		}
+	}
+	if prefix != "memento:state:" {
+		t.Errorf("prefix on wire = %q, want memento:state:", prefix)
+	}
+
+	fake.mu.Lock()
+	fake.requests = nil
+	fake.mu.Unlock()
+
+	if _, err := c.List(context.Background(), "memento", "a*b"); err == nil {
+		t.Error("List with middle * must fail")
+	}
+	if len(fake.requestsFor(http.MethodPost, "/memento/_search")) != 0 {
+		t.Error("invalid prefix must not produce a request")
+	}
+}
+
+// TestKeysGuards pins the key-navigation contract: at least one of
+// prefix/match is required, and both clauses reach the wire sorted by key.
+func TestKeysGuards(t *testing.T) {
+	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
+		if r.Method == http.MethodPost && r.Path == "/memento/_search" {
+			return http.StatusOK, `{"hits":{"hits":[]}}`
+		}
+		return http.StatusInternalServerError, `{"status":500,"error":"unexpected request: ` + r.Method + ` ` + r.Path + `"}`
+	})
+
+	if _, err := c.Keys(context.Background(), "", "", "", ""); err == nil {
+		t.Error("Keys with no prefix and no match must fail (context flood guard)")
+	}
+	if len(fake.requestsFor(http.MethodPost, "/memento/_search")) != 0 {
+		t.Error("empty Keys query must not produce a request")
+	}
+
+	if _, err := c.Keys(context.Background(), "zed:", "state", "memento", "verified"); err != nil {
+		t.Fatalf("Keys: %v", err)
+	}
+	reqs := fake.requestsFor(http.MethodPost, "/memento/_search")
+	if len(reqs) != 1 {
+		t.Fatalf("expected one search request, got %d", len(reqs))
+	}
+	var body struct {
+		Query struct {
+			Bool struct {
+				Filter []map[string]interface{} `json:"filter"`
+			} `json:"bool"`
+		} `json:"query"`
+		Sort []map[string]map[string]string `json:"sort"`
+	}
+	if err := json.Unmarshal([]byte(reqs[0].Body), &body); err != nil {
+		t.Fatalf("unmarshal body: %v", err)
+	}
+	if len(body.Query.Bool.Filter) != 4 {
+		t.Errorf("filters = %d, want 4", len(body.Query.Bool.Filter))
+	}
+	if len(body.Sort) != 1 || body.Sort[0]["key"]["order"] != "asc" {
+		t.Errorf("sort = %v, want key asc", body.Sort)
+	}
+}

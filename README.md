@@ -88,7 +88,8 @@ memento search "api port"
 | `memento add <key> <value> <category> [--project <p>] [--source <s>] [--notes <n>]` | Add or correct a fact (old value goes to history) |
 | `memento get <key> [--history]` | Get a fact by key (history is off by default; `--history` prints the full chain) |
 | `memento search <query> [--project <p>] [--category <c>] [--status <s>]` | Full-text search over values and notes |
-| `memento list <project>` | List all facts for a project |
+| `memento keys [prefix] [--match <s>] [--project <p>] [--status <s>]` | Find facts by key: prefix and/or substring (`*`, `?` wildcards in `--match`), across projects |
+| `memento list <project> [--prefix <p>]` | List all facts for a project, optionally narrowed to a key prefix (trailing `*` allowed) |
 | `memento prune <key> [--keep N] [--yes]` | Drop old history entries, keeping the newest N (destructive: without `--yes` only the plan is printed) |
 | `memento obsolete <key> [reason]` | Mark a fact obsolete because its subject is gone (reason appended to notes) |
 | `memento status` | Check connectivity and show the effective configuration |
@@ -103,7 +104,8 @@ notes only.
 
 `memento mcp` speaks MCP over stdio, so agents (VS Code, others) call
 `memento_status`, `memento_search`, `memento_get`, `memento_add`, `memento_list`,
-`memento_prune` and `memento_obsolete` directly. Reads omit history unless
+`memento_keys`, `memento_prune` and `memento_obsolete` directly. Reads omit
+history unless
 `include_history=true` is passed, and carry `age_days`/`stale`. Registration and
 troubleshooting: [docs/mcp.md](docs/mcp.md).
 

@@ -293,9 +293,45 @@ func (c *Client) Search(ctx context.Context, query string, project, category, st
 	return c.search(ctx, buildSearchBody(query, project, category, status))
 }
 
-// List returns all facts for a project.
-func (c *Client) List(ctx context.Context, project string) ([]model.Fact, error) {
-	return c.searchByProject(ctx, project)
+// List returns all facts for a project whose key starts with prefix.
+// An empty prefix lists the whole project. A prefix may carry the trailing
+// '*' sugar ("state:*" == "state:"); a '*' anywhere else is rejected.
+func (c *Client) List(ctx context.Context, project, prefix string) ([]model.Fact, error) {
+	p, err := NormalizePrefix(prefix)
+	if err != nil {
+		return nil, err
+	}
+	return c.search(ctx, buildProjectBody(project, p))
+}
+
+// Keys returns facts whose key matches a prefix and/or a substring, across
+// all projects (project == "" keeps the scope global). It is the key-level
+// navigation tool: prefix answers "what is under this subtree", match
+// answers "which keys mention this token". At least one of them is required:
+// an unbounded key query is a context flood, not a search.
+//
+// match is a Lucene keyword pattern: '*' and '?' inside it are wildcards.
+func (c *Client) Keys(ctx context.Context, prefix, match, project, status string) ([]model.Fact, error) {
+	p, err := NormalizePrefix(prefix)
+	if err != nil {
+		return nil, err
+	}
+	if p == "" && match == "" {
+		return nil, fmt.Errorf("keys: provide a key prefix and/or a match pattern")
+	}
+	return c.search(ctx, buildKeysBody(p, match, project, status))
+}
+
+// NormalizePrefix validates a key prefix and strips the optional trailing
+// '*'. It is exported so CLI and MCP can reject bad prefixes before touching
+// the store.
+func NormalizePrefix(prefix string) (string, error) {
+	p := strings.TrimSpace(prefix)
+	p = strings.TrimSuffix(p, "*")
+	if strings.Contains(p, "*") {
+		return "", fmt.Errorf("key prefix %q: only a trailing * is supported", prefix)
+	}
+	return p, nil
 }
 
 // Obsolete marks a fact obsolete because its subject is gone. The value and
@@ -418,18 +454,46 @@ func buildSearchBody(query string, project, category, status string) map[string]
 	}
 }
 
-// buildProjectBody builds the search query body for a project lookup.
-func buildProjectBody(project string) map[string]interface{} {
+// buildProjectBody builds the search query body for a project lookup,
+// optionally narrowed to a key prefix.
+func buildProjectBody(project, prefix string) map[string]interface{} {
+	filters := []map[string]interface{}{
+		{"term": map[string]interface{}{"project": project}},
+	}
+	if prefix != "" {
+		filters = append(filters, map[string]interface{}{
+			"prefix": map[string]interface{}{"key": prefix},
+		})
+	}
 	return map[string]interface{}{
-		"query": map[string]interface{}{
-			"term": map[string]interface{}{"project": project},
-		},
+		"query": map[string]interface{}{"bool": map[string]interface{}{"filter": filters}},
 	}
 }
 
-// searchByProject returns all facts for a project.
-func (c *Client) searchByProject(ctx context.Context, project string) ([]model.Fact, error) {
-	return c.search(ctx, buildProjectBody(project))
+// buildKeysBody builds the key-navigation query: AND of the given filters,
+// sorted by key so the navigation output is stable.
+func buildKeysBody(prefix, match, project, status string) map[string]interface{} {
+	filters := []map[string]interface{}{}
+	if prefix != "" {
+		filters = append(filters, map[string]interface{}{
+			"prefix": map[string]interface{}{"key": prefix},
+		})
+	}
+	if match != "" {
+		filters = append(filters, map[string]interface{}{
+			"wildcard": map[string]interface{}{"key": "*" + match + "*"},
+		})
+	}
+	if project != "" {
+		filters = append(filters, map[string]interface{}{"term": map[string]interface{}{"project": project}})
+	}
+	if status != "" {
+		filters = append(filters, map[string]interface{}{"term": map[string]interface{}{"status": status}})
+	}
+	return map[string]interface{}{
+		"query": map[string]interface{}{"bool": map[string]interface{}{"filter": filters}},
+		"sort":  []map[string]interface{}{{"key": map[string]interface{}{"order": "asc"}}},
+	}
 }
 
 // search executes a search and returns the matching facts.

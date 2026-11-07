@@ -89,11 +89,13 @@ Do not put the OpenSearch password in the MCP config: it stays in `memento.conf`
 | `memento_search` | Full-text search over fact values and notes | Trusted facts only by default; `status: "any"` includes obsolete ones; history off unless `include_history: true` |
 | `memento_get` | Exact fact by key | `found: false` when absent — not an error; history off unless `include_history: true` |
 | `memento_add` | Store a verified fact | Corrects by key: a new value moves the old one to history (trimmed to `history_limit`); the same value updates notes only; `secret_guard` rejects credential-like text before any store contact |
-| `memento_list` | Facts of a project | Same trust default as search; history off unless `include_history: true` |
+| `memento_list` | Facts of a project | Same trust default as search; `prefix` keeps only keys starting with it (trailing `*` allowed); history off unless `include_history: true` |
+| `memento_keys` | Find facts by key across all projects | `prefix` (key start) and/or `match` (key substring; `*`, `?` wildcards); at least one required; sorted by key; `project` is an optional filter; key matching is case-sensitive (keys conventionally lowercase) |
 | `memento_prune` | Drop old history entries under a key, keeping the newest `keep` | **DESTRUCTIVE** — without `confirm: true` nothing is written, the call returns the plan; show it to the user and re-call only after their approval |
 | `memento_obsolete` | Mark a fact obsolete because its subject is gone | Value is kept for reference; the reason is appended to notes and passes the `secret_guard`. Use `memento_add` when the value merely changed |
 
-Note: `memento_search` does **not** match keys — use `memento_get` for an exact key.
+Note: `memento_search` does **not** match keys — use `memento_get` for an exact
+key, `memento_keys` for key navigation (prefix/substring across projects).
 
 The `secret_guard` (config, default `reject`) scans `memento_add` and
 `memento_obsolete` writes for credential-like text and refuses them before any
