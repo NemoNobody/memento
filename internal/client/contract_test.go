@@ -73,6 +73,7 @@ func newFakeClientCfg(t *testing.T, mutate func(*config.Config),
 	cfg := &config.Config{
 		OpenSearchURL:      fake.URL,
 		IndexName:          "memento",
+		OpenSearchPassword: "testpw",
 		InsecureSkipVerify: true,
 	}
 	if mutate != nil {

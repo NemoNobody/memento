@@ -3,10 +3,13 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/NemoNobody/memento/internal/keyring"
 )
 
 // Secret guard levels: how the write paths treat credential-like text.
@@ -84,7 +87,27 @@ type Config struct {
 	// LocalRepoScanDepth bounds the directory scan (1 = <root>/*/.git).
 	// Default 2 covers <root>/<org>/<repo>; deeper trees raise it in config.
 	LocalRepoScanDepth int `json:"local_repo_scan_depth"`
+
+	// AllowPlaintext makes the plaintext config-file password a valid
+	// credential source. Off by default: the password lives in the OS keyring
+	// (memento creds set) or the environment (containers, headless); a file
+	// carrying a credential is the legacy shape, opt in explicitly.
+	AllowPlaintext bool `json:"allow_plaintext"`
+
+	// PasswordSource says where OpenSearchPassword came from: env|keyring|
+	// file|none. Runtime-only and never serialized: status lines explain how
+	// credentials resolve without echoing anything secret.
+	PasswordSource string `json:"-"`
+
+	// FileHasPlaintext records that the config file carried a password that
+	// was refused (allow_plaintext off) — the status line turns that into the
+	// migration hint.
+	FileHasPlaintext bool `json:"-"`
 }
+
+// KeyringService is the service name under which OpenSearch credentials live
+// in the OS keyring; the account is the host[:port] of the effective URL.
+const KeyringService = "memento"
 
 // DefaultConfig returns the default configuration.
 func DefaultConfig() *Config {
@@ -171,6 +194,13 @@ func LoadConfigFrom(explicitPath string) (*Config, error) {
 		}
 		cfg.SecretGuard = g
 	}
+	if v := os.Getenv("MEMENTO_ALLOW_PLAINTEXT"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("MEMENTO_ALLOW_PLAINTEXT: %w", err)
+		}
+		cfg.AllowPlaintext = b
+	}
 	if v := os.Getenv("MEMENTO_DOCS_INDEX"); v != "" {
 		cfg.DocsIndexName = v
 	}
@@ -228,7 +258,41 @@ func LoadConfigFrom(explicitPath string) (*Config, error) {
 		}
 		cfg.LocalRepoScanDepth = n
 	}
+	resolvePassword(cfg)
 	return cfg, nil
+}
+
+// resolvePassword finalizes the OpenSearch credential: environment first
+// (containers, headless, explicit overrides), then the OS keyring, then the
+// plaintext file — and the file only when allow_plaintext is on. A missing
+// password is not a config-load error: commands that need the store report
+// it with the migration hint, and status stays usable.
+func resolvePassword(cfg *Config) {
+	if os.Getenv("OPENSEARCH_PASSWORD") != "" {
+		cfg.PasswordSource = "env"
+		return
+	}
+	if pw, err := keyring.Get(KeyringService, keyringAccount(cfg.OpenSearchURL)); err == nil && pw != "" {
+		cfg.OpenSearchPassword = pw
+		cfg.PasswordSource = "keyring"
+		return
+	}
+	if cfg.FileHasPlaintext && cfg.AllowPlaintext {
+		cfg.PasswordSource = "file"
+		return
+	}
+	cfg.OpenSearchPassword = ""
+	cfg.PasswordSource = "none"
+}
+
+// keyringAccount derives the keyring account (host[:port]) from the URL so
+// one keyring serves several OpenSearch deployments.
+func keyringAccount(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return rawURL
+	}
+	return u.Host
 }
 
 // fileConfig mirrors Config for JSON decoding. Fields are optional: a missing
@@ -253,6 +317,7 @@ type fileConfig struct {
 	FetchProxyFallback  *bool    `json:"fetch_proxy_fallback"`
 	LocalRepoRoots      []string `json:"local_repo_roots"`
 	LocalRepoScanDepth  *int     `json:"local_repo_scan_depth"`
+	AllowPlaintext      *bool    `json:"allow_plaintext"`
 }
 
 // splitHosts parses a comma-separated host list, dropping empty entries.
@@ -298,6 +363,7 @@ func loadFile(cfg *Config, path string) error {
 	}
 	if c.OpenSearchPassword != "" {
 		cfg.OpenSearchPassword = c.OpenSearchPassword
+		cfg.FileHasPlaintext = true
 	}
 	if c.InsecureSkipVerify != nil {
 		cfg.InsecureSkipVerify = *c.InsecureSkipVerify
@@ -347,6 +413,9 @@ func loadFile(cfg *Config, path string) error {
 	}
 	if c.LocalRepoScanDepth != nil {
 		cfg.LocalRepoScanDepth = *c.LocalRepoScanDepth
+	}
+	if c.AllowPlaintext != nil {
+		cfg.AllowPlaintext = *c.AllowPlaintext
 	}
 	return nil
 }

@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/NemoNobody/memento/internal/keyring"
 )
 
 // removeFile deletes path for test cleanup. A real removal failure fails the
@@ -34,9 +36,22 @@ func chdir(t *testing.T, dir string) func() {
 	}
 }
 
+// fakeKeyring replaces the OS keyring calls: config tests must resolve
+// credentials only from env/file, never from the developer's real wallet.
+func fakeKeyring(t *testing.T, pw string, err error) {
+	t.Helper()
+	oldGet, oldSet, oldDel := keyring.Get, keyring.Set, keyring.Delete
+	keyring.Get = func(service, user string) (string, error) { return pw, err }
+	keyring.Set = func(service, user, value string) error { return nil }
+	keyring.Delete = func(service, user string) error { return nil }
+	t.Cleanup(func() { keyring.Get, keyring.Set, keyring.Delete = oldGet, oldSet, oldDel })
+}
+
 // clearEnv resets the config-related env vars to empty so tests are
-// deterministic regardless of the surrounding environment.
+// deterministic regardless of the surrounding environment, and isolates the
+// keyring (the real service is never consulted from tests).
 func clearEnv(t *testing.T) {
+	fakeKeyring(t, "", keyring.ErrNotFound)
 	for _, k := range []string{
 		"MEMENTO_CONF",
 		"OPENSEARCH_URL",
@@ -45,6 +60,7 @@ func clearEnv(t *testing.T) {
 		"MEMENTO_INDEX",
 		"MEMENTO_HISTORY_LIMIT",
 		"MEMENTO_SECRET_GUARD",
+		"MEMENTO_ALLOW_PLAINTEXT",
 		"MEMENTO_DOCS_INDEX",
 		"MEMENTO_DOCS_TTL_DAYS",
 		"MEMENTO_FETCH_TIMEOUT_SECONDS",

@@ -21,6 +21,7 @@ var statusEnvVars = []string{
 	"MEMENTO_INDEX",
 	"MEMENTO_HISTORY_LIMIT",
 	"MEMENTO_SECRET_GUARD",
+	"MEMENTO_ALLOW_PLAINTEXT",
 }
 
 // statusReport is the shared diagnostics payload behind `memento status` and the
@@ -32,6 +33,7 @@ type statusReport struct {
 	Index        string               `json:"index" jsonschema:"the index name used for facts"`
 	HistoryLimit int                  `json:"history_limit" jsonschema:"per-key history retention applied on corrections; 0 keeps everything"`
 	SecretGuard  string               `json:"secret_guard,omitempty" jsonschema:"secret guard level in effect on writes: reject | ask | allow"`
+	PasswordFrom string               `json:"password_from,omitempty" jsonschema:"where the OpenSearch password resolves from: env | keyring | file | none; the value is never shown"`
 	ConfigFile   string               `json:"config_file" jsonschema:"config file actually used, empty when none was found"`
 	EnvOverrides []string             `json:"env_overrides,omitempty" jsonschema:"environment variables that override the config file"`
 	ClusterName  string               `json:"cluster_name,omitempty" jsonschema:"OpenSearch cluster name, when reachable"`
@@ -92,6 +94,21 @@ func collectStatus(ctx context.Context, confPath string) statusReport {
 	rep.Index = cfg.IndexName
 	rep.HistoryLimit = cfg.HistoryLimit
 	rep.SecretGuard = cfg.SecretGuard
+	rep.PasswordFrom = cfg.PasswordSource
+
+	if cfg.OpenSearchPassword == "" {
+		// The config is fine, the credential is missing: say where it should
+		// come from instead of sending a guaranteed 401.
+		rep.Error = "no OpenSearch password (env, keyring and file sources all empty or refused)"
+		var b strings.Builder
+		b.WriteString("Store it in the OS keyring with 'memento creds set'.")
+		if cfg.FileHasPlaintext {
+			b.WriteString(" The config file carries a plaintext password and allow_plaintext is off: migrate, then delete opensearch_password from the file (or set allow_plaintext=true).")
+		}
+		b.WriteString(" In containers/headless, export OPENSEARCH_PASSWORD (for the Zed MCP server: set it in the server's env).")
+		rep.Hint = b.String()
+		return rep
+	}
 
 	c, err := client.NewClient(cfg)
 	if err != nil {
@@ -212,6 +229,8 @@ func printStatus(w io.Writer, rep statusReport) error {
 	b.WriteString(strconv.Itoa(rep.HistoryLimit))
 	b.WriteString("\nsecret_guard: ")
 	b.WriteString(rep.SecretGuard)
+	b.WriteString("\npassword: ")
+	b.WriteString(rep.PasswordFrom)
 	b.WriteString("\n")
 	if rep.OK {
 		b.WriteString("cluster: ")

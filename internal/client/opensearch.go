@@ -32,6 +32,12 @@ type Client struct {
 
 // NewClient creates a new OpenSearch client.
 func NewClient(cfg *config.Config) (*Client, error) {
+	if cfg.OpenSearchPassword == "" {
+		// Fail fast with the migration path spelled out: a 401 from the server
+		// would not tell the operator where credentials come from now.
+		return nil, fmt.Errorf("OpenSearch password is empty: store one with 'memento creds set' " +
+			"(OS keyring), export OPENSEARCH_PASSWORD, or set allow_plaintext=true in the config")
+	}
 	api, err := opensearchapi.NewClient(opensearchapi.Config{
 		Client: opensearch.Config{
 			Addresses:          []string{cfg.OpenSearchURL},
