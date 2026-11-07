@@ -195,9 +195,18 @@ func guardFetch(doc *model.Doc, level string, allowed bool) error {
 	fields := []guardField{
 		{Name: "title", Text: doc.Title},
 		{Name: "url", Text: doc.URL},
+		{Name: "project", Text: doc.Project},
 	}
 	for i, s := range doc.Sections {
-		fields = append(fields, guardField{Name: "section " + strconv.Itoa(i), Text: s.Text})
+		// Headings are echoed by the outline path, so they are scanned too.
+		fields = append(fields,
+			guardField{Name: "section " + strconv.Itoa(i) + " heading", Text: s.Heading},
+			guardField{Name: "section " + strconv.Itoa(i), Text: s.Text})
+	}
+	for i, img := range doc.Images {
+		fields = append(fields,
+			guardField{Name: "image " + strconv.Itoa(i) + " alt", Text: img.Alt},
+			guardField{Name: "image " + strconv.Itoa(i) + " title", Text: img.Title})
 	}
 	return guardCheck(level, allowed, fields...)
 }

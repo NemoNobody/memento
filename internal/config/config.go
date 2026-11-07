@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -98,6 +99,11 @@ type Config struct {
 	// file|none. Runtime-only and never serialized: status lines explain how
 	// credentials resolve without echoing anything secret.
 	PasswordSource string `json:"-"`
+
+	// KeyringError carries a keyring provider failure (bus down, wallet
+	// closed) that is NOT "entry not found". Surfacing it keeps a keyring
+	// outage from degrading silently into "no password".
+	KeyringError string `json:"-"`
 
 	// FileHasPlaintext records that the config file carried a password that
 	// was refused (allow_plaintext off) — the status line turns that into the
@@ -276,6 +282,10 @@ func resolvePassword(cfg *Config) {
 		cfg.OpenSearchPassword = pw
 		cfg.PasswordSource = "keyring"
 		return
+	} else if err != nil && !errors.Is(err, keyring.ErrNotFound) {
+		// Provider outage, not a missing entry: record it so status surfaces
+		// the outage instead of blaming the user's config.
+		cfg.KeyringError = err.Error()
 	}
 	if cfg.FileHasPlaintext && cfg.AllowPlaintext {
 		cfg.PasswordSource = "file"

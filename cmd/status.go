@@ -13,6 +13,8 @@ import (
 )
 
 // statusEnvVars are the environment variables that override the config file.
+// Every env override config.go reads is listed (names only, never values:
+// a proxy URL can embed credentials). Kept in sync with applyEnvOverrides.
 var statusEnvVars = []string{
 	"OPENSEARCH_URL",
 	"OPENSEARCH_USER",
@@ -22,6 +24,18 @@ var statusEnvVars = []string{
 	"MEMENTO_HISTORY_LIMIT",
 	"MEMENTO_SECRET_GUARD",
 	"MEMENTO_ALLOW_PLAINTEXT",
+	"MEMENTO_CONF",
+	"MEMENTO_DOCS_INDEX",
+	"MEMENTO_DOCS_TTL_DAYS",
+	"MEMENTO_FETCH_TIMEOUT",
+	"MEMENTO_FETCH_MAX_BYTES",
+	"MEMENTO_FETCH_HOSTS",
+	"MEMENTO_FETCH_USER_AGENT",
+	"MEMENTO_FETCH_PROXY_URL",
+	"MEMENTO_FETCH_PROXY_FALLBACK",
+	"MEMENTO_FETCH_RESPECT_ROBOTS",
+	"MEMENTO_LOCAL_REPO_ROOTS",
+	"MEMENTO_REPO_SCAN_DEPTH",
 }
 
 // statusReport is the shared diagnostics payload behind `memento status` and the
@@ -34,6 +48,7 @@ type statusReport struct {
 	HistoryLimit int                  `json:"history_limit" jsonschema:"per-key history retention applied on corrections; 0 keeps everything"`
 	SecretGuard  string               `json:"secret_guard,omitempty" jsonschema:"secret guard level in effect on writes: reject | ask | allow"`
 	PasswordFrom string               `json:"password_from,omitempty" jsonschema:"where the OpenSearch password resolves from: env | keyring | file | none; the value is never shown"`
+	KeyringError string               `json:"keyring_error,omitempty" jsonschema:"keyring provider failure (not 'entry not found'): a bus/wallet outage, not a missing entry"`
 	ConfigFile   string               `json:"config_file" jsonschema:"config file actually used, empty when none was found"`
 	EnvOverrides []string             `json:"env_overrides,omitempty" jsonschema:"environment variables that override the config file"`
 	ClusterName  string               `json:"cluster_name,omitempty" jsonschema:"OpenSearch cluster name, when reachable"`
@@ -95,6 +110,7 @@ func collectStatus(ctx context.Context, confPath string) statusReport {
 	rep.HistoryLimit = cfg.HistoryLimit
 	rep.SecretGuard = cfg.SecretGuard
 	rep.PasswordFrom = cfg.PasswordSource
+	rep.KeyringError = cfg.KeyringError
 
 	if cfg.OpenSearchPassword == "" {
 		// The config is fine, the credential is missing: say where it should
@@ -231,6 +247,11 @@ func printStatus(w io.Writer, rep statusReport) error {
 	b.WriteString(rep.SecretGuard)
 	b.WriteString("\npassword: ")
 	b.WriteString(rep.PasswordFrom)
+	if rep.KeyringError != "" {
+		b.WriteString(" (keyring outage: ")
+		b.WriteString(rep.KeyringError)
+		b.WriteString(")")
+	}
 	b.WriteString("\n")
 	if rep.OK {
 		b.WriteString("cluster: ")

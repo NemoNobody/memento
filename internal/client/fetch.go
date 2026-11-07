@@ -161,6 +161,12 @@ func fetchHTTP(ctx context.Context, cfg *config.Config, normalizedURL string) (c
 			if len(via) > maxFetchRedirects {
 				return fmt.Errorf("fetch: more than %d redirects", maxFetchRedirects)
 			}
+			// The allowlist must hold for every hop: an allowed host that
+			// 302s to a loopback/link-local target must not be fetched
+			// (SSRF via redirect would silently break the privacy guarantee).
+			if err := HostAllowed(cfg, req.URL.String()); err != nil {
+				return fmt.Errorf("fetch: redirect chain: %w", err)
+			}
 			return nil
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, normalizedURL, nil)

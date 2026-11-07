@@ -33,6 +33,7 @@ package keyringnative
 import (
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	dbus "github.com/godbus/dbus/v5"
@@ -71,15 +72,15 @@ const (
 // Callers match it with errors.Is, like zalando's keyring.ErrNotFound.
 var ErrNotFound = errors.New("keyring: entry not found")
 
-// collectionName is the Label of the fallback collection, set from the
-// config key "collection" via SetCollectionName (default: the KDE wallet
-// name). Not safe for concurrent mutation; the CLI is single-shot.
+// collectionName is the Label of the fallback collection (default: the KDE
+// wallet name). Read-only at runtime (init-time writes only) so concurrent
+// MCP tool calls can read it safely.
 var collectionName = defaultCollectionName
 
-// SetCollectionName points the fallback collection at an explicit label
-// (config key "collection"). Empty keeps the default. On KDE this must
-// match kwalletrc "Default Wallet"; the login wallet itself is preferred
-// whenever its alias is alive, regardless of this value.
+// SetCollectionName points the fallback collection at an explicit label.
+// Empty keeps the default. Not currently wired to the config; call at
+// init time only. On KDE this must match kwalletrc "Default Wallet"; the
+// login wallet itself is preferred whenever its alias is alive.
 func SetCollectionName(name string) {
 	if name != "" {
 		collectionName = name
@@ -111,7 +112,20 @@ type client struct {
 }
 
 func newClient() (*client, error) {
-	conn, err := dbus.SessionBus()
+	// A connection this client owns and may close. SessionBus returns
+	// godbus's cached shared connection, and closing it from close() broke
+	// concurrent callers (two MCP tools racing one conn). Private variants
+	// Dial without Auth/Hello in godbus v5.2.4, and the bus silently drops
+	// calls from unauthenticated connections (hang). Connect does the full
+	// Dial+Auth+Hello. No autolaunch: spawning dbus-launch where no session
+	// bus is meant to run (containers, ssh) hangs — fail fast into the env
+	// fallback instead.
+	address := os.Getenv("DBUS_SESSION_BUS_ADDRESS")
+	if address == "" || address == "autolaunch:" {
+		return nil, fmt.Errorf("no session D-Bus address (DBUS_SESSION_BUS_ADDRESS unset): " +
+			"in containers/ssh export OPENSEARCH_PASSWORD instead of using the keyring")
+	}
+	conn, err := dbus.Connect(address)
 	if err != nil {
 		return nil, fmt.Errorf("connect to the session bus (is a keyring service running, e.g. KDE Wallet/GNOME Keyring?): %w", err)
 	}
