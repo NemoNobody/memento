@@ -6,6 +6,7 @@
   "index_name": "memento",
   "history_limit": 20,
   "secret_guard": "reject",
+  "allow_plaintext": false,
   "docs_index_name": "memento-docs",
   "docs_ttl_days": 90,
   "fetch_timeout_seconds": 30,

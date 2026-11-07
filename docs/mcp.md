@@ -79,13 +79,15 @@ Two details that matter:
   chain is `MEMENTO_CONF` → `./memento.conf` → next to the binary → `~/.memento.conf`;
   `--conf` removes the guesswork.
 
-Do not put the OpenSearch password in the MCP config: it stays in `memento.conf`.
+Do not put the OpenSearch password in the MCP config: it resolves from the OS
+keyring (`memento creds set`), `OPENSEARCH_PASSWORD`, or `memento.conf` (the
+latter only when `allow_plaintext` is on).
 
 ## Tools
 
 | Tool | Purpose | Notes |
 |---|---|---|
-| `memento_status` | Is the store reachable? What is the effective config and storage state? | **Never fails** — `ok=false` plus a hint instead, so the agent can explain the problem |
+| `memento_status` | Is the store reachable? What is the effective config and storage state? | **Never fails** — `ok=false` plus a hint instead, so the agent can explain the problem; includes `password_from` (`env`/`keyring`/`file`/`none`, never the value) |
 | `memento_search` | Full-text search over fact values and notes | Trusted facts only by default; `status: "any"` includes obsolete ones; history off unless `include_history: true` |
 | `memento_get` | Exact fact by key | `found: false` when absent — not an error; history off unless `include_history: true` |
 | `memento_add` | Store a verified fact | Corrects by key: a new value moves the old one to history (trimmed to `history_limit`); the same value updates notes only; `secret_guard` rejects credential-like text before any store contact |

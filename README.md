@@ -61,6 +61,7 @@ and fill in your OpenSearch connection.
   "index_name": "memento",
   "history_limit": 20,
   "secret_guard": "reject",
+  "allow_plaintext": false,
   "docs_index_name": "memento-docs",
   "docs_ttl_days": 90
 }
@@ -69,12 +70,19 @@ and fill in your OpenSearch connection.
 The index is created automatically on first use. Env vars override the file:
 `OPENSEARCH_URL`, `OPENSEARCH_USER`, `OPENSEARCH_PASSWORD`,
 `OPENSEARCH_INSECURE_SKIP_VERIFY`, `MEMENTO_INDEX`, `MEMENTO_HISTORY_LIMIT`,
-`MEMENTO_SECRET_GUARD`; `MEMENTO_CONF` points at an explicit config file. Fetch
+`MEMENTO_SECRET_GUARD`, `MEMENTO_ALLOW_PLAINTEXT`; `MEMENTO_CONF` points at an
+explicit config file. Fetch
 options (`memento fetch`): `MEMENTO_DOCS_INDEX`, `MEMENTO_DOCS_TTL_DAYS`,
 `MEMENTO_FETCH_TIMEOUT`, `MEMENTO_FETCH_MAX_BYTES`, `MEMENTO_FETCH_HOSTS`,
 `MEMENTO_FETCH_USER_AGENT`, `MEMENTO_FETCH_PROXY_URL`,
 `MEMENTO_FETCH_PROXY_FALLBACK`, `MEMENTO_FETCH_RESPECT_ROBOTS`,
-`MEMENTO_LOCAL_REPO_ROOTS`, `MEMENTO_REPO_SCAN_DEPTH`. Check the connection:
+`MEMENTO_LOCAL_REPO_ROOTS`, `MEMENTO_REPO_SCAN_DEPTH`.
+
+The password resolves from `OPENSEARCH_PASSWORD`, then the OS keyring (service
+`memento`, account `host[:port]`), then the config file — only when
+`allow_plaintext` is on (off by default). Store it in the keyring with
+`memento creds set` (the password is never taken from argv); in containers and
+headless setups export `OPENSEARCH_PASSWORD` instead. Check the connection:
 
 ```
 memento status
@@ -108,6 +116,7 @@ memento docs "example"
 | `memento prune <key> [--keep N] [--yes]` | Drop old history entries, keeping the newest N (destructive: without `--yes` only the plan is printed) |
 | `memento obsolete <key> [reason]` | Mark a fact obsolete because its subject is gone (reason appended to notes) |
 | `memento status` | Check connectivity and show the effective configuration |
+| `memento creds set\|status\|rm [--url <u>]` | Manage the OpenSearch password in the OS keyring: `set` reads a hidden prompt (piped stdin for scripts), `status` shows only the source (`env\|keyring\|file\|none`), `rm` deletes the entry; the stored value is never printed |
 | `memento fetch <url> [--refresh] [-p <p>] [--allow-secret]` | Fetch a page into the docs index and print its outline: cache-aware, section text is read on demand; github URLs that match a local clone print the file path |
 | `memento doc <hash> [n] [--full]` | Read a stored document: the outline (default), section `n`, or every section with `--full` |
 | `memento docs <query> [--limit N] [-p <p>]` | BM25 search over stored documents (the extracted sections, never the raw page) |

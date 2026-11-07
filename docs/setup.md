@@ -53,9 +53,9 @@ Create `~/.memento.conf`:
 {
   "opensearch_url": "https://127.0.0.1:9200",
   "opensearch_user": "admin",
-  "opensearch_password": "<your-password>",
   "insecure_skip_verify": true,
-  "index_name": "memento"
+  "index_name": "memento",
+  "allow_plaintext": false
 }
 ```
 
@@ -63,15 +63,20 @@ Create `~/.memento.conf`:
 chmod 600 ~/.memento.conf
 ```
 
-- `insecure_skip_verify: true` is needed for the bundled self-signed certificate.
-  For anything shared, use a proper certificate and set it to `false`.
+- Leave `opensearch_password` out of the file: store the password in the OS
+  keyring with `memento creds set` (run it in a terminal — it prompts for the
+  password; the password is never an argument, so it never ends up in shell
+  history). Resolution order: `OPENSEARCH_PASSWORD` env → keyring → file.
+  A plaintext password in the file is only read when `allow_plaintext: true`
+  (off by default). Containers and ssh sessions have no keyring — export
+  `OPENSEARCH_PASSWORD` there.
 - The index is created automatically on first use — you do not have to create it.
 - A malformed config file fails loudly — `memento` prints which file it tried to
   read.
 
 Environment variables override the file:
 `OPENSEARCH_URL`, `OPENSEARCH_USER`, `OPENSEARCH_PASSWORD`,
-`OPENSEARCH_INSECURE_SKIP_VERIFY`, `MEMENTO_INDEX`.
+`OPENSEARCH_INSECURE_SKIP_VERIFY`, `MEMENTO_INDEX`, `MEMENTO_ALLOW_PLAINTEXT`.
 
 ## 3. Verify
 
@@ -85,9 +90,14 @@ Expected output:
 config file: /home/you/.memento.conf
 url: https://127.0.0.1:9200
 index: memento
+password: keyring
 cluster: opensearch (OpenSearch 3.8.0)
 status: OK
 ```
+
+`password:` shows where the password resolves from (`env`, `keyring`, `file`,
+`none`); the value is never printed. `memento creds status` shows the same
+plus the keyring state.
 
 If OpenSearch is unreachable, `status` prints `NOT AVAILABLE` with the reason and
 a hint, and exits non-zero. If any environment variable is overriding the file,
@@ -109,7 +119,8 @@ memento obsolete global:demo:hello "demo removed"
 |---|---|
 | `connection refused` | OpenSearch is not running (or not at the configured URL) — check your cluster and `opensearch_url` |
 | `x509: certificate signed by unknown authority` | Self-signed certificate: set `insecure_skip_verify: true` |
-| `401 Unauthorized` | Wrong user/password in the config file — or the security plugin was never initialized |
+| `401 Unauthorized` | Wrong user/password (env, keyring, or config file) — or the security plugin was never initialized |
+| `password: none` and a REFUSED hint | The file has a plaintext password while `allow_plaintext` is off: run `memento creds set`, then delete `opensearch_password` from the file |
 | Timeout after 30s | Host unreachable (firewall, wrong host/port) — requests time out after 30s |
 | `status` shows an unexpected config file | The lookup chain picked another file — pass `--conf <path>`, or set `MEMENTO_CONF` |
 | `search` misses a fact by its key | Search covers `value` and `notes`, not keys — use `memento get <key>` |
@@ -121,6 +132,10 @@ memento obsolete global:demo:hello "demo removed"
   `secret_guard` in the config: `reject` (default), `ask` (confirm a false
   positive with `--allow-secret` / `confirm_secret: true`), `allow` (scanning
   off). Detection is best effort: the rule is still the first line of defense.
+- The OpenSearch password lives in the OS keyring (`memento creds set`), not in
+  the config file: `allow_plaintext` is off by default, so a file password is
+  refused. `memento creds status` shows the source; neither command prints the
+  value.
 - Change the default `admin` password before the cluster is reachable by anyone else.
 - `insecure_skip_verify: true` disables certificate verification. It is fine for a
   local node with the demo certificate and wrong for anything shared.
