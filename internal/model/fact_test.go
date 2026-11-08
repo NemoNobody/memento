@@ -5,6 +5,24 @@ import (
 	"time"
 )
 
+// TestValidCategory pins the category whitelist: unknown categories never age
+// (silent rot), so callers reject them at the edge. Matching is
+// case-insensitive because tool input arrives in arbitrary case.
+func TestValidCategory(t *testing.T) {
+	valid := []string{"config", "endpoint", "location", "behavior", "context_map", "Config", "CONTEXT_MAP"}
+	for _, c := range valid {
+		if !ValidCategory(c) {
+			t.Errorf("ValidCategory(%q) = false, want true", c)
+		}
+	}
+	invalid := []string{"", "secret", "notes", "location ", "contextmap", "Config!"}
+	for _, c := range invalid {
+		if ValidCategory(c) {
+			t.Errorf("ValidCategory(%q) = true, want false", c)
+		}
+	}
+}
+
 func TestNewFact(t *testing.T) {
 	f := NewFact("test:key", "some value", "endpoint", "web", "user:confirmed", "checked dev only")
 

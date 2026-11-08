@@ -239,6 +239,43 @@ func TestMCPServerDocToolsValidateOffline(t *testing.T) {
 	}
 }
 
+// TestMCPServerAddValidatesShapeOffline pins that memento_add rejects a blank
+// key, a blank value, and an unknown category before touching the store: an
+// empty key produces a cryptic store error, and an unknown category never
+// ages (silent rot). The store is a discard port: any text mentioning it
+// means validation ran too late.
+func TestMCPServerAddValidatesShapeOffline(t *testing.T) {
+	session := connectTestServer(t, "OPENSEARCH_URL=https://127.0.0.1:9")
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		args map[string]any
+		want string
+	}{
+		{map[string]any{"key": "", "value": "v", "category": "config"}, "key is required"},
+		{map[string]any{"key": "  ", "value": "v", "category": "config"}, "key is required"},
+		{map[string]any{"key": "k", "value": "", "category": "config"}, "value is required"},
+		{map[string]any{"key": "k", "value": "  ", "category": "config"}, "value is required"},
+		{map[string]any{"key": "k", "value": "v", "category": "secrets"}, "category"},
+		{map[string]any{"key": "k", "value": "v", "category": ""}, "category"},
+	} {
+		res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "memento_add", Arguments: tc.args})
+		if err != nil {
+			t.Fatalf("CallTool(memento_add): %v", err)
+		}
+		if !res.IsError {
+			t.Fatalf("memento_add accepted invalid input: %+v", tc.args)
+		}
+		text := toolText(res)
+		if !strings.Contains(text, tc.want) {
+			t.Errorf("error must mention %q, got: %s", tc.want, text)
+		}
+		if strings.Contains(text, "127.0.0.1:9") {
+			t.Errorf("validation ran after the store was reached: %s", text)
+		}
+	}
+}
+
 // TestMCPGetDocMissingIsFoundFalse pins the tool's contract: a document that
 // does not exist is an empty result (found:false), not a store-failure report.
 // An agent that is taught "the store is down" by a missing doc starts

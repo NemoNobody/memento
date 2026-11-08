@@ -88,8 +88,11 @@ func covered(findings []Finding, start, end int) bool {
 // mask keeps at most the first 4 characters of the matched text. The preview
 // identifies the shape of the hit without re-exposing the secret.
 func mask(s string) string {
-	if len(s) <= 8 {
-		return strings.Repeat("*", len(s))
+	r := []rune(s)
+	if len(r) <= 8 {
+		return strings.Repeat("*", len(r))
 	}
-	return s[:4] + strings.Repeat("*", len(s)-4)
+	// rune-based: a byte cut can split a multi-byte character and put
+	// invalid UTF-8 into the guard message (the preview must stay printable).
+	return string(r[:4]) + strings.Repeat("*", len(r)-4)
 }

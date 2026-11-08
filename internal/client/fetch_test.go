@@ -27,6 +27,12 @@ func TestNormalizeURL(t *testing.T) {
 		{"HTTPS://Example.COM/p#frag", "https://example.com/p"},
 		{"http://h:8080/a?b=2&utm_medium=x", "http://h:8080/a?b=2"},
 		{"  https://a.com/path/  ", "https://a.com/path/"},
+		// Default ports are not part of the document id: the shared URL cache
+		// must not split "host:443" and "host" into two snapshots.
+		{"https://example.com:443/x", "https://example.com/x"},
+		{"http://example.com:80/x", "http://example.com/x"},
+		{"https://example.com:8443/x", "https://example.com:8443/x"},
+		{"http://example.com:443/", "http://example.com:443/"},
 	}
 	for _, tc := range cases {
 		got, err := NormalizeURL(tc.in)

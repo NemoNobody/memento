@@ -1,6 +1,7 @@
 package model
 
 import (
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -78,6 +79,18 @@ var ttlDaysByCategory = map[string]int{
 	"endpoint": 14,
 	"location": 30,
 	"behavior": 30,
+}
+
+// ValidCategory reports whether category is one of the known categories —
+// the ones the staleness policy and the tool schemas document. Unknown
+// categories silently never age, so a typo would create facts that rot in
+// the dark; callers reject them at the edge.
+func ValidCategory(category string) bool {
+	switch strings.ToLower(category) {
+	case "config", "endpoint", "location", "behavior", "context_map":
+		return true
+	}
+	return false
 }
 
 // TTLDays returns the staleness TTL in days for a category, 0 for "never".

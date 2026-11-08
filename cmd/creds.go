@@ -98,13 +98,18 @@ func credsStatusCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
 			out := cmd.OutOrStdout()
-			target, err := credsTarget()
-			if err != nil {
-				fatalErr(err)
-			}
-			cfg, cerr := config.LoadConfig()
-			if cerr != nil {
-				fatalErr(cerr)
+			// One config load per command. With --url the endpoint is
+			// overridden: the effective config's password source is about
+			// a different host, so it is not shown.
+			var cfg *config.Config
+			target := credsFlags.url
+			if target == "" {
+				c, cerr := config.LoadConfig()
+				if cerr != nil {
+					fatalErr(cerr)
+				}
+				cfg = c
+				target = c.OpenSearchURL
 			}
 			host := accountFor(target)
 			_, kerr := keyring.Get(config.KeyringService, host)
@@ -125,7 +130,11 @@ func renderCredsStatus(host string, cfg *config.Config, keyringErr error) string
 	b.WriteString("/")
 	b.WriteString(host)
 	b.WriteString("\nsource: ")
-	b.WriteString(cfg.PasswordSource)
+	if cfg == nil {
+		b.WriteString("n/a (--url overrides the configured endpoint)")
+	} else {
+		b.WriteString(cfg.PasswordSource)
+	}
 	b.WriteString("\nkeyring: ")
 	switch {
 	case keyringErr == nil:
@@ -137,17 +146,19 @@ func renderCredsStatus(host string, cfg *config.Config, keyringErr error) string
 		b.WriteString(keyringErr.Error())
 		b.WriteString("\n  (no session bus in containers/ssh: use OPENSEARCH_PASSWORD)\n")
 	}
-	b.WriteString("config file plaintext: ")
-	switch {
-	case !cfg.FileHasPlaintext:
-		b.WriteString("absent\n")
-	case cfg.AllowPlaintext:
-		b.WriteString("present, in use (allow_plaintext on)\n")
-	default:
-		b.WriteString("present, REFUSED (allow_plaintext off): migrate with 'memento creds set', then remove opensearch_password from the file\n")
-	}
-	if cfg.PasswordSource == "none" {
-		b.WriteString("hint: store with 'memento creds set' (keyring) or export OPENSEARCH_PASSWORD (containers, headless)\n")
+	if cfg != nil {
+		b.WriteString("config file plaintext: ")
+		switch {
+		case !cfg.FileHasPlaintext:
+			b.WriteString("absent\n")
+		case cfg.AllowPlaintext:
+			b.WriteString("present, in use (allow_plaintext on)\n")
+		default:
+			b.WriteString("present, REFUSED (allow_plaintext off): migrate with 'memento creds set', then remove opensearch_password from the file\n")
+		}
+		if cfg.PasswordSource == "none" {
+			b.WriteString("hint: store with 'memento creds set' (keyring) or export OPENSEARCH_PASSWORD (containers, headless)\n")
+		}
 	}
 	return b.String()
 }

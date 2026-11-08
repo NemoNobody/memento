@@ -250,8 +250,8 @@ func newFactView(f model.Fact, includeHistory bool) factView {
 		ObservedAt: rfc3339OrEmpty(f.ObservedAt),
 		AgeDays:    f.AgeDays(time.Now().UTC()),
 		Stale:      f.Stale(time.Now().UTC()),
-		CreatedAt:  f.CreatedAt.Format(time.RFC3339),
-		UpdatedAt:  f.UpdatedAt.Format(time.RFC3339),
+		CreatedAt:  rfc3339OrEmpty(f.CreatedAt),
+		UpdatedAt:  rfc3339OrEmpty(f.UpdatedAt),
 	}
 	if includeHistory {
 		history := make([]historyView, 0, len(f.History))
@@ -280,6 +280,7 @@ type factsOutput struct {
 	Count     int        `json:"count" jsonschema:"number of facts returned"`
 	Facts     []factView `json:"facts" jsonschema:"matching facts, newest first is not guaranteed"`
 	Truncated bool       `json:"truncated,omitempty" jsonschema:"true when the store held more matches than the navigation cap (1000): narrow the query (prefix/project/status); absent means complete"`
+	Skipped   int        `json:"skipped,omitempty" jsonschema:"hits the store returned whose content failed to decode (index corruption): report to the user, never silently drop"`
 }
 
 // loadConfig resolves the config for a tool call: the explicit --conf wins;
@@ -371,11 +372,16 @@ func (s *mcpServer) search(ctx context.Context, req *mcp.CallToolRequest, in sea
 	if limit > 50 {
 		limit = 50
 	}
-	facts, err := c.Search(ctx, in.Query, in.Project, in.Category, resolveStatus(in.Status), limit)
+	facts, meta, err := c.Search(ctx, in.Query, in.Project, in.Category, resolveStatus(in.Status), limit)
 	if err != nil {
 		return nil, factsOutput{}, storeError("memento_search", err)
 	}
-	return nil, factsOutput{Count: len(facts), Facts: newFactViews(facts, in.IncludeHistory)}, nil
+	return nil, factsOutput{
+		Count:     len(facts),
+		Truncated: meta.Total > len(facts),
+		Skipped:   meta.Skipped,
+		Facts:     newFactViews(facts, in.IncludeHistory),
+	}, nil
 }
 
 type getInput struct {
@@ -426,6 +432,17 @@ type addOutput struct {
 }
 
 func (s *mcpServer) add(ctx context.Context, req *mcp.CallToolRequest, in addInput) (*mcp.CallToolResult, addOutput, error) {
+	// Validate the shape before guard and store: an empty key produces a
+	// cryptic store error, and an unknown category never ages (silent rot).
+	if strings.TrimSpace(in.Key) == "" {
+		return nil, addOutput{}, errors.New("memento_add: key is required")
+	}
+	if strings.TrimSpace(in.Value) == "" {
+		return nil, addOutput{}, errors.New("memento_add: value is required")
+	}
+	if !model.ValidCategory(strings.ToLower(in.Category)) {
+		return nil, addOutput{}, fmt.Errorf("memento_add: unknown category %q (want location | config | endpoint | behavior | context_map)", in.Category)
+	}
 	if in.Project == "" {
 		in.Project = "global"
 	}
@@ -470,13 +487,14 @@ func (s *mcpServer) list(ctx context.Context, req *mcp.CallToolRequest, in listI
 	if err != nil {
 		return nil, factsOutput{}, storeError("memento_list", err)
 	}
-	facts, err := c.List(ctx, in.Project, in.Prefix)
+	facts, meta, err := c.List(ctx, in.Project, in.Prefix)
 	if err != nil {
 		return nil, factsOutput{}, storeError("memento_list", err)
 	}
-	// The truncation signal is the raw page size: the status filter below
-	// shrinks it, and truncation must survive the filtering.
-	rawLen := len(facts)
+	// The truncation signal is the cluster-side total: the status filter
+	// below shrinks the page, and truncation must survive the filtering.
+	// rawLen >= cap used to fire on an exactly-full page (a complete result).
+	rawLen := meta.Total
 	// List has no server-side status filter, so apply it here to keep the
 	// "trusted only by default" guarantee.
 	if status := resolveStatus(in.Status); status != "" {
@@ -488,7 +506,7 @@ func (s *mcpServer) list(ctx context.Context, req *mcp.CallToolRequest, in listI
 		}
 		facts = kept
 	}
-	return nil, factsOutput{Count: len(facts), Truncated: rawLen >= client.NavSizeCap, Facts: newFactViews(facts, in.IncludeHistory)}, nil
+	return nil, factsOutput{Count: len(facts), Truncated: rawLen > client.NavSizeCap, Skipped: meta.Skipped, Facts: newFactViews(facts, in.IncludeHistory)}, nil
 }
 
 type keysInput struct {
@@ -515,11 +533,11 @@ func (s *mcpServer) keys(ctx context.Context, req *mcp.CallToolRequest, in keysI
 	if err != nil {
 		return nil, factsOutput{}, storeError("memento_keys", err)
 	}
-	facts, err := c.Keys(ctx, in.Prefix, in.Match, in.Project, resolveStatus(in.Status))
+	facts, meta, err := c.Keys(ctx, in.Prefix, in.Match, in.Project, resolveStatus(in.Status))
 	if err != nil {
 		return nil, factsOutput{}, storeError("memento_keys", err)
 	}
-	return nil, factsOutput{Count: len(facts), Truncated: len(facts) >= client.NavSizeCap, Facts: newFactViews(facts, in.IncludeHistory)}, nil
+	return nil, factsOutput{Count: len(facts), Truncated: meta.Total > client.NavSizeCap, Skipped: meta.Skipped, Facts: newFactViews(facts, in.IncludeHistory)}, nil
 }
 
 type obsoleteInput struct {
@@ -792,8 +810,9 @@ type docHitView struct {
 }
 
 type docsHitsOutput struct {
-	Count int          `json:"count"`
-	Docs  []docHitView `json:"docs"`
+	Count   int          `json:"count"`
+	Docs    []docHitView `json:"docs"`
+	Skipped int          `json:"skipped,omitempty" jsonschema:"stored documents whose content failed to decode (index corruption): report to the user"`
 }
 
 func (s *mcpServer) searchDocs(ctx context.Context, req *mcp.CallToolRequest, in searchDocsInput) (*mcp.CallToolResult, docsHitsOutput, error) {
@@ -804,14 +823,14 @@ func (s *mcpServer) searchDocs(ctx context.Context, req *mcp.CallToolRequest, in
 	if limit <= 0 {
 		limit = 5
 	}
-	if limit > 20 {
-		limit = 20
+	if limit > client.DocsSearchCap {
+		limit = client.DocsSearchCap
 	}
 	c, err := s.newClient(ctx)
 	if err != nil {
 		return nil, docsHitsOutput{}, storeError("memento_search_docs", err)
 	}
-	docs, err := c.SearchDocs(ctx, in.Query, in.Project, limit)
+	docs, meta, err := c.SearchDocs(ctx, in.Query, in.Project, limit)
 	if err != nil {
 		return nil, docsHitsOutput{}, storeError("memento_search_docs", err)
 	}
@@ -824,5 +843,5 @@ func (s *mcpServer) searchDocs(ctx context.Context, req *mcp.CallToolRequest, in
 		}
 		hits = append(hits, h)
 	}
-	return nil, docsHitsOutput{Count: len(hits), Docs: hits}, nil
+	return nil, docsHitsOutput{Count: len(hits), Docs: hits, Skipped: meta.Skipped}, nil
 }

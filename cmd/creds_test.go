@@ -171,4 +171,19 @@ func TestRenderCredsStatus(t *testing.T) {
 			t.Errorf("text lacks %q:\n%s", want, text)
 		}
 	}
+
+	// --url overrides the endpoint: the config's password source belongs to a
+	// different host, so it must not be shown, and the config-file section
+	// (plaintext status, migration hint) is about the configured host too.
+	text = renderCredsStatus("os.test:9200", nil, nil)
+	for _, want := range []string{"source: n/a (--url", "entry present"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("nil-config text lacks %q:\n%s", want, text)
+		}
+	}
+	for _, deny := range []string{"config file plaintext", "hint:"} {
+		if strings.Contains(text, deny) {
+			t.Errorf("nil-config text must not mention %q:\n%s", deny, text)
+		}
+	}
 }

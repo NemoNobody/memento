@@ -143,6 +143,11 @@ func NormalizeURL(raw string) (string, error) {
 	u.RawQuery = q.Encode()
 	u.Scheme = strings.ToLower(u.Scheme)
 	u.Host = strings.ToLower(u.Host)
+	if p := u.Port(); (p == "80" && u.Scheme == "http") || (p == "443" && u.Scheme == "https") {
+		// The default port is not part of the document id: a shared URL
+		// cache must not split "host:443" and "host" into two snapshots.
+		u.Host = u.Hostname()
+	}
 	u.Fragment = ""
 	if u.Path == "" {
 		// "example.com" and "https://example.com/" are the same document;

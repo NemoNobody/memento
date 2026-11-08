@@ -3,6 +3,7 @@ package secretguard
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 const (
@@ -65,6 +66,29 @@ func TestScanKnownShapes(t *testing.T) {
 
 // TestScanFoldsOverlaps pins the dedup: one secret matched by several generic
 // patterns yields one finding, not a stack.
+// TestMaskRuneSafe pins that mask never cuts a multi-byte character in half:
+// the preview reaches terminal output and agent context, so invalid UTF-8
+// there is a rendering corruption bug.
+func TestMaskRuneSafe(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"ключевое", "********"},                             // <=8 runes: fully masked, rune count
+		{"ключ" + strings.Repeat("x", 10), "ключ**********"}, // >8 runes: first 4 kept whole
+		{"Ёё", "**"},
+	}
+	for _, tc := range cases {
+		got := mask(tc.in)
+		if got != tc.want {
+			t.Errorf("mask(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+		if !utf8.ValidString(got) {
+			t.Errorf("mask(%q) produced invalid UTF-8: %q", tc.in, got)
+		}
+	}
+}
+
 func TestScanFoldsOverlaps(t *testing.T) {
 	secret := strings.Repeat("aB3xYw9", 7) + "=" // matches long-base64 and long-opaque-token
 	findings := Scan("notes", secret)

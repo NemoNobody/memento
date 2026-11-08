@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strconv"
@@ -27,6 +29,18 @@ func AddCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(3),
 		Run: func(cmd *cobra.Command, args []string) {
 			key, value, category := args[0], args[1], args[2]
+			// Validate the shape before guard and store: an empty key produces
+			// a cryptic store error, and an unknown category never ages
+			// (silent rot). The MCP server enforces the same checks.
+			if strings.TrimSpace(key) == "" {
+				fatalErr(errors.New("key must not be empty"))
+			}
+			if strings.TrimSpace(value) == "" {
+				fatalErr(errors.New("value must not be empty"))
+			}
+			if !model.ValidCategory(category) {
+				fatalErr(fmt.Errorf("unknown category %q (want location|config|endpoint|behavior|context_map)", category))
+			}
 			// Guard before any store contact: a rejected write must not even
 			// create the index (the MCP server enforces the same order).
 			cfg, err := config.LoadConfig()
