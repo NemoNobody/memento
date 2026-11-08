@@ -116,6 +116,11 @@ type Config struct {
 	// was refused (allow_plaintext off) — the status line turns that into the
 	// migration hint.
 	FileHasPlaintext bool `json:"-"`
+
+	// FilePerm is the mode of the config file that was read (zero when no
+	// file was used). status warns when a plaintext password lives in a
+	// file group/world-readable.
+	FilePerm os.FileMode `json:"-"`
 }
 
 // KeyringService is the service name under which OpenSearch credentials live
@@ -168,10 +173,21 @@ func LoadConfig() (*Config, error) {
 // MEMENTO_FETCH_ALLOW_PRIVATE, MEMENTO_LOCAL_REPO_ROOTS (comma-separated),
 // MEMENTO_REPO_SCAN_DEPTH.
 func LoadConfigFrom(explicitPath string) (*Config, error) {
+	return loadConfig(explicitPath, FindConfigPath)
+}
+
+// LoadConfigNoCWD loads the config ignoring the working-directory entry
+// (see FindConfigPathNoCWD). This is what `memento mcp` uses when no
+// explicit --conf was given.
+func LoadConfigNoCWD() (*Config, error) {
+	return loadConfig("", FindConfigPathNoCWD)
+}
+
+func loadConfig(explicitPath string, finder func() string) (*Config, error) {
 	cfg := DefaultConfig()
 	path := explicitPath
 	if path == "" {
-		path = FindConfigPath()
+		path = finder()
 	}
 	if path != "" {
 		if err := loadFile(cfg, path); err != nil {
@@ -282,8 +298,24 @@ func LoadConfigFrom(explicitPath string) (*Config, error) {
 		}
 		cfg.LocalRepoScanDepth = n
 	}
+	if u, uerr := url.Parse(cfg.OpenSearchURL); uerr == nil && u.User != nil {
+		// Credentials embedded in the URL reach every error message, the
+		// status output and the store server as basic-auth material. The
+		// fetch path refuses them for the same reason (NormalizeURL).
+		return nil, fmt.Errorf("opensearch_url carries user info; put the user in opensearch_user and the password in the keyring/env (url: %s)", RedactURL(cfg.OpenSearchURL))
+	}
 	resolvePassword(cfg)
 	return cfg, nil
+}
+
+// RedactURL strips the password from a URL for display (status, error
+// messages, logs). A URL without credentials is returned unchanged.
+func RedactURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.User == nil {
+		return raw
+	}
+	return u.Redacted()
 }
 
 // resolvePassword finalizes the OpenSearch credential: environment first
@@ -380,6 +412,9 @@ func loadFile(cfg *Config, path string) error {
 	if err != nil {
 		return fmt.Errorf("read config %s: %w", path, err)
 	}
+	if fi, err := os.Stat(path); err == nil {
+		cfg.FilePerm = fi.Mode().Perm()
+	}
 	var c fileConfig
 	if err := json.Unmarshal(data, &c); err != nil {
 		return fmt.Errorf("parse config %s: %w", path, err)
@@ -469,12 +504,23 @@ func normalizeGuard(v string) (string, error) {
 //  2. memento.conf in the current working directory
 //  3. memento.conf next to the executable
 //  4. ~/.memento.conf
-func FindConfigPath() string {
+func FindConfigPath() string { return findConfigPath(true) }
+
+// FindConfigPathNoCWD is FindConfigPath without the working-directory entry.
+// It exists for `memento mcp`: the MCP server runs with the cwd of whatever
+// project the editor opened, and a cloned repository's memento.conf must
+// never hijack the store endpoint (that file decides where the user's
+// credentials and facts are sent).
+func FindConfigPathNoCWD() string { return findConfigPath(false) }
+
+func findConfigPath(includeCWD bool) string {
 	if p := os.Getenv("MEMENTO_CONF"); p != "" {
 		return p
 	}
-	if _, err := os.Stat("memento.conf"); err == nil {
-		return "memento.conf"
+	if includeCWD {
+		if _, err := os.Stat("memento.conf"); err == nil {
+			return "memento.conf"
+		}
 	}
 	if execPath, err := os.Executable(); err == nil {
 		p := filepath.Join(filepath.Dir(execPath), "memento.conf")

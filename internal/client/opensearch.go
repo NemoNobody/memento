@@ -114,7 +114,7 @@ func wrapWriteError(op string, err error) error {
 func (c *Client) Info(ctx context.Context) (*opensearchapi.InfoResp, error) {
 	resp, err := c.api.Info(ctx, nil)
 	if err != nil {
-		return nil, fmt.Errorf("reach OpenSearch at %s: %w", c.cfg.OpenSearchURL, err)
+		return nil, fmt.Errorf("reach OpenSearch at %s: %w", config.RedactURL(c.cfg.OpenSearchURL), err)
 	}
 	return resp, nil
 }

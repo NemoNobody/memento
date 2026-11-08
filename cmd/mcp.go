@@ -282,6 +282,17 @@ type factsOutput struct {
 	Truncated bool       `json:"truncated,omitempty" jsonschema:"true when the store held more matches than the navigation cap (1000): narrow the query (prefix/project/status); absent means complete"`
 }
 
+// loadConfig resolves the config for a tool call: the explicit --conf wins;
+// without one the working directory is ignored (the editor opens MCP with
+// the cwd of an arbitrary, possibly untrusted, project — its memento.conf
+// must not hijack the endpoint).
+func (s *mcpServer) loadConfig() (*config.Config, error) {
+	if s.confPath != "" {
+		return config.LoadConfigFrom(s.confPath)
+	}
+	return config.LoadConfigNoCWD()
+}
+
 // newClient returns a client for the configured store. Config is reloaded on
 // every call so that a broken file or an unreachable server cannot kill the
 // server process (see mcpServer). The index is ensured like the CLI does.
@@ -307,7 +318,7 @@ func (s *mcpServer) clientFromConfig(ctx context.Context, cfg *config.Config) (*
 // newClientWithConfig is newClient plus the effective config, for tools that
 // need config values beyond the connection (memento_prune's default keep).
 func (s *mcpServer) newClientWithConfig(ctx context.Context) (*client.Client, *config.Config, error) {
-	cfg, err := config.LoadConfigFrom(s.confPath)
+	cfg, err := s.loadConfig()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -424,7 +435,7 @@ func (s *mcpServer) add(ctx context.Context, req *mcp.CallToolRequest, in addInp
 	// The guard runs before any store contact: a rejected write must be
 	// rejected even when OpenSearch is down. The config is loaded once and
 	// reused by the client (a locked wallet is not prompted twice per write).
-	cfg, cerr := config.LoadConfigFrom(s.confPath)
+	cfg, cerr := s.loadConfig()
 	if cerr != nil {
 		return nil, addOutput{}, storeError("memento_add", cerr)
 	}
@@ -525,7 +536,7 @@ type obsoleteOutput struct {
 }
 
 func (s *mcpServer) obsolete(ctx context.Context, req *mcp.CallToolRequest, in obsoleteInput) (*mcp.CallToolResult, obsoleteOutput, error) {
-	if cfg, cerr := config.LoadConfigFrom(s.confPath); cerr == nil {
+	if cfg, cerr := s.loadConfig(); cerr == nil {
 		if err := guardCheck(cfg.SecretGuard, in.ConfirmSecret,
 			guardField{"reason", in.Reason}); err != nil {
 			return nil, obsoleteOutput{}, err
@@ -652,7 +663,7 @@ func (s *mcpServer) fetchDoc(ctx context.Context, req *mcp.CallToolRequest, in f
 	if err != nil {
 		return nil, fetchDocOutput{}, err
 	}
-	cfg, err := config.LoadConfigFrom(s.confPath)
+	cfg, err := s.loadConfig()
 	if err != nil {
 		return nil, fetchDocOutput{}, err
 	}

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/NemoNobody/memento/internal/keyring"
@@ -92,6 +93,57 @@ func clearEnv(t *testing.T) {
 		"MEMENTO_REPO_SCAN_DEPTH",
 	} {
 		t.Setenv(k, "")
+	}
+}
+
+func TestRedactURL(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"https://admin:secret@127.0.0.1:9200", "https://admin:xxxxx@127.0.0.1:9200"},
+		{"https://127.0.0.1:9200", "https://127.0.0.1:9200"},
+		{"https://admin@host", "https://admin@host"},
+		{"::not a url::", "::not a url::"},
+	}
+	for _, c := range cases {
+		if got := RedactURL(c.in); got != c.want {
+			t.Errorf("RedactURL(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// Credentials in opensearch_url leak into every error message and status
+// print; the config refuses them at load time (the fetch path does the same
+// for user URLs).
+func TestLoadConfigRejectsURLUserInfo(t *testing.T) {
+	t.Setenv("OPENSEARCH_URL", "https://admin:hunter2@127.0.0.1:9200")
+	_, err := LoadConfig()
+	if err == nil {
+		t.Fatal("opensearch_url with user info must be rejected")
+	}
+	if strings.Contains(err.Error(), "hunter2") {
+		t.Errorf("the rejection message echoes the password: %v", err)
+	}
+	if !strings.Contains(err.Error(), "admin:xxxxx") {
+		t.Errorf("the rejection message must show a redacted url: %v", err)
+	}
+}
+
+// FindConfigPathNoCWD must skip a ./memento.conf: `memento mcp` runs with
+// the cwd of an arbitrary (possibly cloned, untrusted) project.
+func TestFindConfigPathNoCWD(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "memento.conf"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("MEMENTO_CONF", "")
+	t.Chdir(dir)
+
+	if got := FindConfigPath(); got != "memento.conf" {
+		t.Errorf("FindConfigPath() = %q, want the cwd entry", got)
+	}
+	if got := FindConfigPathNoCWD(); got != "" {
+		t.Errorf("FindConfigPathNoCWD() = %q, want no cwd entry", got)
 	}
 }
 

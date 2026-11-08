@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/NemoNobody/memento/internal/client"
+	"github.com/NemoNobody/memento/internal/config"
 )
 
 func TestStorageNote(t *testing.T) {
@@ -51,5 +52,20 @@ func TestPrintStorage_IndexAbsent(t *testing.T) {
 	}
 	if !strings.Contains(out, "index does not exist yet") {
 		t.Errorf("missing explanatory note:\n%s", out)
+	}
+}
+
+// permWarning is the config-file hygiene flag: a plaintext password in a
+// file group/others can read is an invitation.
+func TestPermWarning(t *testing.T) {
+	got := permWarning(&config.Config{FileHasPlaintext: true, FilePerm: 0o644}, "memento.conf")
+	if !strings.Contains(got, "chmod 600 memento.conf") || !strings.Contains(got, "644") {
+		t.Errorf("permWarning = %q, want the chmod hint with the mode", got)
+	}
+	if got := permWarning(&config.Config{FileHasPlaintext: true, FilePerm: 0o600}, "x"); got != "" {
+		t.Errorf("mode 600 must not warn, got %q", got)
+	}
+	if got := permWarning(&config.Config{FileHasPlaintext: false, FilePerm: 0o644}, "x"); got != "" {
+		t.Errorf("no plaintext password: no warning, got %q", got)
 	}
 }

@@ -14,7 +14,8 @@ import (
 
 // statusEnvVars are the environment variables that override the config file.
 // Every env override config.go reads is listed (names only, never values:
-// a proxy URL can embed credentials). Kept in sync with applyEnvOverrides.
+// a proxy URL can embed credentials). Kept in sync with the env parsing in
+// LoadConfigFrom.
 var statusEnvVars = []string{
 	"OPENSEARCH_URL",
 	"OPENSEARCH_USER",
@@ -34,8 +35,20 @@ var statusEnvVars = []string{
 	"MEMENTO_FETCH_PROXY_URL",
 	"MEMENTO_FETCH_PROXY_FALLBACK",
 	"MEMENTO_FETCH_RESPECT_ROBOTS",
+	"MEMENTO_FETCH_ALLOW_PRIVATE",
 	"MEMENTO_LOCAL_REPO_ROOTS",
 	"MEMENTO_REPO_SCAN_DEPTH",
+}
+
+// permWarning flags a plaintext password living in a file that group/others
+// can read. The store is plaintext by design; the file must not be.
+func permWarning(cfg *config.Config, configFile string) string {
+	if !cfg.FileHasPlaintext || cfg.FilePerm&0o077 == 0 || configFile == "" {
+		return ""
+	}
+	return "warning: the config file is readable by group/others (mode " +
+		strconv.FormatInt(int64(cfg.FilePerm.Perm()), 8) +
+		"): run chmod 600 " + configFile
 }
 
 // statusReport is the shared diagnostics payload behind `memento status` and the
@@ -48,6 +61,7 @@ type statusReport struct {
 	HistoryLimit int                  `json:"history_limit" jsonschema:"per-key history retention applied on corrections; 0 keeps everything"`
 	SecretGuard  string               `json:"secret_guard,omitempty" jsonschema:"secret guard level in effect on writes: reject | ask | allow"`
 	PasswordFrom string               `json:"password_from,omitempty" jsonschema:"where the OpenSearch password resolves from: env | keyring | file | none; the value is never shown"`
+	PermWarning  string               `json:"perm_warning,omitempty" jsonschema:"plaintext password in a group/world-readable config file: the user should chmod 600 it"`
 	KeyringError string               `json:"keyring_error,omitempty" jsonschema:"keyring provider failure (not 'entry not found'): a bus/wallet outage, not a missing entry"`
 	ConfigFile   string               `json:"config_file" jsonschema:"config file actually used, empty when none was found"`
 	EnvOverrides []string             `json:"env_overrides,omitempty" jsonschema:"environment variables that override the config file"`
@@ -105,12 +119,13 @@ func collectStatus(ctx context.Context, confPath string) statusReport {
 		rep.Hint = "Fix the config file (or point --conf / MEMENTO_CONF at a valid one). See docs/setup.md."
 		return rep
 	}
-	rep.URL = cfg.OpenSearchURL
+	rep.URL = config.RedactURL(cfg.OpenSearchURL)
 	rep.Index = cfg.IndexName
 	rep.HistoryLimit = cfg.HistoryLimit
 	rep.SecretGuard = cfg.SecretGuard
 	rep.PasswordFrom = cfg.PasswordSource
 	rep.KeyringError = cfg.KeyringError
+	rep.PermWarning = permWarning(cfg, rep.ConfigFile)
 
 	if cfg.OpenSearchPassword == "" {
 		// The config is fine, the credential is missing: say where it should
@@ -138,7 +153,7 @@ func collectStatus(ctx context.Context, confPath string) statusReport {
 		rep.Error = err.Error()
 		var b strings.Builder
 		b.WriteString("OpenSearch is not reachable at ")
-		b.WriteString(cfg.OpenSearchURL)
+		b.WriteString(config.RedactURL(cfg.OpenSearchURL))
 		b.WriteString(". Check that the server is running and that opensearch_url / " +
 			"opensearch_user / opensearch_password are correct (config file: ")
 		b.WriteString(configPathOrNone(rep.ConfigFile))
@@ -253,6 +268,10 @@ func printStatus(w io.Writer, rep statusReport) error {
 		b.WriteString(")")
 	}
 	b.WriteString("\n")
+	if rep.PermWarning != "" {
+		b.WriteString(rep.PermWarning)
+		b.WriteString("\n")
+	}
 	if rep.OK {
 		b.WriteString("cluster: ")
 		b.WriteString(rep.ClusterName)
