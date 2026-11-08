@@ -94,8 +94,10 @@ func ValidCategory(category string) bool {
 }
 
 // TTLDays returns the staleness TTL in days for a category, 0 for "never".
+// Matching is case-insensitive so facts written before the write edge began
+// canonicalizing categories still age correctly.
 func TTLDays(category string) int {
-	return ttlDaysByCategory[category]
+	return ttlDaysByCategory[strings.ToLower(category)]
 }
 
 // AgeDays returns whole days since the last observation, or -1 when

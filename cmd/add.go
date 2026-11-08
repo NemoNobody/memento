@@ -41,6 +41,11 @@ func AddCmd() *cobra.Command {
 			if !model.ValidCategory(category) {
 				fatalErr(fmt.Errorf("unknown category %q (want location|config|endpoint|behavior|context_map)", category))
 			}
+			// Canonicalize for storage: the TTL table and the search category
+			// filter are case-sensitive, so a mixed-case write would silently
+			// never age and never match --category. ValidCategory accepted it
+			// case-insensitively; store the lowercase canonical form.
+			category = strings.ToLower(category)
 			// Guard before any store contact: a rejected write must not even
 			// create the index (the MCP server enforces the same order).
 			cfg, err := config.LoadConfig()

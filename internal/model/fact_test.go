@@ -23,6 +23,21 @@ func TestValidCategory(t *testing.T) {
 	}
 }
 
+// TestTTLDaysCaseInsensitive pins that the TTL lookup matches categories
+// case-insensitively: facts written before the write edge began
+// canonicalizing categories must still age.
+func TestTTLDaysCaseInsensitive(t *testing.T) {
+	if TTLDays("Config") != 14 {
+		t.Errorf(`TTLDays("Config") = %d, want 14`, TTLDays("Config"))
+	}
+	if TTLDays("ENDPOINT") != 14 {
+		t.Errorf(`TTLDays("ENDPOINT") = %d, want 14`, TTLDays("ENDPOINT"))
+	}
+	if TTLDays("Behavior ") != 0 {
+		t.Errorf(`TTLDays("Behavior ") = %d, want 0 (trailing space is not a category)`, TTLDays("Behavior "))
+	}
+}
+
 func TestNewFact(t *testing.T) {
 	f := NewFact("test:key", "some value", "endpoint", "web", "user:confirmed", "checked dev only")
 
