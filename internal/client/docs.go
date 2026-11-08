@@ -219,12 +219,14 @@ func (c *Client) FetchDoc(ctx context.Context, rawURL, project string, refresh b
 	if err != nil {
 		return nil, false, err
 	}
+	// The project tag is part of the doc the guard inspects: it must be set
+	// before the pre-store hook, never after.
+	doc.Project = project
 	if beforeStore != nil {
 		if err := beforeStore(doc); err != nil {
 			return nil, false, err
 		}
 	}
-	doc.Project = project
 	if err := c.PutDoc(ctx, doc); err != nil {
 		return nil, false, err
 	}

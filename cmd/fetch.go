@@ -63,7 +63,7 @@ A host outside fetch_allow_hosts is rejected before the request is made.`,
 				return
 			}
 			ctx := context.Background()
-			c, err := newClient()
+			c, err := newClientFromConfig(cfg)
 			if err != nil {
 				fatalErr(err)
 			}
@@ -188,14 +188,17 @@ func DocsCmd() *cobra.Command {
 	return cmd
 }
 
-// guardFetch scans the extracted text with the secret guard before the store
-// write. Page text is untrusted: a scraped page can quote credentials, and
-// every later read of the doc would expose them (the store is plaintext).
+// guardFetch scans the extracted text and the raw HTML with the secret guard
+// before the store write. Page text is untrusted: a scraped page can quote
+// credentials, and every later read of the doc would expose them (the store
+// is plaintext). The raw HTML is scanned too: it is stored, and a secret can
+// hide in markup the extractor drops (a <script> body, an attribute).
 func guardFetch(doc *model.Doc, level string, allowed bool) error {
 	fields := []guardField{
 		{Name: "title", Text: doc.Title},
 		{Name: "url", Text: doc.URL},
 		{Name: "project", Text: doc.Project},
+		{Name: "html", Text: doc.HTML},
 	}
 	for i, s := range doc.Sections {
 		// Headings are echoed by the outline path, so they are scanned too.

@@ -13,13 +13,11 @@ import (
 	"github.com/NemoNobody/memento/internal/client"
 	"github.com/NemoNobody/memento/internal/config"
 	"github.com/NemoNobody/memento/internal/model"
+	"github.com/NemoNobody/memento/internal/version"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
 )
-
-// mcpServerVersion is reported to MCP clients as the server version.
-const mcpServerVersion = "0.1.0"
 
 var mcpFlags struct {
 	conf string
@@ -68,7 +66,7 @@ func runMCPServer(confPath string) error {
 
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name:    "memento",
-		Version: mcpServerVersion,
+		Version: version.Version,
 	}, &mcp.ServerOptions{
 		Instructions: "Verified facts about the user's projects (file locations, " +
 			"config and endpoint values, behavior). Consult facts before " +
@@ -292,6 +290,20 @@ func (s *mcpServer) newClient(ctx context.Context) (*client.Client, error) {
 	return c, err
 }
 
+// clientFromConfig builds the client for an already-loaded config, so a tool
+// that needs config values (the guard, prune's default keep) loads the config
+// once: the keyring behind a locked wallet is prompted at most once per call.
+func (s *mcpServer) clientFromConfig(ctx context.Context, cfg *config.Config) (*client.Client, error) {
+	c, err := client.NewClient(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.EnsureIndex(ctx); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
 // newClientWithConfig is newClient plus the effective config, for tools that
 // need config values beyond the connection (memento_prune's default keep).
 func (s *mcpServer) newClientWithConfig(ctx context.Context) (*client.Client, *config.Config, error) {
@@ -299,11 +311,8 @@ func (s *mcpServer) newClientWithConfig(ctx context.Context) (*client.Client, *c
 	if err != nil {
 		return nil, nil, err
 	}
-	c, err := client.NewClient(cfg)
+	c, err := s.clientFromConfig(ctx, cfg)
 	if err != nil {
-		return nil, nil, err
-	}
-	if err := c.EnsureIndex(ctx); err != nil {
 		return nil, nil, err
 	}
 	return c, cfg, nil
@@ -413,17 +422,20 @@ func (s *mcpServer) add(ctx context.Context, req *mcp.CallToolRequest, in addInp
 		in.Source = "tool:mcp"
 	}
 	// The guard runs before any store contact: a rejected write must be
-	// rejected even when OpenSearch is down. When the config itself is
-	// broken, newClient below surfaces that error.
-	if cfg, cerr := config.LoadConfigFrom(s.confPath); cerr == nil {
-		if err := guardCheck(cfg.SecretGuard, in.ConfirmSecret,
-			guardField{"value", in.Value},
-			guardField{"notes", in.Notes},
-			guardField{"source", in.Source}); err != nil {
-			return nil, addOutput{}, err
-		}
+	// rejected even when OpenSearch is down. The config is loaded once and
+	// reused by the client (a locked wallet is not prompted twice per write).
+	cfg, cerr := config.LoadConfigFrom(s.confPath)
+	if cerr != nil {
+		return nil, addOutput{}, storeError("memento_add", cerr)
 	}
-	c, err := s.newClient(ctx)
+	if err := guardCheck(cfg.SecretGuard, in.ConfirmSecret,
+		guardField{"key", in.Key},
+		guardField{"value", in.Value},
+		guardField{"notes", in.Notes},
+		guardField{"source", in.Source}); err != nil {
+		return nil, addOutput{}, err
+	}
+	c, err := s.clientFromConfig(ctx, cfg)
 	if err != nil {
 		return nil, addOutput{}, storeError("memento_add", err)
 	}
@@ -712,7 +724,7 @@ func (s *mcpServer) getDoc(ctx context.Context, req *mcp.CallToolRequest, in get
 		return nil, getDocOutput{}, storeError("memento_get_doc", err)
 	}
 	doc, err := c.GetDocByHash(ctx, in.Hash)
-	if errors.Is(err, client.ErrNotFound) {
+	if errors.Is(err, client.ErrNoDoc) {
 		return nil, getDocOutput{Found: false}, nil
 	}
 	if err != nil {

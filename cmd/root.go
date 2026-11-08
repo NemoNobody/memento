@@ -51,13 +51,25 @@ func newClientWithConfig() (*client.Client, *config.Config, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	c, err := client.NewClient(cfg)
+	c, err := newClientFromConfig(cfg)
 	if err != nil {
 		return nil, nil, err
 	}
+	return c, cfg, nil
+}
+
+// newClientFromConfig builds a client for an already-loaded config: commands
+// that guard the write path load the config once and hand it here, so the
+// config (and the keyring, behind a locked wallet) is touched exactly once
+// per command.
+func newClientFromConfig(cfg *config.Config) (*client.Client, error) {
+	c, err := client.NewClient(cfg)
+	if err != nil {
+		return nil, err
+	}
 	ctx := context.Background()
 	if err := c.EnsureIndex(ctx); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return c, cfg, nil
+	return c, nil
 }

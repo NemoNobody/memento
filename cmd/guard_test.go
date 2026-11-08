@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/NemoNobody/memento/internal/config"
+	"github.com/NemoNobody/memento/internal/model"
 )
 
 const guardSentinel = "AKIAIOSFODNN7EXAMPLE" // the AWS documentation example key
@@ -63,5 +64,24 @@ func TestGuardCheckMessageIsMasked(t *testing.T) {
 		if !strings.Contains(msg, want) {
 			t.Errorf("message missing %q:\n%s", want, msg)
 		}
+	}
+}
+
+// The stored doc carries the raw HTML; a secret can hide in markup the
+// extractor drops (a <script> body, an attribute). The guard must scan it:
+// what reaches the plaintext store must pass the guard.
+func TestGuardFetchScansStoredHTML(t *testing.T) {
+	doc := &model.Doc{
+		Title:    "Page",
+		URL:      "https://example.com/x",
+		Sections: []model.Section{{Order: 0, Heading: "H", Text: "clean text"}},
+		HTML:     `<script>const k = "` + guardSentinel + `";</script><p>prose</p>`,
+	}
+	if err := guardFetch(doc, config.GuardReject, false); err == nil {
+		t.Fatal("secret in stored html must be caught before the store write")
+	}
+	doc.HTML = "<html><body><p>plain prose</p></body></html>"
+	if err := guardFetch(doc, config.GuardReject, false); err != nil {
+		t.Fatalf("clean doc rejected: %v", err)
 	}
 }

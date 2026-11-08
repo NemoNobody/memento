@@ -33,10 +33,11 @@ func ObsoleteCmd() *cobra.Command {
 				fatalErr(err)
 			}
 			if err := guardCheck(cfg.SecretGuard, obsoleteFlags.allowSecret,
+				guardField{"key", key},
 				guardField{"reason", reason}); err != nil {
 				fatalErr(err)
 			}
-			c, _, err := newClientWithConfig()
+			c, err := newClientFromConfig(cfg)
 			if err != nil {
 				fatalErr(err)
 			}

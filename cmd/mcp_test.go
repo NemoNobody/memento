@@ -3,6 +3,9 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"strings"
@@ -233,6 +236,40 @@ func TestMCPServerDocToolsValidateOffline(t *testing.T) {
 				t.Errorf("validation ran after the store was reached: %s", text)
 			}
 		})
+	}
+}
+
+// TestMCPGetDocMissingIsFoundFalse pins the tool's contract: a document that
+// does not exist is an empty result (found:false), not a store-failure report.
+// An agent that is taught "the store is down" by a missing doc starts
+// reporting phantom outages.
+func TestMCPGetDocMissingIsFoundFalse(t *testing.T) {
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusOK) // the facts index "exists"
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = io.WriteString(w, `{"error":{"type":"document_missing_exception","reason":"Document with id abcd not found.","index":"memento-docs"},"status":404}`)
+	}))
+	t.Cleanup(fake.Close)
+
+	session := connectTestServer(t, "OPENSEARCH_URL="+fake.URL)
+	ctx := context.Background()
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "memento_get_doc",
+		Arguments: map[string]any{"hash": "abcd1234abcd1234"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool(memento_get_doc): %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("missing doc must be found:false, got tool error: %s", toolText(res))
+	}
+	raw, _ := json.Marshal(res.StructuredContent)
+	if !strings.Contains(string(raw), `"found":false`) {
+		t.Fatalf("want found:false, got: %s", raw)
 	}
 }
 
