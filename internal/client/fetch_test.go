@@ -89,6 +89,10 @@ func TestNormalizeURL(t *testing.T) {
 		{"http://example.com:80/x", "http://example.com/x"},
 		{"https://example.com:8443/x", "https://example.com:8443/x"},
 		{"http://example.com:443/", "http://example.com:443/"},
+		// IPv6 literals keep their brackets after the default-port strip —
+		// an unbracketed address re-parses as a bogus host+port.
+		{"https://[2606:4700:4700::1111]:443/x", "https://[2606:4700:4700::1111]/x"},
+		{"https://[2606:4700:4700::1111]/x", "https://[2606:4700:4700::1111]/x"},
 	}
 	for _, tc := range cases {
 		got, err := NormalizeURL(tc.in)
@@ -103,6 +107,18 @@ func TestNormalizeURL(t *testing.T) {
 	for _, bad := range []string{"", "ftp://example.com/x", "https://user:pass@host/x", "http://"} {
 		if _, err := NormalizeURL(bad); err == nil {
 			t.Errorf("NormalizeURL(%q): want error, got nil", bad)
+		}
+	}
+
+	// The refusal messages must not echo the credentials: they reach agent
+	// context and MCP client logs.
+	for _, secretURL := range []string{"https://admin:hunter2@example.com/x", "http://u:p%zz@proxy:3128"} {
+		_, err := NormalizeURL(secretURL)
+		if err == nil {
+			t.Fatalf("NormalizeURL(%q): want error, got nil", secretURL)
+		}
+		if strings.Contains(err.Error(), "hunter2") || strings.Contains(err.Error(), "p%zz") {
+			t.Errorf("error echoes credentials: %v", err)
 		}
 	}
 }

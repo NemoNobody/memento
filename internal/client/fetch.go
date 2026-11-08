@@ -123,6 +123,11 @@ func NormalizeURL(raw string) (string, error) {
 	}
 	u, err := url.Parse(raw)
 	if err != nil {
+		// The parse error echoes the input, so a URL with credentials in it
+		// must never be quoted: the message reaches agent context and logs.
+		if strings.Contains(raw, "@") {
+			return "", fmt.Errorf("fetch: url rejected: invalid syntax (the url carries user info; its text is not echoed)")
+		}
 		return "", fmt.Errorf("fetch: parse url %q: %w", raw, err)
 	}
 	switch strings.ToLower(u.Scheme) {
@@ -131,7 +136,7 @@ func NormalizeURL(raw string) (string, error) {
 		return "", fmt.Errorf("fetch: scheme %q is not supported (http/https only)", u.Scheme)
 	}
 	if u.Host == "" {
-		return "", fmt.Errorf("fetch: url %q has no host", raw)
+		return "", fmt.Errorf("fetch: url %q has no host", config.RedactURL(raw))
 	}
 	if blockedHost(strings.ToLower(u.Hostname())) {
 		return "", fmt.Errorf(
@@ -140,8 +145,9 @@ func NormalizeURL(raw string) (string, error) {
 	}
 	if u.User != nil {
 		// Credentials in a URL are a leak vector (they reach the target host);
-		// the fetcher never sends them and refuses to accept them.
-		return "", fmt.Errorf("fetch: url %q carries user info; remove credentials from the url", raw)
+		// the fetcher never sends them and refuses to accept them. The message
+		// carries the REDACTED url: raw contains the password itself.
+		return "", fmt.Errorf("fetch: url %q carries user info; remove credentials from the url", config.RedactURL(raw))
 	}
 	q := u.Query()
 	for k := range q {
@@ -155,7 +161,13 @@ func NormalizeURL(raw string) (string, error) {
 	if p := u.Port(); (p == "80" && u.Scheme == "http") || (p == "443" && u.Scheme == "https") {
 		// The default port is not part of the document id: a shared URL
 		// cache must not split "host:443" and "host" into two snapshots.
-		u.Host = u.Hostname()
+		// Hostname() strips the brackets of IPv6 literals; restore them —
+		// an unbracketed address re-parses as a bogus host+port.
+		h := u.Hostname()
+		if strings.Contains(h, ":") {
+			h = "[" + h + "]"
+		}
+		u.Host = h
 	}
 	u.Fragment = ""
 	if u.Path == "" {
@@ -229,6 +241,11 @@ func fetchHTTP(ctx context.Context, cfg *config.Config, normalizedURL string) (c
 	if cfg.FetchProxyURL != "" {
 		proxy, err = url.Parse(cfg.FetchProxyURL)
 		if err != nil {
+			// The parse error echoes the input: a proxy url with credentials
+			// in it must not be quoted into agent-visible output.
+			if strings.Contains(cfg.FetchProxyURL, "@") {
+				return "", nil, "", "", fmt.Errorf("fetch: parse fetch_proxy_url: invalid syntax (it carries user info; its text is not echoed)")
+			}
 			return "", nil, "", "", fmt.Errorf("fetch: parse fetch_proxy_url %q: %w", cfg.FetchProxyURL, err)
 		}
 	}
