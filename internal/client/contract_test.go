@@ -343,6 +343,58 @@ func TestAddSameValueUpdatesNotesOnly(t *testing.T) {
 	}
 }
 
+// TestAddEmptyNotesPreservesNotes pins the notes-retention contract: the CLI
+// flag and the MCP field default to empty, and notes never enter history, so
+// a correction (and a same-value add) without notes must leave the existing
+// qualifiers alone — writing "" over them is irreversible erasure.
+func TestAddEmptyNotesPreservesNotes(t *testing.T) {
+	var updateBody string
+	c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+		switch {
+		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
+			return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
+				"fact_id":"existing-id","key":"k","value":"same","notes":"dev config only",
+				"created_at":"2020-01-01T00:00:00Z","updated_at":"2020-01-01T00:00:00Z",
+				"observed_at":"2020-01-01T00:00:00Z"}}`
+		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+			updateBody = r.Body
+			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+		}
+		return http.StatusInternalServerError, `{"status":500,"error":"unexpected"}`
+	})
+
+	if _, err := c.Add(context.Background(), model.NewFact("k", "same", "config", "p", "test:contract", "")); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	// An empty notes field must be absent from the partial doc, not "".
+	if strings.Contains(updateBody, `"notes"`) {
+		t.Errorf("empty notes must not be written over the stored notes: %s", updateBody)
+	}
+
+	// The scripted correction path guards the same way (params.notes only
+	// replaces when non-empty).
+	updateBody = ""
+	c2, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+		switch {
+		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
+			return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
+				"fact_id":"existing-id","key":"k","value":"old","notes":"dev config only",
+				"created_at":"2020-01-01T00:00:00Z","updated_at":"2020-01-01T00:00:00Z",
+				"observed_at":"2020-01-01T00:00:00Z"}}`
+		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+			updateBody = r.Body
+			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+		}
+		return http.StatusInternalServerError, `{"status":500,"error":"unexpected"}`
+	})
+	if _, err := c2.Add(context.Background(), model.NewFact("k", "new value", "config", "p", "test:contract", "")); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if !strings.Contains(updateBody, "params.notes != ''") {
+		t.Errorf("correction script must guard notes replacement: %s", updateBody)
+	}
+}
+
 // TestAddSendsRefreshWaitForForNewFacts checks the same refresh guarantee on the
 // create path, where no previous document exists.
 func TestAddSendsRefreshWaitForForNewFacts(t *testing.T) {

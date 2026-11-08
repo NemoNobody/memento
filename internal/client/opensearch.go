@@ -209,7 +209,7 @@ if (params.history_limit > 0) {
 ctx._source.value = params.value;
 ctx._source.observed_at = params.observed_at;
 ctx._source.source = params.source;
-ctx._source.notes = params.notes;
+if (params.notes != null && params.notes != '') { ctx._source.notes = params.notes; }
 ctx._source.status = 'verified';
 ctx._source.updated_at = params.updated_at;
 `
@@ -219,6 +219,10 @@ ctx._source.updated_at = params.updated_at;
 // observation is old and only the qualifier is new); the value changed (the old
 // observation is appended to history and the new one becomes current — this
 // also resurrects an obsolete fact).
+//
+// Notes are only replaced by a non-empty new note: the CLI flag and the MCP
+// field default to empty, and a correction without --notes must not silently
+// erase the qualifiers (they are not kept in history, so erasure is irreversible).
 //
 // It reports whether the fact was newly created. Writes wait for a refresh, so
 // the fact is immediately visible to subsequent Search/List calls.
@@ -247,13 +251,16 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (created bool, err erro
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	if existing.Value == f.Value {
+		doc := map[string]interface{}{
+			"source":     f.Source,
+			"status":     "verified",
+			"updated_at": now,
+		}
+		if f.Notes != "" {
+			doc["notes"] = f.Notes
+		}
 		body, _ := json.Marshal(map[string]interface{}{
-			"doc": map[string]interface{}{
-				"notes":      f.Notes,
-				"source":     f.Source,
-				"status":     "verified",
-				"updated_at": now,
-			},
+			"doc": doc,
 		})
 		_, err = c.api.Update(ctx, opensearchapi.UpdateReq{
 			Index:      c.cfg.IndexName,

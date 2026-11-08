@@ -281,10 +281,15 @@ func newFactViews(facts []model.Fact, includeHistory bool) []factView {
 
 // factsOutput is the list-shaped result shared by memento_search and memento_list.
 type factsOutput struct {
-	Count     int        `json:"count" jsonschema:"number of facts returned"`
-	Facts     []factView `json:"facts" jsonschema:"matching facts, newest first is not guaranteed"`
-	Truncated bool       `json:"truncated,omitempty" jsonschema:"true when the store held more matches than the navigation cap (1000): narrow the query (prefix/project/status); absent means complete"`
-	Skipped   int        `json:"skipped,omitempty" jsonschema:"hits the store returned whose content failed to decode (index corruption): report to the user, never silently drop"`
+	Count int        `json:"count" jsonschema:"number of facts returned"`
+	Facts []factView `json:"facts" jsonschema:"matching facts, newest first is not guaranteed"`
+	// Truncated is the honest page signal: the store matched more than the
+	// page delivered. For list/keys the page is the navigation cap (1000),
+	// for search it is the requested limit — the advice differs, and an
+	// agent told to "narrow the query" when the limit cut the output would
+	// answer from a subset it cannot see.
+	Truncated bool `json:"truncated,omitempty" jsonschema:"true when the store matched more facts than this page (the requested limit for search; the navigation cap 1000 for list/keys): for search raise the limit (max 50) before narrowing, for list/keys narrow the query (prefix/project/status); absent means complete"`
+	Skipped   int  `json:"skipped,omitempty" jsonschema:"hits the store returned whose content failed to decode (index corruption): report to the user, never silently drop"`
 }
 
 // loadConfig resolves the config for a tool call: the explicit --conf wins;
@@ -565,13 +570,18 @@ type obsoleteOutput struct {
 }
 
 func (s *mcpServer) obsolete(ctx context.Context, req *mcp.CallToolRequest, in obsoleteInput) (*mcp.CallToolResult, obsoleteOutput, error) {
-	if cfg, cerr := s.loadConfig(); cerr == nil {
-		if err := guardCheck(cfg.SecretGuard, in.ConfirmSecret,
-			guardField{"reason", in.Reason}); err != nil {
-			return nil, obsoleteOutput{}, err
-		}
+	// The config is the guard's policy: a load failure must fail the write
+	// (as in add), never silently skip the scan of a credential-like reason.
+	// Loaded once and reused: a locked wallet is not prompted twice per write.
+	cfg, cerr := s.loadConfig()
+	if cerr != nil {
+		return nil, obsoleteOutput{}, storeError("memento_obsolete", cerr)
 	}
-	c, err := s.newClient(ctx)
+	if err := guardCheck(cfg.SecretGuard, in.ConfirmSecret,
+		guardField{"reason", in.Reason}); err != nil {
+		return nil, obsoleteOutput{}, err
+	}
+	c, err := s.clientFromConfig(ctx, cfg)
 	if err != nil {
 		return nil, obsoleteOutput{}, storeError("memento_obsolete", err)
 	}

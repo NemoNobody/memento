@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -273,6 +274,36 @@ func TestMCPServerAddValidatesShapeOffline(t *testing.T) {
 		if strings.Contains(text, "127.0.0.1:9") {
 			t.Errorf("validation ran after the store was reached: %s", text)
 		}
+	}
+}
+
+// TestMCPServerObsoleteFailsOnBrokenConfig pins that a config load failure
+// cannot silently disable the secret guard: the guard policy lives in the
+// config, so an unloadable policy must fail the write loudly — never proceed
+// with an unscanned reason into the plaintext store.
+func TestMCPServerObsoleteFailsOnBrokenConfig(t *testing.T) {
+	dir := t.TempDir()
+	conf := filepath.Join(dir, "memento.conf")
+	if err := os.WriteFile(conf, []byte("{broken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	session := connectTestServer(t, "MEMENTO_CONF="+conf)
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "memento_obsolete",
+		Arguments: map[string]any{"key": "k", "reason": "the file was deleted"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool(memento_obsolete): %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("obsolete wrote with an unloadable guard policy")
+	}
+	text := toolText(res)
+	if !strings.Contains(text, "memento_obsolete") {
+		t.Errorf("error must name the tool: %s", text)
+	}
+	if strings.Contains(text, "127.0.0.1:9") {
+		t.Errorf("the write reached store contact despite the broken config: %s", text)
 	}
 }
 
