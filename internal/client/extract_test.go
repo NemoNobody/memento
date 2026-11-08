@@ -3,6 +3,7 @@ package client
 import (
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/NemoNobody/memento/internal/model"
@@ -176,6 +177,72 @@ func TestStripElementsLinear(t *testing.T) {
 	out := stripElements(lowerASCII(b.String()), b.String())
 	if out != "" {
 		t.Fatalf("all style elements must be dropped, got %d bytes", len(out))
+	}
+}
+
+// TestStripElementsUnclosedLinear is the second DoS regression: the linear
+// pass cached nothing about missing closing tags, so a page of repeated
+// unclosed <style> made every tag re-scan the whole tail (quadratic: ~75s at
+// the 2 MB fetch cap in the long-lived server, driven by one untrusted link).
+// The no-close cache must make the whole run a single pass; 300ms is a wide
+// margin over the linear cost and a hard fail for the quadratic one (~2s here).
+func TestStripElementsUnclosedLinear(t *testing.T) {
+	const n = 50000
+	var b strings.Builder
+	b.Grow(n * 7)
+	for i := 0; i < n; i++ {
+		b.WriteString("<style>")
+	}
+	body := b.String()
+	done := make(chan string, 1)
+	go func() { done <- stripElements(lowerASCII(body), body) }()
+	select {
+	case out := <-done:
+		if out != "" {
+			t.Fatalf("style tags must be dropped, got %d bytes", len(out))
+		}
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("stripElements on unclosed drop-tags is not linear (tail re-scan)")
+	}
+}
+
+// TestExtractTagSoupLinear guards the same invariant for the text loop: a
+// giant run of unterminated "<a" must not re-scan the tail per tag (parseTag
+// reports the EOF end once, consuming the soup in one scan).
+func TestExtractTagSoupLinear(t *testing.T) {
+	const n = 200000
+	var b strings.Builder
+	b.Grow(n * 2)
+	for i := 0; i < n; i++ {
+		b.WriteString("<a")
+	}
+	done := make(chan struct{}, 1)
+	go func() {
+		ExtractSections(b.String())
+		done <- struct{}{}
+	}()
+	select {
+	case <-done:
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("ExtractSections on a '<a' soup is not linear")
+	}
+}
+
+// cleanText strips control bytes AFTER entity unescaping: html.UnescapeString
+// turns &#27; into ESC, so untested markup (and stored pages) can inject ANSI
+// escapes into titles/sections that every later terminal render executes.
+func TestCleanTextStripsControl(t *testing.T) {
+	title := ExtractTitle("<title>Head &#27;[31mRED&#27;[0m</title>")
+	if strings.ContainsRune(title, 0x1b) {
+		t.Errorf("ESC survived into the title: %q", title)
+	}
+	if title != "Head [31mRED[0m" {
+		t.Errorf("unexpected title: %q", title)
+	}
+	secs, _, _ := ExtractSections("<p>plain &#0;and&#128; control</p>")
+	joined := strings.Join(textOfSections(secs), " ")
+	if strings.ContainsRune(joined, 0x00) || strings.ContainsRune(joined, 0x80) {
+		t.Errorf("control bytes survived in section text: %q", joined)
 	}
 }
 

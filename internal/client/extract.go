@@ -334,6 +334,11 @@ func ExtractPlainText(body string) (sections []model.Section, truncated bool) {
 func stripElements(lower, body string) string {
 	var b strings.Builder
 	b.Grow(len(body))
+	// noCloseFrom[tag] = offset from which a scan proved that no closing tag
+	// exists in the rest of the body. Without it, every unclosed drop-tag
+	// re-scans the whole tail: a page of repeated unclosed <style> turns the
+	// single pass quadratic (the exact hostile-input pattern of this package).
+	noCloseFrom := map[string]int{}
 	for i := 0; i < len(lower); {
 		lt := strings.IndexByte(lower[i:], '<')
 		if lt < 0 {
@@ -356,7 +361,13 @@ func stripElements(lower, body string) string {
 			break
 		}
 		contentStart := pos + openEnd + 1
-		close := findTagStartFrom(lower, "/"+tag, contentStart)
+		close := -1
+		if proven, seen := noCloseFrom[tag]; !seen || proven > contentStart {
+			close = findTagStartFrom(lower, "/"+tag, contentStart)
+			if close < 0 {
+				noCloseFrom[tag] = contentStart
+			}
+		}
 		if close < 0 {
 			// Self-closed or unclosed element: drop only the tag itself.
 			// Deleting the whole tail would silently lose real content —
@@ -440,7 +451,11 @@ func parseTag(body, lower string, pos int) (name string, end int, isClose bool) 
 	}
 	tagEnd := strings.IndexByte(lower[k:], '>')
 	if tagEnd < 0 {
-		return "", len(body), isClose
+		// No '>' until EOF: the whole tail is markup. Report the name so the
+		// caller jumps past the tail in one step; an empty name here would
+		// take the "< in prose" path (advance one byte) and re-scan the tail
+		// at every following '<' — quadratic on a "<a<a<a" soup (measured).
+		return lower[start:k], len(body), isClose
 	}
 	return lower[start:k], k + tagEnd + 1, isClose
 }
@@ -463,8 +478,20 @@ func contentLines(raw string) []string {
 }
 
 // cleanText unescapes entities and collapses whitespace to single spaces.
+// Control characters are stripped AFTER unescaping: html.UnescapeString turns
+// &#27; into ESC, so a scraped page can inject ANSI escapes into stored
+// titles/sections and from there into every agent terminal that prints them.
 func cleanText(s string) string {
 	s = html.UnescapeString(s)
+	s = strings.Map(func(r rune) rune {
+		if r == '\t' || r == '\n' {
+			return r
+		}
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
+			return -1
+		}
+		return r
+	}, s)
 	return strings.Join(strings.Fields(s), " ")
 }
 
