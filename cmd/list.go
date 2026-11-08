@@ -26,7 +26,7 @@ func ListCmd() *cobra.Command {
 			if err != nil {
 				fatalErr(err)
 			}
-			facts, err := c.List(ctx, project, listFlags.prefix)
+			facts, meta, err := c.List(ctx, project, listFlags.prefix)
 			if err != nil {
 				fatalErr(err)
 			}
@@ -34,9 +34,15 @@ func ListCmd() *cobra.Command {
 				if err := writeLine(os.Stdout, "no facts for project "+strconv.Quote(project)); err != nil {
 					fatalErr(err)
 				}
+				if err := noteSkipped(os.Stdout, meta); err != nil {
+					fatalErr(err)
+				}
 				return
 			}
 			if err := printFacts(os.Stdout, facts, time.Now().UTC()); err != nil {
+				fatalErr(err)
+			}
+			if err := noteSkipped(os.Stdout, meta); err != nil {
 				fatalErr(err)
 			}
 			if len(facts) >= client.NavSizeCap {

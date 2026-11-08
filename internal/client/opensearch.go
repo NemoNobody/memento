@@ -308,17 +308,17 @@ func (c *Client) Get(ctx context.Context, key string) (*model.Fact, error) {
 
 // Search performs a keyword search, capped to limit hits (limit <= 0 uses the
 // server default of 10). Relevance order is OpenSearch's.
-func (c *Client) Search(ctx context.Context, query string, project, category, status string, limit int) ([]model.Fact, error) {
+func (c *Client) Search(ctx context.Context, query string, project, category, status string, limit int) ([]model.Fact, SearchMeta, error) {
 	return c.search(ctx, buildSearchBody(query, project, category, status, limit))
 }
 
 // List returns all facts for a project whose key starts with prefix.
 // An empty prefix lists the whole project. A prefix may carry the trailing
 // '*' sugar ("state:*" == "state:"); a '*' anywhere else is rejected.
-func (c *Client) List(ctx context.Context, project, prefix string) ([]model.Fact, error) {
+func (c *Client) List(ctx context.Context, project, prefix string) ([]model.Fact, SearchMeta, error) {
 	p, err := NormalizePrefix(prefix)
 	if err != nil {
-		return nil, err
+		return nil, SearchMeta{}, err
 	}
 	return c.search(ctx, buildProjectBody(project, p))
 }
@@ -330,13 +330,13 @@ func (c *Client) List(ctx context.Context, project, prefix string) ([]model.Fact
 // an unbounded key query is a context flood, not a search.
 //
 // match is a Lucene keyword pattern: '*' and '?' inside it are wildcards.
-func (c *Client) Keys(ctx context.Context, prefix, match, project, status string) ([]model.Fact, error) {
+func (c *Client) Keys(ctx context.Context, prefix, match, project, status string) ([]model.Fact, SearchMeta, error) {
 	p, err := NormalizePrefix(prefix)
 	if err != nil {
-		return nil, err
+		return nil, SearchMeta{}, err
 	}
 	if p == "" && match == "" {
-		return nil, fmt.Errorf("keys: provide a key prefix and/or a match pattern")
+		return nil, SearchMeta{}, fmt.Errorf("keys: provide a key prefix and/or a match pattern")
 	}
 	return c.search(ctx, buildKeysBody(p, match, project, status))
 }
@@ -532,23 +532,34 @@ func buildKeysBody(prefix, match, project, status string) map[string]interface{}
 	}
 }
 
-// search executes a search and returns the matching facts.
-func (c *Client) search(ctx context.Context, body map[string]interface{}) ([]model.Fact, error) {
+// SearchMeta carries query diagnostics that a facts-only return hides:
+// Total is the cluster-side match count (the honest truncation signal: a
+// page exactly filling the cap is a complete result), Skipped counts hits
+// whose _source failed to decode — index corruption must never be silent.
+type SearchMeta struct {
+	Total   int
+	Skipped int
+}
+
+// search executes a search and returns the matching facts with meta.
+func (c *Client) search(ctx context.Context, body map[string]interface{}) ([]model.Fact, SearchMeta, error) {
 	data, _ := json.Marshal(body)
 	resp, err := c.api.Search(ctx, &opensearchapi.SearchReq{
 		Indices: []string{c.cfg.IndexName},
 		Body:    bytes.NewReader(data),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("search: %w", err)
+		return nil, SearchMeta{}, fmt.Errorf("search: %w", err)
 	}
+	meta := SearchMeta{Total: resp.Hits.Total.Value}
 	var results []model.Fact
 	for _, hit := range resp.Hits.Hits {
 		var f model.Fact
 		if err := json.Unmarshal(hit.Source, &f); err != nil {
+			meta.Skipped++
 			continue
 		}
 		results = append(results, f)
 	}
-	return results, nil
+	return results, meta, nil
 }

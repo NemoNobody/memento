@@ -44,7 +44,7 @@ func KeysCmd() *cobra.Command {
 			if err != nil {
 				fatalErr(err)
 			}
-			facts, err := c.Keys(ctx, prefix, keysFlags.match, keysFlags.project, resolveStatus(keysFlags.status))
+			facts, meta, err := c.Keys(ctx, prefix, keysFlags.match, keysFlags.project, resolveStatus(keysFlags.status))
 			if err != nil {
 				fatalErr(err)
 			}
@@ -52,12 +52,18 @@ func KeysCmd() *cobra.Command {
 				if err := writeLine(os.Stdout, "no matching keys"); err != nil {
 					fatalErr(err)
 				}
+				if err := noteSkipped(os.Stdout, meta); err != nil {
+					fatalErr(err)
+				}
 				return
 			}
 			if err := printFacts(os.Stdout, facts, time.Now().UTC()); err != nil {
 				fatalErr(err)
 			}
-			if len(facts) >= client.NavSizeCap {
+			if err := noteSkipped(os.Stdout, meta); err != nil {
+				fatalErr(err)
+			}
+			if meta.Total > client.NavSizeCap {
 				if err := writeLine(os.Stdout, "truncated: showing the first "+strconv.Itoa(client.NavSizeCap)+" keys; narrow with prefix/--match/--project/--status"); err != nil {
 					fatalErr(err)
 				}

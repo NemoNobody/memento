@@ -605,7 +605,7 @@ func TestListPrefixScope(t *testing.T) {
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected request: ` + r.Method + ` ` + r.Path + `"}`
 	})
 
-	if _, err := c.List(context.Background(), "memento", "memento:state:*"); err != nil {
+	if _, _, err := c.List(context.Background(), "memento", "memento:state:*"); err != nil {
 		t.Fatalf("List: %v", err)
 	}
 	reqs := fake.requestsFor(http.MethodPost, "/memento/_search")
@@ -636,11 +636,42 @@ func TestListPrefixScope(t *testing.T) {
 	fake.requests = nil
 	fake.mu.Unlock()
 
-	if _, err := c.List(context.Background(), "memento", "a*b"); err == nil {
+	if _, _, err := c.List(context.Background(), "memento", "a*b"); err == nil {
 		t.Error("List with middle * must fail")
 	}
 	if len(fake.requestsFor(http.MethodPost, "/memento/_search")) != 0 {
 		t.Error("invalid prefix must not produce a request")
+	}
+}
+
+// TestSearchMetaTotalAndSkipped pins the SearchMeta contract: Total is the
+// cluster-side match count (the honest truncation signal), and hits whose
+// _source fails to decode must surface as Skipped, never vanish silently.
+func TestSearchMetaTotalAndSkipped(t *testing.T) {
+	c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+		if r.Method == http.MethodPost && r.Path == "/memento/_search" {
+			return http.StatusOK, `{"hits":{"total":{"value":9,"relation":"eq"},"hits":[` +
+				`{"_id":"1","_source":{"key":"a:one","value":"v1","category":"config","project":"p","status":"verified"}},` +
+				`{"_id":"2","_source":{"key":123}}]}}`
+		}
+		return http.StatusInternalServerError, `{"status":500,"error":"unexpected request: ` + r.Method + ` ` + r.Path + `"}`
+	})
+
+	facts, meta, err := c.Search(context.Background(), "q", "", "", "", 0)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(facts) != 1 {
+		t.Fatalf("facts = %d, want 1 (the decodable hit): %+v", len(facts), facts)
+	}
+	if facts[0].Key != "a:one" {
+		t.Errorf("facts[0].Key = %q, want a:one", facts[0].Key)
+	}
+	if meta.Total != 9 {
+		t.Errorf("meta.Total = %d, want 9 (the cluster-side total, not the page size)", meta.Total)
+	}
+	if meta.Skipped != 1 {
+		t.Errorf("meta.Skipped = %d, want 1 (the undecodable hit must be counted)", meta.Skipped)
 	}
 }
 
@@ -654,14 +685,14 @@ func TestKeysGuards(t *testing.T) {
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected request: ` + r.Method + ` ` + r.Path + `"}`
 	})
 
-	if _, err := c.Keys(context.Background(), "", "", "", ""); err == nil {
+	if _, _, err := c.Keys(context.Background(), "", "", "", ""); err == nil {
 		t.Error("Keys with no prefix and no match must fail (context flood guard)")
 	}
 	if len(fake.requestsFor(http.MethodPost, "/memento/_search")) != 0 {
 		t.Error("empty Keys query must not produce a request")
 	}
 
-	if _, err := c.Keys(context.Background(), "zed:", "state", "memento", "verified"); err != nil {
+	if _, _, err := c.Keys(context.Background(), "zed:", "state", "memento", "verified"); err != nil {
 		t.Fatalf("Keys: %v", err)
 	}
 	reqs := fake.requestsFor(http.MethodPost, "/memento/_search")

@@ -167,17 +167,29 @@ func DocsCmd() *cobra.Command {
 			if err != nil {
 				fatalErr(err)
 			}
-			docs, err := c.SearchDocs(ctx, args[0], docsFlags.project, docsFlags.limit)
+			docs, meta, err := c.SearchDocs(ctx, args[0], docsFlags.project, docsFlags.limit)
 			if err != nil {
 				fatalErr(err)
+			}
+			if docsFlags.limit > client.DocsSearchCap && len(docs) >= client.DocsSearchCap {
+				if err := writeLine(os.Stdout, "note: the docs list is capped at "+strconv.Itoa(client.DocsSearchCap)+
+					" (the context budget); narrow the query to see specific documents"); err != nil {
+					fatalErr(err)
+				}
 			}
 			if len(docs) == 0 {
 				if err := writeLine(os.Stdout, "no matching documents"); err != nil {
 					fatalErr(err)
 				}
+				if err := noteSkipped(os.Stdout, meta); err != nil {
+					fatalErr(err)
+				}
 				return
 			}
 			if err := printDocHits(os.Stdout, docs, time.Now().UTC()); err != nil {
+				fatalErr(err)
+			}
+			if err := noteSkipped(os.Stdout, meta); err != nil {
 				fatalErr(err)
 			}
 		},

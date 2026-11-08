@@ -114,7 +114,7 @@ func TestSearchDocsContract(t *testing.T) {
 	c, fake := newFakeClientCfg(t, docsMutate, func(r recordedRequest) (int, string) {
 		return 200, `{"hits":{"hits":[]}}`
 	})
-	docs, err := c.SearchDocs(context.Background(), "q", "proj", 3)
+	docs, _, err := c.SearchDocs(context.Background(), "q", "proj", 3)
 	if err != nil {
 		t.Fatalf("SearchDocs: %v", err)
 	}

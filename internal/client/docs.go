@@ -139,14 +139,19 @@ func (c *Client) GetDocByHash(ctx context.Context, hash string) (*model.Doc, err
 	return &doc, nil
 }
 
+// DocsSearchCap is the result budget for docs searches: page hits are
+// research input, not a target — the agent reads snippets and pulls a
+// section by hash, it never ingests a wall of documents.
+const DocsSearchCap = 20
+
 // buildDocSearchBody builds the docs search: text match over title and section
 // text, optionally scoped to a project, capped to a result budget.
 func buildDocSearchBody(query, project string, limit int) map[string]interface{} {
 	if limit <= 0 {
 		limit = 5
 	}
-	if limit > 20 {
-		limit = 20
+	if limit > DocsSearchCap {
+		limit = DocsSearchCap
 	}
 	filters := []map[string]interface{}{}
 	if project != "" {
@@ -173,24 +178,26 @@ func buildDocSearchBody(query, project string, limit int) map[string]interface{}
 // SearchDocs finds stored documents whose title or text matches the query.
 // Results are relevance-ordered and capped; callers ship snippets, not whole
 // documents, into the agent's context.
-func (c *Client) SearchDocs(ctx context.Context, query, project string, limit int) ([]model.Doc, error) {
+func (c *Client) SearchDocs(ctx context.Context, query, project string, limit int) ([]model.Doc, SearchMeta, error) {
 	data, _ := json.Marshal(buildDocSearchBody(query, project, limit))
 	resp, err := c.api.Search(ctx, &opensearchapi.SearchReq{
 		Indices: []string{c.cfg.DocsIndexName},
 		Body:    bytes.NewReader(data),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("search docs: %w", err)
+		return nil, SearchMeta{}, fmt.Errorf("search docs: %w", err)
 	}
+	meta := SearchMeta{Total: resp.Hits.Total.Value}
 	var docs []model.Doc
 	for _, hit := range resp.Hits.Hits {
 		var d model.Doc
 		if err := json.Unmarshal(hit.Source, &d); err != nil {
+			meta.Skipped++
 			continue
 		}
 		docs = append(docs, d)
 	}
-	return docs, nil
+	return docs, meta, nil
 }
 
 // FetchDoc is the full fetch pipeline: cache check → download → extract →

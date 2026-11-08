@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"context"
+	"io"
+	"strconv"
 
 	"github.com/NemoNobody/memento/internal/client"
 	"github.com/NemoNobody/memento/internal/config"
@@ -9,6 +11,17 @@ import (
 
 	"github.com/spf13/cobra"
 )
+
+// noteSkipped reports hits the store returned but memento could not decode.
+// Silent drops train agents (and users) to trust an incomplete view; a
+// visible note makes index corruption actionable.
+func noteSkipped(w io.Writer, meta client.SearchMeta) error {
+	if meta.Skipped <= 0 {
+		return nil
+	}
+	return writeLine(w, "note: "+strconv.Itoa(meta.Skipped)+
+		" matching hit(s) failed to decode (index corruption? report this to the user)")
+}
 
 // NewRootCmd builds and returns the root command with all subcommands
 // registered. It is safe to call multiple times: each call returns a fresh,

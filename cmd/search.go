@@ -27,7 +27,7 @@ func SearchCmd() *cobra.Command {
 			if err != nil {
 				fatalErr(err)
 			}
-			facts, err := c.Search(ctx, query, searchFlags.project, searchFlags.category, resolveStatus(searchFlags.status), searchFlags.limit)
+			facts, meta, err := c.Search(ctx, query, searchFlags.project, searchFlags.category, resolveStatus(searchFlags.status), searchFlags.limit)
 			if err != nil {
 				fatalErr(err)
 			}
@@ -35,9 +35,15 @@ func SearchCmd() *cobra.Command {
 				if err := writeLine(os.Stdout, "no matches"); err != nil {
 					fatalErr(err)
 				}
+				if err := noteSkipped(os.Stdout, meta); err != nil {
+					fatalErr(err)
+				}
 				return
 			}
 			if err := printFacts(os.Stdout, facts, time.Now().UTC()); err != nil {
+				fatalErr(err)
+			}
+			if err := noteSkipped(os.Stdout, meta); err != nil {
 				fatalErr(err)
 			}
 		},
