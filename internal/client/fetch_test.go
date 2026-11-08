@@ -129,7 +129,7 @@ func TestNormalizeURL(t *testing.T) {
 func TestBlockedHostGuard(t *testing.T) {
 	for _, h := range []string{
 		"127.0.0.1", "127.1.2.3", "::1", "0.0.0.0", "0.1.2.3",
-		"10.0.0.5", "172.16.0.1", "192.168.88.37", "169.254.169.254",
+		"10.0.0.5", "172.16.0.1", "192.168.1.50", "169.254.169.254",
 		"ff02::1", "224.0.0.1", "fc00::1", "fd12:3456::7",
 		"localhost", "api.localhost", "router.local", "svc.internal",
 		"box.home.arpa", "intranet.home", "a.test",
@@ -154,7 +154,7 @@ func TestNormalizeURLBlocksNonPublic(t *testing.T) {
 		"http://localhost/x",
 		"http://[::1]/x",
 		"http://169.254.169.254/latest/meta-data/",
-		"http://192.168.88.37/docs",
+		"http://192.168.1.50/docs",
 		"http://router.local/config",
 	} {
 		if _, err := NormalizeURL(bad); err == nil {

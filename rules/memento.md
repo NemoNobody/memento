@@ -19,7 +19,9 @@ Paste this into your always-on rules:
 - Qualifiers and doubts → `notes` ("checked the dev config only"). Subject gone → `memento_obsolete <key> [reason]`.
 - Reads return the current value only (`stale`/`age_days` included); history needs `include_history: true`. `stale: true` → re-verify against the source before trusting.
 - `memento_prune` is destructive: without `confirm: true` it only returns the plan; show the plan to the user and confirm only after their approval.
-- **Never store secrets** (passwords, tokens, keys) — the store is plaintext with no filter; the rule is on you.
+- **Never store secrets** (passwords, tokens, keys) — the store is plaintext;
+  a best-effort secret guard (default `reject`) scans writes, but it is not
+  protection: the rule is on you.
 - Store unreachable → say so (via `memento_status`); never silently re-verify and never retry in a loop.
 ```
 
@@ -115,9 +117,10 @@ user approves.
 
 ### Security
 
-- The store is **plaintext** and nothing filters what is written: never store
-  passwords, tokens, keys, or customer data. This rule is on you, not on the
-  store.
+- The store is **plaintext**. A best-effort secret guard (default mode
+  `reject`) scans what is written, but it can be bypassed by design: never
+  store passwords, tokens, keys, or customer data. This rule is on you, not
+  on the store.
 - Do not echo secrets in the conversation.
 
 ### Degradation (store unreachable)

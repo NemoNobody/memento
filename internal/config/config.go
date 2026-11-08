@@ -358,7 +358,8 @@ func keyringAccount(rawURL string) string {
 
 // fileConfig mirrors Config for JSON decoding. Fields are optional: a missing
 // key must leave the default in place. InsecureSkipVerify is a *bool so that
-// "absent" (keep default true) is distinguishable from an explicit false.
+// "absent" (keep the default false: TLS verification stays ON) is
+// distinguishable from an explicit true (opt in to unverified TLS).
 type fileConfig struct {
 	OpenSearchURL       string   `json:"opensearch_url"`
 	OpenSearchUser      string   `json:"opensearch_user"`
