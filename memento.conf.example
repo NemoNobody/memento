@@ -1,8 +1,7 @@
 {
   "opensearch_url": "https://127.0.0.1:9200",
   "opensearch_user": "your-user",
-  "opensearch_password": "your-password",
-  "insecure_skip_verify": true,
+  "insecure_skip_verify": false,
   "index_name": "memento",
   "history_limit": 20,
   "secret_guard": "reject",

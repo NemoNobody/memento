@@ -58,8 +58,7 @@ and fill in your OpenSearch connection.
 {
   "opensearch_url": "https://127.0.0.1:9200",
   "opensearch_user": "admin",
-  "opensearch_password": "<your-password>",
-  "insecure_skip_verify": true,
+  "insecure_skip_verify": false,
   "index_name": "memento",
   "history_limit": 20,
   "secret_guard": "reject",
@@ -68,6 +67,12 @@ and fill in your OpenSearch connection.
   "docs_ttl_days": 90
 }
 ```
+
+Do not put `opensearch_password` in the file: store the password in the OS
+keyring with `memento creds set`, or export `OPENSEARCH_PASSWORD` in
+containers/headless setups (a plaintext file password is only read with
+`allow_plaintext: true`, off by default). For a self-signed local dev node
+set `insecure_skip_verify: true` — dev only; verification is on by default.
 
 The index is created automatically on first use. Env vars override the file:
 `OPENSEARCH_URL`, `OPENSEARCH_USER`, `OPENSEARCH_PASSWORD`,
@@ -172,9 +177,12 @@ of defense.
 
 The Linux keyring provider (native D-Bus Secret Service) is the daily driver
 and is exercised live. The darwin/windows providers (system Keychain /
-Credential Manager via zalando/go-keyring) compile in CI (cross-build checks)
-and are unit-tested, but not smoke-tested on real Apple/Windows hardware by
-the author. Release binaries cover linux/amd64, linux/arm64 and darwin/arm64;
+Credential Manager via zalando/go-keyring) are compile-checked in CI
+(cross-build) and the credential-resolution logic around them is
+unit-tested with a fake provider, but the Keychain/Credential Manager
+backends themselves are not exercised in CI and not smoke-tested on real
+Apple/Windows hardware by the author. Release binaries cover linux/amd64,
+linux/arm64 and darwin/arm64;
 Windows builds are not published. If you are on those platforms and the
 keyring misbehaves, open an issue — reports from those machines are welcome.
 
