@@ -348,15 +348,17 @@ func storeError(op string, err error) error {
 
 // resolveStatus maps the status input to a filter. Empty means "trusted facts
 // only" — obsolete facts are superseded and must not be mistaken for current;
-// "any" disables the filter.
+// "any" disables the filter. Statuses are stored lowercase, so the input is
+// canonicalized: a case-sensitive miss would silently return zero matches.
 func resolveStatus(status string) string {
-	switch status {
+	s := strings.ToLower(strings.TrimSpace(status))
+	switch s {
 	case "":
 		return "verified"
 	case "any":
 		return ""
 	default:
-		return status
+		return s
 	}
 }
 

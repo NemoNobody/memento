@@ -346,6 +346,10 @@ func TestResolveStatus(t *testing.T) {
 		"":         "verified", // default: only trusted facts
 		"any":      "",         // explicit: no filter
 		"obsolete": "obsolete",
+		"VERIFIED": "verified", // stored statuses are lowercase: canonicalize
+		"Obsolete": "obsolete",
+		"Any":      "",
+		"  ":       "verified", // whitespace-only means "no filter given"
 	}
 	for in, want := range cases {
 		if got := resolveStatus(in); got != want {

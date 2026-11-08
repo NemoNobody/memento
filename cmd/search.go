@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -46,6 +47,15 @@ func SearchCmd() *cobra.Command {
 			}
 			if err := printFacts(os.Stdout, facts, time.Now().UTC()); err != nil {
 				fatalErr(err)
+			}
+			if meta.Total > len(facts) {
+				// The agent/user must know the answer set was cut, not that
+				// these are all the matches.
+				if err := writeLine(os.Stdout, "truncated: showing the first "+strconv.Itoa(len(facts))+
+					" of "+strconv.Itoa(meta.Total)+
+					" matches; raise --limit (0 = up to 1000) or narrow the query"); err != nil {
+					fatalErr(err)
+				}
 			}
 			if err := noteSkipped(os.Stdout, meta); err != nil {
 				fatalErr(err)

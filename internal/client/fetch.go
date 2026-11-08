@@ -254,6 +254,10 @@ func fetchHTTP(ctx context.Context, cfg *config.Config, normalizedURL string) (c
 
 	attempt := func(p *url.URL) (string, []byte, string, int, error) {
 		tr := http.DefaultTransport.(*http.Transport).Clone()
+		// The MCP server is long-lived and every fetch clones a fresh transport;
+		// idle keep-alive connections and their goroutines would leak. Registered
+		// first so LIFO runs it last, after the response body is closed.
+		defer tr.CloseIdleConnections()
 		if p != nil {
 			tr.Proxy = func(*http.Request) (*url.URL, error) { return p, nil }
 		} else if !cfg.FetchAllowPrivate {
