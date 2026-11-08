@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -133,5 +134,35 @@ func TestCheckRobots404FailsOpen(t *testing.T) {
 	srv := newRobotsServer(t, "", &hits) // no robots.txt handler: 404
 	if err := CheckRobots(context.Background(), robotsCfg(), srv.URL+"/secret"); err != nil {
 		t.Errorf("404 robots must fail open, got: %v", err)
+	}
+}
+
+// A cancelled robots fetch is the caller's deadline, not the host's verdict:
+// caching it would let one cancelled request poison (or blind) the host's
+// rules for the whole 24h TTL.
+func TestRobotsCancelledNotCached(t *testing.T) {
+	var hits int32
+	srv := newRobotsServer(t, "User-agent: memento\nDisallow: /secret\n", &hits)
+	cfg := robotsCfg()
+	u, err := url.Parse(srv.URL + "/secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if e := robotsFor(canceled, cfg, "http", u.Host); !e.bad {
+		t.Fatal("cancelled robots fetch must report failure")
+	}
+	if e := robotsFor(context.Background(), cfg, "http", u.Host); e.bad {
+		t.Error("the cancelled verdict was cached: the fresh call must refetch")
+	}
+	// The cancelled fetch died before the network (0 hits); the fresh call
+	// fetched (1 hit) and its verdict is real: /secret is disallowed.
+	if err := CheckRobots(context.Background(), cfg, srv.URL+"/secret"); err == nil {
+		t.Error("the re-fetched ruleset must enforce the disallow")
+	}
+	if n := atomic.LoadInt32(&hits); n != 1 {
+		t.Errorf("robots.txt fetched %d times, want 1 (the cancelled fetch must not be cached as bad)", n)
 	}
 }

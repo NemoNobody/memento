@@ -62,12 +62,16 @@ func CheckRobots(ctx context.Context, cfg *config.Config, normalizedURL string) 
 func robotsFor(ctx context.Context, cfg *config.Config, scheme, host string) robotsEntry {
 	key := scheme + "://" + host
 	robotsCache.Lock()
-	defer robotsCache.Unlock()
-	if e, ok := robotsCache.m[key]; ok && time.Since(e.fetched) < robotsTTL {
+	e, ok := robotsCache.m[key]
+	robotsCache.Unlock()
+	if ok && time.Since(e.fetched) < robotsTTL {
 		return e
 	}
-	e := robotsEntry{fetched: time.Now()}
+
+	// The fetch runs outside the lock: one slow robots.txt (up to the fetch
+	// timeout) must not serialize every other fetch in a long-lived server.
 	_, body, _, _, err := fetchHTTP(ctx, cfg, key+"/robots.txt")
+	e = robotsEntry{fetched: time.Now()}
 	switch {
 	case err != nil:
 		e.bad = true // includes 404: no ruleset means no restrictions
@@ -76,8 +80,25 @@ func robotsFor(ctx context.Context, cfg *config.Config, scheme, host string) rob
 	default:
 		e.groups = parseRobots(string(body))
 	}
+	if ctx.Err() != nil {
+		return e // the caller's cancellation says nothing about the host: do not cache it
+	}
+	robotsCache.Lock()
+	sweepRobotsCacheLocked()
 	robotsCache.m[key] = e
+	robotsCache.Unlock()
 	return e
+}
+
+// sweepRobotsCacheLocked drops entries older than the TTL: the cache is
+// process-lifetime, and a long-running MCP server must not accumulate every
+// host it ever touched.
+func sweepRobotsCacheLocked() {
+	for k, e := range robotsCache.m {
+		if time.Since(e.fetched) >= robotsTTL {
+			delete(robotsCache.m, k)
+		}
+	}
 }
 
 // parseRobots groups directives into (user-agent, rules) blocks per RFC 9309.
