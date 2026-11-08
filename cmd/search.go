@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -27,7 +28,10 @@ func SearchCmd() *cobra.Command {
 			if err != nil {
 				fatalErr(err)
 			}
-			facts, meta, err := c.Search(ctx, query, searchFlags.project, searchFlags.category, resolveStatus(searchFlags.status), searchFlags.limit)
+			// Write edges store the lowercase canonical category; the
+			// term filter is case-sensitive, so canonicalize the filter too
+			// (search -c Config must match stored "config").
+			facts, meta, err := c.Search(ctx, query, searchFlags.project, strings.ToLower(searchFlags.category), resolveStatus(searchFlags.status), searchFlags.limit)
 			if err != nil {
 				fatalErr(err)
 			}

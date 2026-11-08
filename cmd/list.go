@@ -45,7 +45,7 @@ func ListCmd() *cobra.Command {
 			if err := noteSkipped(os.Stdout, meta); err != nil {
 				fatalErr(err)
 			}
-			if len(facts) >= client.NavSizeCap {
+			if meta.Total > client.NavSizeCap {
 				if err := writeLine(os.Stdout, "truncated: showing the first "+strconv.Itoa(client.NavSizeCap)+" facts; narrow with --prefix"); err != nil {
 					fatalErr(err)
 				}

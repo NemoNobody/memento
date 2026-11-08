@@ -376,6 +376,9 @@ func (s *mcpServer) search(ctx context.Context, req *mcp.CallToolRequest, in sea
 	if limit > 50 {
 		limit = 50
 	}
+	// Write edges store the lowercase canonical category; the term filter is
+	// case-sensitive, so canonicalize the filter too.
+	in.Category = strings.ToLower(in.Category)
 	facts, meta, err := c.Search(ctx, in.Query, in.Project, in.Category, resolveStatus(in.Status), limit)
 	if err != nil {
 		return nil, factsOutput{}, storeError("memento_search", err)
