@@ -833,9 +833,10 @@ type docHitView struct {
 }
 
 type docsHitsOutput struct {
-	Count   int          `json:"count"`
-	Docs    []docHitView `json:"docs"`
-	Skipped int          `json:"skipped,omitempty" jsonschema:"stored documents whose content failed to decode (index corruption): report to the user"`
+	Count     int          `json:"count"`
+	Docs      []docHitView `json:"docs"`
+	Truncated bool         `json:"truncated,omitempty" jsonschema:"true when the store matched more documents than this page (cap 20): narrow the query before concluding there is nothing more; absent means complete"`
+	Skipped   int          `json:"skipped,omitempty" jsonschema:"stored documents whose content failed to decode (index corruption): report to the user"`
 }
 
 func (s *mcpServer) searchDocs(ctx context.Context, req *mcp.CallToolRequest, in searchDocsInput) (*mcp.CallToolResult, docsHitsOutput, error) {
@@ -866,5 +867,5 @@ func (s *mcpServer) searchDocs(ctx context.Context, req *mcp.CallToolRequest, in
 		}
 		hits = append(hits, h)
 	}
-	return nil, docsHitsOutput{Count: len(hits), Docs: hits, Skipped: meta.Skipped}, nil
+	return nil, docsHitsOutput{Count: len(hits), Truncated: meta.Total > len(hits), Skipped: meta.Skipped, Docs: hits}, nil
 }

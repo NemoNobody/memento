@@ -171,9 +171,12 @@ func DocsCmd() *cobra.Command {
 			if err != nil {
 				fatalErr(err)
 			}
-			if docsFlags.limit > client.DocsSearchCap && len(docs) >= client.DocsSearchCap {
-				if err := writeLine(os.Stdout, "note: the docs list is capped at "+strconv.Itoa(client.DocsSearchCap)+
-					" (the context budget); narrow the query to see specific documents"); err != nil {
+			if meta.Total > len(docs) {
+				// The page is cut: say so, even when the limit is below the
+				// cap (a silent 5-of-50 reads as "these are all the matches").
+				if err := writeLine(os.Stdout, "truncated: showing the first "+strconv.Itoa(len(docs))+
+					" of "+strconv.Itoa(meta.Total)+" matching documents; raise --limit (max "+
+					strconv.Itoa(client.DocsSearchCap)+", the context budget) or narrow the query"); err != nil {
 					fatalErr(err)
 				}
 			}
