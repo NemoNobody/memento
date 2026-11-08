@@ -75,9 +75,11 @@ Two details that matter:
   `PATH` is not a reliable place to look. If you install `memento` somewhere else,
   update this path.
 - **`--conf` with an absolute path.** The server is started from an arbitrary
-  working directory, so `./memento.conf` is unreliable. Without `--conf` the lookup
-  chain is `MEMENTO_CONF` → `./memento.conf` → next to the binary → `~/.memento.conf`;
-  `--conf` removes the guesswork.
+  working directory, so `./memento.conf` is unreliable. Without `--conf` the MCP
+  lookup chain is `MEMENTO_CONF` → next to the binary → `~/.memento.conf`; the
+  working-directory entry that the plain CLI uses is skipped on purpose — a cloned
+  repository's `memento.conf` must never hijack where your facts and credentials
+  are sent. `--conf` removes the guesswork.
 
 Do not put the OpenSearch password in the MCP config: it resolves from the OS
 keyring (`memento creds set`), `OPENSEARCH_PASSWORD`, or `memento.conf` (the
@@ -90,7 +92,7 @@ latter only when `allow_plaintext` is on).
 | `memento_status` | Is the store reachable? What is the effective config and storage state? | **Never fails** — `ok=false` plus a hint instead, so the agent can explain the problem; includes `password_from` (`env`/`keyring`/`file`/`none`, never the value) |
 | `memento_search` | Full-text search over fact values and notes | Trusted facts only by default; `status: "any"` includes obsolete ones; history off unless `include_history: true` |
 | `memento_get` | Exact fact by key | `found: false` when absent — not an error; history off unless `include_history: true` |
-| `memento_add` | Store a verified fact | Corrects by key: a new value moves the old one to history (trimmed to `history_limit`); the same value updates notes only; `secret_guard` rejects credential-like text before any store contact |
+| `memento_add` | Store a verified fact | Shape is validated before the guard and the store: non-empty `key`/`value`, and `category` one of `location`/`config`/`endpoint`/`behavior`/`context_map` (an unknown category never ages — silent rot). Corrects by key: a new value moves the old one to history (trimmed to `history_limit`); the same value updates notes only; `secret_guard` rejects credential-like text before any store contact |
 | `memento_list` | Facts of a project | Same trust default as search; `prefix` keeps only keys starting with it (trailing `*` allowed); history off unless `include_history: true` |
 | `memento_keys` | Find facts by key across all projects | `prefix` (key start) and/or `match` (key substring; `*`, `?` wildcards); at least one required; sorted by key; `project` is an optional filter; key matching is case-sensitive (keys conventionally lowercase) |
 | `memento_prune` | Drop old history entries under a key, keeping the newest `keep` | **DESTRUCTIVE** — without `confirm: true` nothing is written, the call returns the plan; show it to the user and re-call only after their approval |
@@ -102,6 +104,12 @@ latter only when `allow_plaintext` is on).
 Note: `memento_search` does **not** match keys — use `memento_get` for an exact
 key, `memento_keys` for key navigation (prefix/substring across projects).
 
+Facts tools answer with `count` and the honest truncation signal: `truncated:
+true` means the cluster saw more matches than the navigation cap (1000) —
+narrow the query; a page exactly filling the cap is a complete result.
+`skipped: N` means N stored hits failed to decode (index corruption): report
+it to the user; the answer is incomplete, never silently.
+
 The `secret_guard` (config, default `reject`) scans `memento_add` and
 `memento_obsolete` writes for credential-like text and refuses them before any
 store contact; findings come back as masked previews (the secret is never
@@ -110,8 +118,9 @@ explicit approval re-calls with `confirm_secret: true`; at `reject` there is no
 bypass.
 
 Every read carries `age_days` and `stale` (per-category TTL: `config`/`endpoint`
-14 days, `location`/`behavior` 30 days, `context_map` and unknown categories
-never). `stale: true` means re-verify against the source before trusting the
+14 days, `location`/`behavior` 30 days, `context_map` never; writes reject
+unknown categories, so a typo cannot create facts that rot in the dark).
+`stale: true` means re-verify against the source before trusting the
 fact — it is a signal, not a verdict.
 
 The store tools deliberately **fail** when OpenSearch is unreachable, while

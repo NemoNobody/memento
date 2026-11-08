@@ -37,7 +37,7 @@ staleness in context. The store never decides.
 | `memento_list <project>` | all facts of a project — session start |
 | `memento_search <query>` | search in `value` and `notes` (not in keys) |
 | `memento_get <key>` | exact key (`found=false` when absent) |
-| `memento_add <key> <value> [category] [project] [source] [notes]` | upsert |
+| `memento_add <key> <value> [category] [project] [source] [notes]` | upsert (categories: location, config, endpoint, behavior, context_map — unknown ones are rejected) |
 | `memento_prune <key> [keep]` | drop old history (destructive: plan first, `confirm=true` only after the user approves) |
 | `memento_obsolete <key> [reason]` | the subject is gone |
 
@@ -125,6 +125,9 @@ user approves.
 - `memento_status` → `ok=false` plus a hint; tell the user explicitly.
 - An empty answer is not "no such fact": the store tools fail loudly instead of
   staying silent.
+- A page reports `truncated` (the cluster saw more matches than the cap —
+  narrow the query) and `skipped` (stored content failed to decode — index
+  corruption: report to the user, never treat the answer as complete).
 - Do not retry in a loop.
 
 ### Session start
