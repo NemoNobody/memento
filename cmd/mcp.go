@@ -34,8 +34,10 @@ The server exposes the facts store to MCP clients (VS Code, agents) as tools.
 It speaks JSON-RPC on stdin/stdout, so it is normally started by the client,
 not by hand. Diagnostics go to stderr.
 
-Config resolution: --conf flag, then MEMENTO_CONF, then the default lookup chain
-(./memento.conf, next to the binary, ~/.memento.conf).`,
+Config resolution: --conf flag, then MEMENTO_CONF, then next to the binary,
+then ~/.memento.conf. The memento.conf in the working directory is ignored on
+purpose: the editor starts this server from the cwd of an arbitrary project,
+and a cloned repository's config must not hijack the store endpoint.`,
 		Args: cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
 			if err := runMCPServer(mcpFlags.conf); err != nil {
@@ -192,9 +194,11 @@ type statusInput struct{}
 
 // status reports connectivity and effective configuration. It is deliberately
 // error-free: it returns ok=false instead of failing, so an agent can relay the
-// problem to the user in words. The payload is shared with `memento status`.
+// problem to the user in words. The payload is shared with `memento status`,
+// but resolved through the MCP NoCWD chain: the report must describe the
+// config the store tools actually use, never a cwd file the tools ignore.
 func (s *mcpServer) status(ctx context.Context, req *mcp.CallToolRequest, _ statusInput) (*mcp.CallToolResult, statusReport, error) {
-	return nil, collectStatus(ctx, s.confPath), nil
+	return nil, collectStatus(ctx, s.confPath, true), nil
 }
 
 // ── store tools ──────────────────────────────────────────────────────────────
@@ -443,6 +447,10 @@ func (s *mcpServer) add(ctx context.Context, req *mcp.CallToolRequest, in addInp
 	if !model.ValidCategory(strings.ToLower(in.Category)) {
 		return nil, addOutput{}, fmt.Errorf("memento_add: unknown category %q (want location | config | endpoint | behavior | context_map)", in.Category)
 	}
+	// Canonicalize for storage: the TTL table and the search category filter
+	// are case-sensitive, so a mixed-case write would silently never age and
+	// never match category filters.
+	in.Category = strings.ToLower(in.Category)
 	if in.Project == "" {
 		in.Project = "global"
 	}

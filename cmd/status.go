@@ -74,10 +74,14 @@ type statusReport struct {
 }
 
 // resolvedConfigPath returns the config file that would be used, given an
-// optional explicit path.
-func resolvedConfigPath(explicit string) string {
+// optional explicit path. noCWD matches the caller's lookup chain: the MCP
+// server ignores the working directory (see FindConfigPathNoCWD).
+func resolvedConfigPath(explicit string, noCWD bool) string {
 	if explicit != "" {
 		return explicit
+	}
+	if noCWD {
+		return config.FindConfigPathNoCWD()
 	}
 	return config.FindConfigPath()
 }
@@ -108,12 +112,22 @@ func listNote(names []string) string {
 }
 
 // collectStatus gathers connectivity and configuration diagnostics. It never
-// returns an error: an unavailable store is reported, not raised.
-func collectStatus(ctx context.Context, confPath string) statusReport {
-	rep := statusReport{ConfigFile: resolvedConfigPath(confPath)}
+// returns an error: an unavailable store is reported, not raised. noCWD must
+// match the caller's config chain: when the MCP server reports the CWD chain
+// while its store tools use the NoCWD chain, the report is not the effective
+// configuration — and with a password in the environment the status request
+// sends the credentials to a cloned repo's hijack endpoint.
+func collectStatus(ctx context.Context, confPath string, noCWD bool) statusReport {
+	rep := statusReport{ConfigFile: resolvedConfigPath(confPath, noCWD)}
 	setEnvOverrides(&rep)
 
-	cfg, err := config.LoadConfigFrom(confPath)
+	var cfg *config.Config
+	var err error
+	if confPath == "" && noCWD {
+		cfg, err = config.LoadConfigNoCWD()
+	} else {
+		cfg, err = config.LoadConfigFrom(confPath)
+	}
 	if err != nil {
 		rep.Error = err.Error()
 		rep.Hint = "Fix the config file (or point --conf / MEMENTO_CONF at a valid one). See docs/setup.md."
@@ -218,7 +232,7 @@ func StatusCmd() *cobra.Command {
 		Short: "Check that OpenSearch is reachable and show the effective configuration",
 		Args:  cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			rep := collectStatus(context.Background(), statusFlags.conf)
+			rep := collectStatus(context.Background(), statusFlags.conf, false)
 			if err := printStatus(os.Stdout, rep); err != nil {
 				fatalErr(err)
 			}

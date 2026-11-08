@@ -20,6 +20,39 @@ func writeBody(t *testing.T, w http.ResponseWriter, body string) {
 	}
 }
 
+// TestFetchEnvProxySkipsDialGuard pins the proxy/guard boundary: an
+// HTTP_PROXY env route is user infra (like fetch_proxy_url) — the dial
+// target is the proxy (loopback proxies are legit), so the public-address
+// guard must not fire on it. Without a proxy the guard must still block
+// loopback targets at dial time.
+func TestFetchEnvProxySkipsDialGuard(t *testing.T) {
+	cfg := &config.Config{FetchTimeoutSeconds: 5}
+
+	// Proxied path: Go's ProxyFromEnvironment bypasses loopback targets, so
+	// the proxied URL must be a non-localhost host; the discard port (9)
+	// refuses the proxy dial fast, with no DNS and no network.
+	t.Setenv("HTTP_PROXY", "http://127.0.0.1:9")
+	t.Setenv("HTTPS_PROXY", "")
+	t.Setenv("NO_PROXY", "")
+	_, _, _, _, err := fetchHTTP(context.Background(), cfg, "http://example.invalid/x")
+	if err == nil {
+		t.Fatal("want failure against the discard proxy")
+	}
+	if strings.Contains(err.Error(), "refusing connection to non-public address") {
+		t.Errorf("env-proxy dial hit the target guard: %v", err)
+	}
+
+	// Direct path: no env proxy, loopback target → the dial guard fires.
+	t.Setenv("HTTP_PROXY", "")
+	_, _, _, _, err = fetchHTTP(context.Background(), cfg, "http://127.0.0.1:19/x")
+	if err == nil {
+		t.Fatal("want failure against loopback")
+	}
+	if !strings.Contains(err.Error(), "refusing connection to non-public address") {
+		t.Errorf("direct loopback dial must hit the guard: %v", err)
+	}
+}
+
 func TestNormalizeURL(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"example.com", "https://example.com/"},

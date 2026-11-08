@@ -231,7 +231,16 @@ func fetchHTTP(ctx context.Context, cfg *config.Config, normalizedURL string) (c
 		} else if !cfg.FetchAllowPrivate {
 			// Direct fetch: enforce the public-address rule on the resolved IP
 			// (closes DNS rebinding: the hostname check alone is not enough).
-			tr.DialContext = guardedDialContext()
+			// An env proxy (HTTP_PROXY, honored by the cloned transport) is
+			// user infra like fetch_proxy_url: the dial target is the proxy
+			// (loopback proxies are legit), so guard only truly direct dials.
+			if probe, perr := http.NewRequestWithContext(ctx, http.MethodGet, normalizedURL, nil); perr == nil {
+				if envProxy, perr := http.ProxyFromEnvironment(probe); perr != nil || envProxy == nil {
+					tr.DialContext = guardedDialContext()
+				}
+			} else {
+				tr.DialContext = guardedDialContext()
+			}
 		}
 		httpc := &http.Client{Timeout: timeout, Transport: tr}
 		httpc.CheckRedirect = func(req *http.Request, via []*http.Request) error {

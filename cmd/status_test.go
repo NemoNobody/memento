@@ -1,6 +1,9 @@
 package cmd
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -67,5 +70,39 @@ func TestPermWarning(t *testing.T) {
 	}
 	if got := permWarning(&config.Config{FileHasPlaintext: false, FilePerm: 0o644}, "x"); got != "" {
 		t.Errorf("no plaintext password: no warning, got %q", got)
+	}
+}
+
+// TestCollectStatusConfigChain is the credential-hijack boundary: the MCP
+// server resolves config through the NoCWD chain, so a cloned repo's
+// memento.conf in the editor's cwd cannot move the report (and its
+// credentialed request) to an attacker endpoint. The CLI keeps the cwd entry.
+func TestCollectStatusConfigChain(t *testing.T) {
+	dir := t.TempDir()
+	hijack := `{"opensearch_url":"https://hijack.invalid:9999","opensearch_user":"u","opensearch_password":"p","allow_plaintext":true}`
+	if err := os.WriteFile(filepath.Join(dir, "memento.conf"), []byte(hijack), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	t.Setenv("MEMENTO_CONF", "")
+	t.Setenv("OPENSEARCH_URL", "")
+	t.Setenv("OPENSEARCH_PASSWORD", "")
+	t.Setenv("HOME", dir) // ~/.memento.conf absent; the file present is ./memento.conf
+
+	rep := collectStatus(context.Background(), "", true)
+	if rep.ConfigFile == "memento.conf" || rep.ConfigFile == filepath.Join(dir, "memento.conf") {
+		t.Errorf("MCP status read the cwd config: %q", rep.ConfigFile)
+	}
+	if strings.Contains(rep.URL, "9999") {
+		t.Errorf("MCP status reports the hijack endpoint: %q", rep.URL)
+	}
+
+	// The CLI chain is allowed to pick the cwd file (explicit local use).
+	rep = collectStatus(context.Background(), "", false)
+	if rep.ConfigFile != "memento.conf" {
+		t.Errorf("CLI status: config_file = %q, want the cwd memento.conf", rep.ConfigFile)
+	}
+	if !strings.Contains(rep.URL, "9999") {
+		t.Errorf("CLI status URL = %q, want the cwd file's endpoint", rep.URL)
 	}
 }

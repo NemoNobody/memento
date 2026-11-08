@@ -177,8 +177,23 @@ func GitHubLocal(cfg *config.Config, normalizedURL string) (string, bool) {
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", false
 	}
-	if st, err := os.Stat(path); err != nil || !st.Mode().IsRegular() {
+	// The lexical check is not enough: a symlink committed into the repo
+	// (README.md -> ~/.ssh/id_rsa) passes it and resolves outside the clone.
+	// Evaluate symlinks and re-check containment against the resolved root.
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
 		return "", false
 	}
-	return path, true
+	root := dir
+	if r, err := filepath.EvalSymlinks(dir); err == nil {
+		root = r
+	}
+	rel, err = filepath.Rel(root, resolved)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	if st, err := os.Stat(resolved); err != nil || !st.Mode().IsRegular() {
+		return "", false
+	}
+	return resolved, true
 }

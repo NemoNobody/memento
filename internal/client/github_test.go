@@ -144,6 +144,19 @@ func TestGitHubLocal(t *testing.T) {
 	if _, ok := GitHubLocal(cfg, "https://github.com/NemoNobody/memento/blob/master/..%2Fsecret"); ok {
 		t.Error("path traversal must be rejected")
 	}
+	// committed/working-tree symlink escaping the clone: the lexical check
+	// passes it, the content is outside the repo (key-theft by cloning a
+	// hostile repo whose README.md -> ~/.ssh/id_rsa)
+	secret := filepath.Join(root, "id_secret")
+	if err := os.WriteFile(secret, []byte("private"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, filepath.Join(repoDir, "ESCAPE.md")); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := GitHubLocal(cfg, "https://github.com/NemoNobody/memento/blob/master/ESCAPE.md"); ok {
+		t.Error("symlink escaping the clone root must be rejected")
+	}
 	// other repo
 	if _, ok := GitHubLocal(cfg, "https://github.com/other/memento/blob/master/README.md"); ok {
 		t.Error("other owner must not hit")
