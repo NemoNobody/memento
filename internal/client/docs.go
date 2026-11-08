@@ -90,6 +90,9 @@ func (c *Client) EnsureDocsIndex(ctx context.Context) error {
 		Index: c.cfg.DocsIndexName,
 		Body:  bytes.NewReader(body),
 	}); err != nil {
+		if isAlreadyExists(err) {
+			return nil // lost the create race to a concurrent process: the index is there
+		}
 		return wrapWriteError("create docs index", err)
 	}
 	return nil

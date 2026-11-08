@@ -187,6 +187,29 @@ func TestEnsureIndexCreatesWhenMissing(t *testing.T) {
 	}
 }
 
+// TestEnsureIndexToleratesCreateRace pins the TOCTOU fix: two fresh clients
+// (two Zed windows, CLI + MCP) can both see HEAD 404 and race to create; the
+// loser's resource_already_exists_exception is a success, not a tool failure.
+func TestEnsureIndexToleratesCreateRace(t *testing.T) {
+	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
+		switch {
+		case r.Method == http.MethodHead:
+			return http.StatusNotFound, `{"status":404,"error":"index_not_found_exception"}`
+		case r.Method == http.MethodPut && r.Path == "/memento":
+			return http.StatusBadRequest,
+				`{"error":{"type":"resource_already_exists_exception","reason":"index [memento/uuid] already exists"},"status":400}`
+		}
+		return http.StatusInternalServerError, `{"status":500,"error":"unexpected"}`
+	})
+
+	if err := c.EnsureIndex(context.Background()); err != nil {
+		t.Fatalf("losing the create race must be success, got: %v", err)
+	}
+	if puts := fake.requestsFor(http.MethodPut, "/memento"); len(puts) != 1 {
+		t.Fatalf("expected exactly one create attempt, got %d", len(puts))
+	}
+}
+
 // TestGetUsesRealtimeDocumentAPI pins the read-after-write fix: reads must use the
 // realtime document endpoint, not a search (which lags behind the refresh).
 func TestGetUsesRealtimeDocumentAPI(t *testing.T) {

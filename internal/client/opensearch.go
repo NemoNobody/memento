@@ -68,6 +68,15 @@ func isNotFound(err error) bool {
 	return false
 }
 
+// isAlreadyExists reports OpenSearch's "the index you are creating is already
+// there". Two memento processes on a fresh cluster (two Zed windows, CLI +
+// MCP) both pass the HEAD check and race to create the index; the loser must
+// treat the collision as success, not as a tool failure.
+func isAlreadyExists(err error) bool {
+	var ste *opensearch.StructError
+	return errors.As(err, &ste) && ste.Err.Type == "resource_already_exists_exception"
+}
+
 // isClusterBlock reports whether the error is OpenSearch refusing a write
 // because of a cluster or index block — typically the disk flood stage turning
 // indices read-only, or an explicit read-only block.
@@ -165,6 +174,9 @@ func (c *Client) EnsureIndex(ctx context.Context) error {
 		Index: c.cfg.IndexName,
 		Body:  bytes.NewReader(body),
 	}); err != nil {
+		if isAlreadyExists(err) {
+			return nil // lost the create race to a concurrent process: the index is there
+		}
 		return wrapWriteError("create index", err)
 	}
 	return nil
