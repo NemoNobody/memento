@@ -349,16 +349,19 @@ func storeError(op string, err error) error {
 // resolveStatus maps the status input to a filter. Empty means "trusted facts
 // only" — obsolete facts are superseded and must not be mistaken for current;
 // "any" disables the filter. Statuses are stored lowercase, so the input is
-// canonicalized: a case-sensitive miss would silently return zero matches.
-func resolveStatus(status string) string {
+// canonicalized; an unknown spelling is a loud error, because a case-sensitive
+// term filter silently matching zero facts reads to the agent as "no data".
+func resolveStatus(status string) (string, error) {
 	s := strings.ToLower(strings.TrimSpace(status))
 	switch s {
 	case "":
-		return "verified"
+		return "verified", nil
 	case "any":
-		return ""
+		return "", nil
+	case "verified", "obsolete":
+		return s, nil
 	default:
-		return s
+		return "", fmt.Errorf("unknown status %q: use verified, obsolete, or any", status)
 	}
 }
 
@@ -385,14 +388,18 @@ func (s *mcpServer) search(ctx context.Context, req *mcp.CallToolRequest, in sea
 	}
 	// Write edges store the lowercase canonical category; the term filter is
 	// case-sensitive, so canonicalize the filter too.
-	in.Category = strings.ToLower(in.Category)
-	facts, meta, err := c.Search(ctx, in.Query, in.Project, in.Category, resolveStatus(in.Status), limit)
+	in.Category = strings.ToLower(strings.TrimSpace(in.Category))
+	status, serr := resolveStatus(in.Status)
+	if serr != nil {
+		return nil, factsOutput{}, serr
+	}
+	facts, meta, err := c.Search(ctx, in.Query, in.Project, in.Category, status, limit)
 	if err != nil {
 		return nil, factsOutput{}, storeError("memento_search", err)
 	}
 	return nil, factsOutput{
 		Count:     len(facts),
-		Truncated: meta.Total > len(facts),
+		Truncated: meta.Total > len(facts)+meta.Skipped,
 		Skipped:   meta.Skipped,
 		Facts:     newFactViews(facts, in.IncludeHistory),
 	}, nil
@@ -515,7 +522,11 @@ func (s *mcpServer) list(ctx context.Context, req *mcp.CallToolRequest, in listI
 	rawLen := meta.Total
 	// List has no server-side status filter, so apply it here to keep the
 	// "trusted only by default" guarantee.
-	if status := resolveStatus(in.Status); status != "" {
+	status, serr := resolveStatus(in.Status)
+	if serr != nil {
+		return nil, factsOutput{}, serr
+	}
+	if status != "" {
 		kept := facts[:0]
 		for _, f := range facts {
 			if f.Status == status {
@@ -551,7 +562,11 @@ func (s *mcpServer) keys(ctx context.Context, req *mcp.CallToolRequest, in keysI
 	if err != nil {
 		return nil, factsOutput{}, storeError("memento_keys", err)
 	}
-	facts, meta, err := c.Keys(ctx, in.Prefix, in.Match, in.Project, resolveStatus(in.Status))
+	status, serr := resolveStatus(in.Status)
+	if serr != nil {
+		return nil, factsOutput{}, serr
+	}
+	facts, meta, err := c.Keys(ctx, in.Prefix, in.Match, in.Project, status)
 	if err != nil {
 		return nil, factsOutput{}, storeError("memento_keys", err)
 	}
@@ -609,6 +624,7 @@ type pruneOutput struct {
 	Keep         int    `json:"keep" jsonschema:"history entries that survive"`
 	Removed      int    `json:"removed" jsonschema:"entries deleted (0 when nothing was written)"`
 	Pruned       bool   `json:"pruned" jsonschema:"true when history was actually rewritten"`
+	Plan         string `json:"plan,omitempty" jsonschema:"no-write preview: what confirm=true would destroy. Relay it to the user and re-call with confirm=true only after their approval"`
 }
 
 // prune is destructive, so it carries the same barrier as the CLI: without
@@ -640,11 +656,19 @@ func (s *mcpServer) prune(ctx context.Context, req *mcp.CallToolRequest, in prun
 		return nil, pruneOutput{Key: in.Key, HistoryTotal: total, Keep: total, Removed: 0}, nil
 	}
 	if !in.Confirm {
-		// The barrier: describe the plan, write nothing.
-		return nil, pruneOutput{}, fmt.Errorf("memento_prune is destructive: key %q has %d history "+
-			"entries; keeping the newest %d would drop %d observations for good. Nothing was written. "+
-			"Show this plan to the user and re-call with confirm=true only after their approval",
-			in.Key, total, keep, total-keep)
+		// The barrier: report the plan as a normal result and write nothing.
+		// The plan is the deliverable of this call, not a failure: error-shaped
+		// results get dropped by clients that swallow tool errors, silently
+		// removing the safety barrier the agent must relay to the user.
+		return nil, pruneOutput{
+			Key:          in.Key,
+			HistoryTotal: total,
+			Keep:         keep,
+			Removed:      0,
+			Pruned:       false,
+			Plan: fmt.Sprintf("key %q has %d history entries; confirm=true keeps the newest %d and drops %d observations for good. Nothing was written. Show this plan to the user and re-call with confirm=true only after their approval",
+				in.Key, total, keep, total-keep),
+		}, nil
 	}
 	removed, err := c.Prune(ctx, in.Key, keep)
 	if err != nil {
@@ -868,5 +892,5 @@ func (s *mcpServer) searchDocs(ctx context.Context, req *mcp.CallToolRequest, in
 		}
 		hits = append(hits, h)
 	}
-	return nil, docsHitsOutput{Count: len(hits), Truncated: meta.Total > len(hits), Skipped: meta.Skipped, Docs: hits}, nil
+	return nil, docsHitsOutput{Count: len(hits), Truncated: meta.Total > len(hits)+meta.Skipped, Skipped: meta.Skipped, Docs: hits}, nil
 }

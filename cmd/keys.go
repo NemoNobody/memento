@@ -44,7 +44,11 @@ func KeysCmd() *cobra.Command {
 			if err != nil {
 				fatalErr(err)
 			}
-			facts, meta, err := c.Keys(ctx, prefix, keysFlags.match, keysFlags.project, resolveStatus(keysFlags.status))
+			status, serr := resolveStatus(keysFlags.status)
+			if serr != nil {
+				fatalErr(serr)
+			}
+			facts, meta, err := c.Keys(ctx, prefix, keysFlags.match, keysFlags.project, status)
 			if err != nil {
 				fatalErr(err)
 			}

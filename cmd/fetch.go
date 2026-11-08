@@ -173,9 +173,11 @@ func DocsCmd() *cobra.Command {
 			if err != nil {
 				fatalErr(err)
 			}
-			if meta.Total > len(docs) {
+			if meta.Total > len(docs)+meta.Skipped {
 				// The page is cut: say so, even when the limit is below the
 				// cap (a silent 5-of-50 reads as "these are all the matches").
+				// Skipped docs are reported by noteSkipped and are not
+				// recoverable via --limit, so they do not count here.
 				if err := writeLine(os.Stdout, "truncated: showing the first "+strconv.Itoa(len(docs))+
 					" of "+strconv.Itoa(meta.Total)+" matching documents; raise --limit (max "+
 					strconv.Itoa(client.DocsSearchCap)+", the context budget) or narrow the query"); err != nil {

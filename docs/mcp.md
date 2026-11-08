@@ -97,7 +97,7 @@ latter only when `allow_plaintext` is on).
 | `memento_keys` | Find facts by key across all projects | `prefix` (key start) and/or `match` (key substring; `*`, `?` wildcards); at least one required; sorted by key; `project` is an optional filter; key matching is case-sensitive (keys conventionally lowercase) |
 | `memento_prune` | Drop old history entries under a key, keeping the newest `keep` | **DESTRUCTIVE** — without `confirm: true` nothing is written, the call returns the plan; show it to the user and re-call only after their approval |
 | `memento_obsolete` | Mark a fact obsolete because its subject is gone | Value is kept for reference; the reason is appended to notes and passes the `secret_guard`. Use `memento_add` when the value merely changed |
-| `memento_fetch_doc` | Fetch a web page into the docs index, return its outline (hash + sections) | Cache-aware: a second fetch of the same URL returns the stored snapshot (`cached: true`) until its TTL; `refresh: true` forces a download. Requests send no cookies and no credentials; a host outside `fetch_allow_hosts` is rejected before the request. Internal addresses (loopback, private, link-local incl. cloud metadata) are refused at every hop and at dial time — the SSRF guard; `fetch_allow_private: true` is the opt-in for self-hosted docs on a LAN. GitHub URLs that match a local clone resolve to a local path (`local: true`) with no fetch and no store write. The `secret_guard` scans the extracted text before the store write |
+| `memento_fetch_doc` | Fetch a web page into the docs index, return its outline (hash + sections) | Cache-aware: a second fetch of the same URL returns the stored snapshot (`cached: true`) until its TTL; `refresh: true` forces a download; passing a different `project` re-tags the stored snapshot. Requests send no cookies and no credentials; a host outside `fetch_allow_hosts` is rejected before the request. Internal addresses (loopback, private, link-local incl. cloud metadata) are refused at every hop and at dial time — the SSRF guard; `fetch_allow_private: true` is the opt-in for self-hosted docs on a LAN. GitHub URLs that match a local clone resolve to a local path (`local: true`) with no fetch and no store write. The `secret_guard` scans the extracted text before the store write; high-confidence credential shapes are redacted inside the stored raw HTML (it is never served to agents), while generic shapes (asset hashes, inline data: images) are left alone |
 | `memento_get_doc` | Read a stored snapshot by hash: outline / `section: N` text / `full: true` | Never touches the network; `found: false` is an answer, not an error; `stale: true` means the snapshot is past its TTL — refresh with `memento_fetch_doc` before quoting. Prefer one section: `full` bloats the context |
 | `memento_search_docs` | BM25 search over stored page sections | Returns hash+url+title+snippet per doc (default limit 5, cap 20); the raw html is write-only and never searched; pull text with `memento_get_doc` |
 
@@ -111,7 +111,9 @@ narrowing the query); for `memento_list`/`memento_keys` it is the navigation
 cap (1000) — narrow with prefix/project/status. A page exactly filling its cap
 is a complete result. `skipped: N` means N stored hits failed to decode
 (index corruption): report it to the user; the answer is incomplete, never
-silently.
+silently. `memento_search_docs` answers with the same signals: `truncated: true`
+means the docs index holds more matches than this page (cap 20) — narrow the
+query before concluding there is nothing more.
 
 The `secret_guard` (config, default `reject`) scans `memento_add` and
 `memento_obsolete` writes for credential-like text and refuses them before any

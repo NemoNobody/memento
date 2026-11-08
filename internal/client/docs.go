@@ -200,6 +200,24 @@ func (c *Client) SearchDocs(ctx context.Context, query, project string, limit in
 	return docs, meta, nil
 }
 
+// tagDocProject rewrites only the project field of a stored doc (the cache-hit
+// retag). The doc id in the docs index is the url hash.
+func (c *Client) tagDocProject(ctx context.Context, hash, project string) error {
+	body, _ := json.Marshal(map[string]interface{}{
+		"doc": map[string]interface{}{"project": project},
+	})
+	_, err := c.api.Update(ctx, opensearchapi.UpdateReq{
+		Index:      c.cfg.DocsIndexName,
+		DocumentID: hash,
+		Body:       bytes.NewReader(body),
+		Params:     opensearchapi.UpdateParams{Refresh: "wait_for"},
+	})
+	if err != nil {
+		return wrapWriteError("tag doc", err)
+	}
+	return nil
+}
+
 // FetchDoc is the full fetch pipeline: cache check → download → extract →
 // guard → store. cached=true means the stored snapshot was fresh and the
 // network was not touched at all. A stale snapshot is refetched (stale is an
@@ -220,6 +238,17 @@ func (c *Client) FetchDoc(ctx context.Context, rawURL, project string, refresh b
 		existing, err := c.GetDocByHash(ctx, hash)
 		switch {
 		case err == nil && !existing.Stale(time.Now().UTC()):
+			if project != "" && existing.Project != project {
+				// The first fetch's tag must not be permanent: projects share
+				// the URL cache on purpose, and the requested tag is part of
+				// the tool contract ("tag the document with this project").
+				// Silently ignoring it would hide the doc from the new
+				// project's searches forever.
+				if err := c.tagDocProject(ctx, hash, project); err != nil {
+					return nil, false, err
+				}
+				existing.Project = project
+			}
 			return existing, true, nil
 		case err != nil && !errors.Is(err, ErrNoDoc):
 			return nil, false, fmt.Errorf("fetch doc: %w", err)

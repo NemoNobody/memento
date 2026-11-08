@@ -352,9 +352,18 @@ func TestResolveStatus(t *testing.T) {
 		"  ":       "verified", // whitespace-only means "no filter given"
 	}
 	for in, want := range cases {
-		if got := resolveStatus(in); got != want {
+		got, err := resolveStatus(in)
+		if err != nil {
+			t.Errorf("resolveStatus(%q): unexpected error %v", in, err)
+			continue
+		}
+		if got != want {
 			t.Errorf("resolveStatus(%q) = %q, want %q", in, got, want)
 		}
+	}
+	// An unknown spelling must be a loud error, not a silent zero-match filter.
+	if _, err := resolveStatus("bogus"); err == nil {
+		t.Error("resolveStatus(bogus): want error, got nil")
 	}
 }
 

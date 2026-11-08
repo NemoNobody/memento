@@ -207,6 +207,7 @@ if (params.history_limit > 0) {
   while (ctx._source.history.size() > params.history_limit) { ctx._source.history.remove(0); }
 }
 ctx._source.value = params.value;
+ctx._source.category = params.category;
 ctx._source.observed_at = params.observed_at;
 ctx._source.source = params.source;
 if (params.notes != null && params.notes != '') { ctx._source.notes = params.notes; }
@@ -223,6 +224,10 @@ ctx._source.updated_at = params.updated_at;
 // Notes are only replaced by a non-empty new note: the CLI flag and the MCP
 // field default to empty, and a correction without --notes must not silently
 // erase the qualifiers (they are not kept in history, so erasure is irreversible).
+//
+// The category moves with the correction on both update paths: the write edge
+// validates and canonicalizes it, and a fact stored with the wrong category
+// must not keep the wrong staleness TTL forever (category drives stale).
 //
 // It reports whether the fact was newly created. Writes wait for a refresh, so
 // the fact is immediately visible to subsequent Search/List calls.
@@ -253,6 +258,7 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (created bool, err erro
 	if existing.Value == f.Value {
 		doc := map[string]interface{}{
 			"source":     f.Source,
+			"category":   f.Category,
 			"status":     "verified",
 			"updated_at": now,
 		}
@@ -280,6 +286,7 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (created bool, err erro
 			"source": addCorrectionScript,
 			"params": map[string]interface{}{
 				"value":         f.Value,
+				"category":      f.Category,
 				"observed_at":   f.ObservedAt.UTC().Format(time.RFC3339),
 				"source":        f.Source,
 				"notes":         f.Notes,
