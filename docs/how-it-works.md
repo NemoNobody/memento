@@ -159,6 +159,10 @@ Guarantees and limits:
 - Detection is regex-based best effort: a secret without a recognizable shape
   passes. A false positive is possible too — a 40-character git SHA in notes
   matches `long-hex`; at `ask` the confirmation flag is the escape hatch.
+- The fetched-page path scans the extracted text with the full set (a finding
+  rejects/asks like above) and redacts high-confidence credential shapes
+  inside the stored raw HTML: the generic shapes fire on ordinary markup
+  (asset hashes, inline data: images), and the HTML is never served to agents.
 
 ## Auth
 

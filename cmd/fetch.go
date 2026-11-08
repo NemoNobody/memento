@@ -12,6 +12,7 @@ import (
 	"github.com/NemoNobody/memento/internal/client"
 	"github.com/NemoNobody/memento/internal/config"
 	"github.com/NemoNobody/memento/internal/model"
+	"github.com/NemoNobody/memento/internal/secretguard"
 
 	"github.com/spf13/cobra"
 )
@@ -204,17 +205,25 @@ func DocsCmd() *cobra.Command {
 	return cmd
 }
 
-// guardFetch scans the extracted text and the raw HTML with the secret guard
-// before the store write. Page text is untrusted: a scraped page can quote
-// credentials, and every later read of the doc would expose them (the store
-// is plaintext). The raw HTML is scanned too: it is stored, and a secret can
-// hide in markup the extractor drops (a <script> body, an attribute).
+// guardFetch enforces the secret guard on a fetched page before the store
+// write, in two modes matched to what the field is used for:
+//
+//   - The text the agent reads (title, sections, image alt/title) is scanned
+//     with the full pattern set and the write is refused on a finding: page
+//     text is untrusted input and the store is plaintext.
+//   - The stored raw HTML is never served to agents, and the generic shapes
+//     (long hex/base64/opaque) fire on ordinary markup (asset hashes, inline
+//     data: images), so rejecting on them made normal pages uncacheable.
+//     High-confidence credential shapes are redacted inside the stored HTML
+//     instead: the plaintext store stays clean without false positives.
 func guardFetch(doc *model.Doc, level string, allowed bool) error {
+	if level != config.GuardAllow {
+		doc.HTML, _ = secretguard.Redact("html", doc.HTML)
+	}
 	fields := []guardField{
 		{Name: "title", Text: doc.Title},
 		{Name: "url", Text: doc.URL},
 		{Name: "project", Text: doc.Project},
-		{Name: "html", Text: doc.HTML},
 	}
 	for i, s := range doc.Sections {
 		// Headings are echoed by the outline path, so they are scanned too.

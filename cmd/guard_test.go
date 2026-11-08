@@ -68,20 +68,45 @@ func TestGuardCheckMessageIsMasked(t *testing.T) {
 }
 
 // The stored doc carries the raw HTML; a secret can hide in markup the
-// extractor drops (a <script> body, an attribute). The guard must scan it:
-// what reaches the plaintext store must pass the guard.
-func TestGuardFetchScansStoredHTML(t *testing.T) {
+// extractor drops (a <script> body, an attribute). The HTML is never served
+// to agents and the generic shapes fire on ordinary markup, so a
+// high-confidence secret in HTML is redacted inside the stored copy (the
+// write proceeds, the plaintext store stays clean) — while a secret in the
+// extracted text the agent reads refuses the write.
+func TestGuardFetchRedactsStoredHTML(t *testing.T) {
 	doc := &model.Doc{
 		Title:    "Page",
 		URL:      "https://example.com/x",
 		Sections: []model.Section{{Order: 0, Heading: "H", Text: "clean text"}},
 		HTML:     `<script>const k = "` + guardSentinel + `";</script><p>prose</p>`,
 	}
-	if err := guardFetch(doc, config.GuardReject, false); err == nil {
-		t.Fatal("secret in stored html must be caught before the store write")
-	}
-	doc.HTML = "<html><body><p>plain prose</p></body></html>"
 	if err := guardFetch(doc, config.GuardReject, false); err != nil {
-		t.Fatalf("clean doc rejected: %v", err)
+		t.Fatalf("html secret must be redacted, not reject the write: %v", err)
+	}
+	if strings.Contains(doc.HTML, guardSentinel) {
+		t.Errorf("the secret survived the html redaction: %s", doc.HTML)
+	}
+	if !strings.Contains(doc.HTML, "[memento-redacted:aws-access-key]") {
+		t.Errorf("redaction marker missing: %s", doc.HTML)
+	}
+	if !strings.Contains(doc.HTML, "prose") {
+		t.Errorf("redaction destroyed the surrounding content: %s", doc.HTML)
+	}
+
+	// Generic shapes (data: images, asset hashes) must survive untouched:
+	// redacting them was the false positive that made normal pages unusable.
+	doc.HTML = `<img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABGdCCgQAUQIAAAAAAAAAAAAAAAAABgUAAEg="><p>prose</p>`
+	if err := guardFetch(doc, config.GuardReject, false); err != nil {
+		t.Fatalf("data-uri image must not be redacted: %v", err)
+	}
+	if !strings.Contains(doc.HTML, "iVBORw0KGgo") {
+		t.Errorf("generic base64 blob was redacted: %s", doc.HTML)
+	}
+
+	// A secret in the extracted text (what the agent reads) still refuses.
+	doc.HTML = "<html><body><p>plain prose</p></body></html>"
+	doc.Sections = []model.Section{{Order: 0, Heading: "H", Text: "the key is " + guardSentinel}}
+	if err := guardFetch(doc, config.GuardReject, false); err == nil {
+		t.Fatal("secret in section text must reject the write")
 	}
 }
