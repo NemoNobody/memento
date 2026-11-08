@@ -138,16 +138,18 @@ func NormalizeURL(raw string) (string, error) {
 	if u.Host == "" {
 		return "", fmt.Errorf("fetch: url %q has no host", config.RedactURL(raw))
 	}
+	if u.User != nil {
+		// Credentials in a URL are a leak vector (they reach the target host);
+		// the fetcher never sends them and refuses to accept them. The message
+		// carries the REDACTED url: raw contains the password itself. This check
+		// must precede the blocked-host one: u.Host embeds the userinfo
+		// ("admin:secret@host"), so its message would echo the password.
+		return "", fmt.Errorf("fetch: url %q carries user info; remove credentials from the url", config.RedactURL(raw))
+	}
 	if blockedHost(strings.ToLower(u.Hostname())) {
 		return "", fmt.Errorf(
 			"fetch: host %q is not a public address; fetch refuses loopback/private/link-local targets "+
 				"(opt in with fetch_allow_private for self-hosted docs)", u.Host)
-	}
-	if u.User != nil {
-		// Credentials in a URL are a leak vector (they reach the target host);
-		// the fetcher never sends them and refuses to accept them. The message
-		// carries the REDACTED url: raw contains the password itself.
-		return "", fmt.Errorf("fetch: url %q carries user info; remove credentials from the url", config.RedactURL(raw))
 	}
 	q := u.Query()
 	for k := range q {
@@ -309,7 +311,9 @@ func fetchHTTP(ctx context.Context, cfg *config.Config, normalizedURL string) (c
 				return fmt.Errorf("fetch: redirect chain: %w", err)
 			}
 			if !cfg.FetchAllowPrivate && blockedHost(strings.ToLower(req.URL.Hostname())) {
-				return fmt.Errorf("fetch: redirect chain: %s is not a public address", req.URL.Host)
+				// Hostname(), not Host: a Location header can carry userinfo,
+				// and the message reaches agent context.
+				return fmt.Errorf("fetch: redirect chain: %s is not a public address", req.URL.Hostname())
 			}
 			return nil
 		}

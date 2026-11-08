@@ -42,14 +42,42 @@ keyring entry; the stored value is never printed.`,
 func accountFor(rawURL string) string {
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Host == "" {
+		if strings.Contains(rawURL, "@") {
+			// An unparseable url with credentials must never be echoed back:
+			// the echo would print the password to the terminal and history.
+			return "<url with user info>"
+		}
 		return rawURL
 	}
 	return u.Host
 }
 
+// refuseUserinfo rejects a url that carries credentials: the prompt, the
+// "stored: account=..." line and creds status all quote the target, so a
+// password in the url would leak to the terminal and shell history. The
+// error text never quotes the url itself.
+func refuseUserinfo(raw string) error {
+	u, err := url.Parse(raw)
+	if err == nil {
+		if u.User != nil {
+			return errors.New("the url carries user info; remove credentials from the url")
+		}
+		return nil
+	}
+	if strings.Contains(raw, "@") {
+		// Parse failure: config.RedactURL returns the raw text back, and the
+		// parse error echoes the input, so report a fixed non-echoing message.
+		return errors.New("the url carries user info; remove credentials from the url")
+	}
+	return nil
+}
+
 // credsTarget resolves the URL whose host keys the keyring entry.
 func credsTarget() (string, error) {
 	if credsFlags.url != "" {
+		if err := refuseUserinfo(credsFlags.url); err != nil {
+			return "", err
+		}
 		return credsFlags.url, nil
 	}
 	cfg, err := config.LoadConfig()
@@ -103,7 +131,11 @@ func credsStatusCmd() *cobra.Command {
 			// a different host, so it is not shown.
 			var cfg *config.Config
 			target := credsFlags.url
-			if target == "" {
+			if target != "" {
+				if err := refuseUserinfo(target); err != nil {
+					fatalErr(err)
+				}
+			} else {
 				c, cerr := config.LoadConfig()
 				if cerr != nil {
 					fatalErr(cerr)

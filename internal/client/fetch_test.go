@@ -112,7 +112,7 @@ func TestNormalizeURL(t *testing.T) {
 
 	// The refusal messages must not echo the credentials: they reach agent
 	// context and MCP client logs.
-	for _, secretURL := range []string{"https://admin:hunter2@example.com/x", "http://u:p%zz@proxy:3128"} {
+	for _, secretURL := range []string{"https://admin:hunter2@example.com/x", "http://u:p%zz@proxy:3128", "https://admin:hunter2@127.0.0.1/"} {
 		_, err := NormalizeURL(secretURL)
 		if err == nil {
 			t.Fatalf("NormalizeURL(%q): want error, got nil", secretURL)

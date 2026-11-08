@@ -121,6 +121,51 @@ func TestCredsSetPipedAndRm(t *testing.T) {
 	}
 }
 
+// The credential-leak guards: a --url carrying userinfo must be refused, and
+// no code path may echo the password back (prompts, "stored:" lines, status).
+func TestCredsRefuseUserinfo(t *testing.T) {
+	credsTestEnv(t)
+	fakeKeyringCmd(t)
+
+	for _, raw := range []string{
+		"https://admin:hunter2@os.test:9200",
+		"https://admin:hunter2@os%test:9200", // parse failure with "@": no echo
+	} {
+		if err := refuseUserinfo(raw); err == nil {
+			t.Errorf("refuseUserinfo(%q): want error, got nil", raw)
+		} else if strings.Contains(err.Error(), "hunter2") {
+			t.Errorf("refuseUserinfo echoes the password: %v", err)
+		}
+	}
+	for _, ok := range []string{"https://os.test:9200", "http://localhost:9200"} {
+		if err := refuseUserinfo(ok); err != nil {
+			t.Errorf("refuseUserinfo(%q): %v, want nil", ok, err)
+		}
+	}
+
+	// accountFor must never return a string carrying the credentials.
+	if got := accountFor("https://admin:hunter2@os.test:9200"); got != "os.test:9200" {
+		t.Errorf("accountFor userinfo url = %q, want the bare host", got)
+	}
+	if got := accountFor("https://admin:hunter2@os%test:9200"); strings.Contains(got, "hunter2") {
+		t.Errorf("accountFor echoes the password on parse failure: %q", got)
+	}
+
+	// credsTarget (used by set and rm) refuses the userinfo flag.
+	old := credsFlags.url
+	t.Cleanup(func() { credsFlags.url = old })
+	credsFlags.url = "https://admin:hunter2@os.test:9200"
+	if _, err := credsTarget(); err == nil {
+		t.Error("credsTarget: want refusal for userinfo --url, got nil")
+	} else if strings.Contains(err.Error(), "hunter2") {
+		t.Errorf("credsTarget echoes the password: %v", err)
+	}
+	credsFlags.url = "https://os.test:9200"
+	if got, err := credsTarget(); err != nil || got != "https://os.test:9200" {
+		t.Errorf("credsTarget clean url = %q, %v", got, err)
+	}
+}
+
 func TestCredsSetEmptyPasswordAborts(t *testing.T) {
 	credsTestEnv(t)
 	fakeKeyringCmd(t)
