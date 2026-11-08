@@ -107,3 +107,51 @@ func TestExtractPlainTextLimits(t *testing.T) {
 		t.Error("oversized paragraph must mark truncated")
 	}
 }
+
+// Unicode case folding changes byte length (U+2126 Ω shrinks, U+023A grows),
+// which desynchronizes the body/lower index sharing in the extractor. These
+// characters appear in ordinary technical prose; extraction must neither panic
+// nor slice content at shifted byte offsets.
+func TestExtractUnicodeLoweringStable(t *testing.T) {
+	for _, u := range []string{"\u2126", "\u0130", "\u212A", "\u023A", "\u023E", "\u1E9E"} {
+		body := "<p>" + strings.Repeat(u, 200) + "x</p>" // over the heading-length threshold
+		secs, _, _ := ExtractSections(body)
+		if len(secs) == 0 {
+			t.Fatalf("%q: no sections", u)
+		}
+		if !strings.Contains(secs[0].Text, "x") {
+			t.Fatalf("%q: text lost: %q", u, secs[0].Text)
+		}
+	}
+}
+
+func TestExtractTitleUnicodeLoweringStable(t *testing.T) {
+	title := ExtractTitle("<title>\u2126 \u0130 page</title>")
+	if title != "\u2126 \u0130 page" {
+		t.Fatalf("title mangled by lowering: %q", title)
+	}
+}
+
+// An unclosed (or self-closed) drop tag must remove only the tag itself: the
+// previous behavior deleted the whole document tail after it, silently losing
+// every section the page had left.
+func TestStripElementsUnclosedTag(t *testing.T) {
+	secs, _, _ := ExtractSections("<p>alpha</p><script src=x>tail-kept</p>")
+	joined := strings.Join(textOfSections(secs), " ")
+	if !strings.Contains(joined, "tail-kept") {
+		t.Fatalf("content after unclosed <script> deleted: %q", joined)
+	}
+	secs, _, _ = ExtractSections("<p>alpha</p><svg/>tail2-kept</p>")
+	joined = strings.Join(textOfSections(secs), " ")
+	if !strings.Contains(joined, "tail2-kept") {
+		t.Fatalf("content after self-closed <svg/> deleted: %q", joined)
+	}
+}
+
+func textOfSections(secs []model.Section) []string {
+	var out []string
+	for _, s := range secs {
+		out = append(out, s.Text)
+	}
+	return out
+}

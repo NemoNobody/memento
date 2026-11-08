@@ -38,10 +38,36 @@ var blockTags = map[string]bool{
 // text: a section tree is not the goal, a handful of quotable chunks is.
 var headingTags = map[string]bool{"h1": true, "h2": true, "h3": true, "h4": true}
 
+// lowerASCII lowercases ASCII A-Z bytes and leaves every other byte untouched,
+// so the result is always byte-length-equal to the input. strings.ToLower is
+// unsafe for the body/lower index sharing in this file: Go's Unicode lowering
+// changes byte length (U+2126 OHM SIGN shrinks 3 to 2 bytes, U+023A grows 2 to
+// 3), which desynchronizes the shared byte indices and panics on slice bounds
+// with ordinary prose (an "Ω" in a technical article is enough).
+func lowerASCII(s string) string {
+	need := false
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 'A' && s[i] <= 'Z' {
+			need = true
+			break
+		}
+	}
+	if !need {
+		return s
+	}
+	b := []byte(s)
+	for i := range b {
+		if b[i] >= 'A' && b[i] <= 'Z' {
+			b[i] += 'a' - 'A'
+		}
+	}
+	return string(b)
+}
+
 // ExtractTitle returns the text of the <title> element, capped. Empty when the
 // page has no title.
 func ExtractTitle(body string) string {
-	lower := strings.ToLower(body)
+	lower := lowerASCII(body)
 	open := findTagStart(lower, "title")
 	if open < 0 {
 		return ""
@@ -63,9 +89,9 @@ func ExtractTitle(body string) string {
 // collects referenced images (url+alt+title; binaries are never stored). It
 // reports whether the limits truncated the content.
 func ExtractSections(body string) (sections []model.Section, images []model.ImageRef, truncated bool) {
-	lower := strings.ToLower(body)
+	lower := lowerASCII(body)
 	body = stripElements(lower, body)
-	lower = strings.ToLower(body)
+	lower = lowerASCII(body)
 
 	// Pass 1: linear scan. Tag names drive structure; text accumulates into
 	// the current raw section.
@@ -298,8 +324,8 @@ func ExtractPlainText(body string) (sections []model.Section, truncated bool) {
 	return sections, truncated
 }
 
-// stripElements removes dropTags and their content from body. lower is the
-// lowercased body (byte-length equal, so indices stay in sync).
+// stripElements removes dropTags (and their content) from body. lower is the
+// ASCII-lowercased body (byte-length equal, so indices stay in sync).
 func stripElements(lower, body string) string {
 	for _, tag := range dropTags {
 		for {
@@ -312,12 +338,21 @@ func stripElements(lower, body string) string {
 				break
 			}
 			contentStart := open + openEnd + 1
-			end := len(body)
-			if close := findTagStart(lower, "/"+tag); close >= contentStart {
-				if closeEnd := strings.IndexByte(lower[close:], '>'); closeEnd >= 0 {
-					end = close + closeEnd + 1
-				}
+			close := findTagStart(lower, "/"+tag)
+			if close < contentStart {
+				// Self-closed or unclosed element: drop only the tag itself.
+				// Deleting the whole tail would silently lose real content —
+				// unclosed <style>/<svg> and self-closed <svg/> are common.
+				end := open + openEnd + 1
+				body = body[:open] + body[end:]
+				lower = lower[:open] + lower[end:]
+				continue
 			}
+			closeEnd := strings.IndexByte(lower[close:], '>')
+			if closeEnd < 0 {
+				break
+			}
+			end := close + closeEnd + 1
 			body = body[:open] + body[end:]
 			lower = lower[:open] + lower[end:]
 		}
