@@ -125,6 +125,26 @@ func TestLoadConfigRejectsURLUserInfo(t *testing.T) {
 	if !strings.Contains(err.Error(), "admin:xxxxx") {
 		t.Errorf("the rejection message must show a redacted url: %v", err)
 	}
+
+	// A credential url that fails url.Parse (broken percent-escape) must be
+	// refused too, without echoing the raw text: url.Parse's own error quotes
+	// the input, and RedactURL returns raw on parse failure.
+	t.Setenv("OPENSEARCH_URL", "https://admin:sec%zzret@os.test:9200")
+	_, err = LoadConfig()
+	if err == nil {
+		t.Fatal("unparseable opensearch_url with credentials must be rejected")
+	}
+	if strings.Contains(err.Error(), "sec%zzret") || strings.Contains(err.Error(), "hunter2") {
+		t.Errorf("the rejection message echoes the credentials: %v", err)
+	}
+
+	// A plain (credential-free) unparseable url is a config error as well,
+	// with the parse error quoted (nothing to hide).
+	t.Setenv("OPENSEARCH_URL", "http://[::1")
+	_, err = LoadConfig()
+	if err == nil {
+		t.Fatal("unparseable opensearch_url must be rejected")
+	}
 }
 
 // FindConfigPathNoCWD must skip a ./memento.conf: `memento mcp` runs with

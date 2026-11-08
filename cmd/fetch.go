@@ -41,12 +41,13 @@ A host outside fetch_allow_hosts is rejected before the request is made.`,
 		Args: cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			// Validate before any store contact: a bad url or a denied host is
-			// the caller's problem, not an availability problem.
-			rawURL, err := client.NormalizeURL(args[0])
+			// the caller's problem, not an availability problem. The config is
+			// local (no network), and normalization needs fetch_allow_private.
+			cfg, err := config.LoadConfig()
 			if err != nil {
 				fatalErr(err)
 			}
-			cfg, err := config.LoadConfig()
+			rawURL, err := client.NormalizeURL(args[0], cfg.FetchAllowPrivate)
 			if err != nil {
 				fatalErr(err)
 			}

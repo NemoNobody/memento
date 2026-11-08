@@ -211,7 +211,12 @@ func (c *client) searchItems(collection dbus.ObjectPath, attrs map[string]string
 		}
 	}
 	if len(items) == 0 && searches != "" && searches != "/" {
-		v, err := c.conn.Object(busName, searches).GetProperty(ifaceSearches + ".items")
+		// The fallback must carry the rpc deadline too: a flagless GetProperty
+		// has none, and a wedged/restarting provider would hang the caller
+		// forever (the package contract: every method call carries a deadline).
+		propCtx, cancelProp := context.WithTimeout(context.Background(), rpcTimeout)
+		defer cancelProp()
+		v, err := c.getProperty(propCtx, c.conn.Object(busName, searches), ifaceSearches, "items")
 		if err == nil {
 			items, _ = v.Value().([]dbus.ObjectPath)
 		}

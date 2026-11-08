@@ -699,12 +699,13 @@ type fetchDocOutput struct {
 
 func (s *mcpServer) fetchDoc(ctx context.Context, req *mcp.CallToolRequest, in fetchDocInput) (*mcp.CallToolResult, fetchDocOutput, error) {
 	// Validate before any store contact: a bad url, a denied host, a robots
-	// verdict is the caller's problem, not an availability problem.
-	rawURL, err := client.NormalizeURL(in.URL)
+	// verdict is the caller's problem, not an availability problem. Config is
+	// local, and normalization needs fetch_allow_private.
+	cfg, err := s.loadConfig()
 	if err != nil {
 		return nil, fetchDocOutput{}, err
 	}
-	cfg, err := s.loadConfig()
+	rawURL, err := client.NormalizeURL(in.URL, cfg.FetchAllowPrivate)
 	if err != nil {
 		return nil, fetchDocOutput{}, err
 	}

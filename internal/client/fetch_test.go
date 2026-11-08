@@ -95,7 +95,7 @@ func TestNormalizeURL(t *testing.T) {
 		{"https://[2606:4700:4700::1111]/x", "https://[2606:4700:4700::1111]/x"},
 	}
 	for _, tc := range cases {
-		got, err := NormalizeURL(tc.in)
+		got, err := NormalizeURL(tc.in, false)
 		if err != nil {
 			t.Errorf("NormalizeURL(%q): %v", tc.in, err)
 			continue
@@ -105,7 +105,7 @@ func TestNormalizeURL(t *testing.T) {
 		}
 	}
 	for _, bad := range []string{"", "ftp://example.com/x", "https://user:pass@host/x", "http://"} {
-		if _, err := NormalizeURL(bad); err == nil {
+		if _, err := NormalizeURL(bad, false); err == nil {
 			t.Errorf("NormalizeURL(%q): want error, got nil", bad)
 		}
 	}
@@ -113,7 +113,7 @@ func TestNormalizeURL(t *testing.T) {
 	// The refusal messages must not echo the credentials: they reach agent
 	// context and MCP client logs.
 	for _, secretURL := range []string{"https://admin:hunter2@example.com/x", "http://u:p%zz@proxy:3128", "https://admin:hunter2@127.0.0.1/"} {
-		_, err := NormalizeURL(secretURL)
+		_, err := NormalizeURL(secretURL, false)
 		if err == nil {
 			t.Fatalf("NormalizeURL(%q): want error, got nil", secretURL)
 		}
@@ -133,6 +133,14 @@ func TestBlockedHostGuard(t *testing.T) {
 		"ff02::1", "224.0.0.1", "fc00::1", "fd12:3456::7",
 		"localhost", "api.localhost", "router.local", "svc.internal",
 		"box.home.arpa", "intranet.home", "a.test",
+		// CGNAT (Tailscale's default pool), IETF reserved, documentation,
+		// benchmarking, class-E: unicast-shaped but not global.
+		"100.64.0.1", "100.127.255.255", "192.0.0.1", "192.0.2.1",
+		"198.18.0.1", "198.19.9.9", "198.51.100.7", "203.0.113.9",
+		"240.0.0.1", "255.255.255.255",
+		// Tunnels that embed an IPv4: the embedded address is what counts.
+		"2002:c0a8:0132::1",                       // 6to4 → 192.168.1.50
+		"2001:0000:0000:0000:0000:0000:3f57:fecd", // Teredo → 192.168.1.50
 	} {
 		if !blockedHost(h) {
 			t.Errorf("blockedHost(%q) = false, want blocked", h)
@@ -141,6 +149,9 @@ func TestBlockedHostGuard(t *testing.T) {
 	for _, h := range []string{
 		"example.com", "docs.gitlab.com", "8.8.8.8", "1.1.1.1",
 		"93.184.216.34", "localedge.dev", "test.example.com", "notlocalhost.dev",
+		"100.63.0.1", "100.128.0.1", "192.0.1.1", "198.17.0.1", // just outside the ranges
+		"2002:8888:8888::1",                       // 6to4 → 136.136.136.136 (public)
+		"2001:0000:0000:0000:0000:0000:8888:8888", // Teredo → 119.119.119.119
 	} {
 		if blockedHost(h) {
 			t.Errorf("blockedHost(%q) = true, want allowed", h)
@@ -157,9 +168,20 @@ func TestNormalizeURLBlocksNonPublic(t *testing.T) {
 		"http://192.168.1.50/docs",
 		"http://router.local/config",
 	} {
-		if _, err := NormalizeURL(bad); err == nil {
+		if _, err := NormalizeURL(bad, false); err == nil {
 			t.Errorf("NormalizeURL(%q): want refusal, got nil", bad)
 		}
+		// fetch_allow_private is a documented opt-in for self-hosted docs:
+		// with it the name-level pre-guard must stand down (the authoritative
+		// boundary is the dial-time check, gated by the same flag).
+		if _, err := NormalizeURL(bad, true); err != nil {
+			t.Errorf("NormalizeURL(%q, allowPrivate): %v, want accepted", bad, err)
+		}
+	}
+	// The userinfo refusal is not gated by the opt-in: credentials in a URL
+	// stay refused regardless of the target.
+	if _, err := NormalizeURL("https://admin:hunter2@127.0.0.1/", true); err == nil {
+		t.Error("allowPrivate must not accept userinfo URLs")
 	}
 }
 
@@ -172,11 +194,11 @@ func TestFetchRefusesLoopbackByDefault(t *testing.T) {
 }
 
 func TestURLHashStableAcrossNormalizations(t *testing.T) {
-	a, err := NormalizeURL("example.com")
+	a, err := NormalizeURL("example.com", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := NormalizeURL("https://example.com/")
+	b, err := NormalizeURL("https://example.com/", false)
 	if err != nil {
 		t.Fatal(err)
 	}

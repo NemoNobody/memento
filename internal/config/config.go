@@ -60,10 +60,10 @@ type Config struct {
 	FetchAllowHosts []string `json:"fetch_allow_hosts"`
 
 	// FetchAllowPrivate relaxes the SSRF guard for self-hosted targets: it
-	// permits loopback, RFC1918, link-local and multicast addresses. Off by
-	// default: fetch follows untrusted URLs and agent-supplied links, so the
-	// default must never touch internal services (cloud metadata, OpenSearch
-	// itself, routers).
+	// permits loopback, private (RFC1918, CGNAT), link-local, reserved and
+	// multicast addresses. Off by default: fetch follows untrusted URLs and
+	// agent-supplied links, so the default must never touch internal services
+	// (cloud metadata, OpenSearch itself, routers, tailnets).
 	FetchAllowPrivate bool `json:"fetch_allow_private"`
 
 	// FetchUserAgent is sent verbatim on document fetches. Some sites reject
@@ -299,7 +299,18 @@ func loadConfig(explicitPath string, finder func() string) (*Config, error) {
 		}
 		cfg.LocalRepoScanDepth = n
 	}
-	if u, uerr := url.Parse(cfg.OpenSearchURL); uerr == nil && u.User != nil {
+	u, uerr := url.Parse(cfg.OpenSearchURL)
+	if uerr != nil {
+		// A url that fails to parse must not flow into the config: the client
+		// errors would echo the raw text (url.Parse's error quotes the input),
+		// and a credential-carrying url usually fails to parse on purpose
+		// (percent-escapes, spaces in the password). No echo in either case.
+		if strings.Contains(cfg.OpenSearchURL, "@") {
+			return nil, fmt.Errorf("opensearch_url is not a valid url: it carries user info; put the user in opensearch_user and the password in the keyring/env (its text is not echoed)")
+		}
+		return nil, fmt.Errorf("opensearch_url is not a valid url: %w", uerr)
+	}
+	if u.User != nil {
 		// Credentials embedded in the URL reach every error message, the
 		// status output and the store server as basic-auth material. The
 		// fetch path refuses them for the same reason (NormalizeURL).

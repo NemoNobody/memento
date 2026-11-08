@@ -41,9 +41,13 @@ var ipBlockStatuses = map[int]bool{
 // blockedIP reports addresses a fetch must never connect to. Fetch follows
 // untrusted URLs and agent-supplied links, so the default must never reach
 // internal services: loopback, RFC1918, link-local (cloud metadata sits at
-// 169.254.169.254), multicast, the unspecified address, and 0.0.0.0/8 (which
-// routes to loopback on Linux). fetch_allow_private is the explicit opt-in for
-// self-hosted targets.
+// 169.254.169.254), multicast, the unspecified address, 0.0.0.0/8 (which
+// routes to loopback on Linux), CGNAT (100.64.0.0/10 — Tailscale's default
+// pool: on a tailnet machine these reach real hosts), the IETF reserved and
+// documentation ranges, the benchmarking range, and class-E. Tunnels that
+// embed an IPv4 inside an IPv6 address (6to4, Teredo) are decoded so the
+// embedded v4 goes through the same checks. fetch_allow_private is the
+// explicit opt-in for self-hosted targets.
 func blockedIP(ip net.IP) bool {
 	if ip == nil {
 		return true
@@ -53,8 +57,44 @@ func blockedIP(ip net.IP) bool {
 		ip.IsMulticast() || ip.IsPrivate() {
 		return true
 	}
-	if v4 := ip.To4(); v4 != nil && v4[0] == 0 {
-		return true
+	if v4 := ip.To4(); v4 != nil {
+		if v4[0] == 0 {
+			return true
+		}
+		return inReservedV4(v4)
+	}
+	// 6to4 (2002::/16) embeds the IPv4 in bytes 2..5; Teredo (2001:0::/32)
+	// stores the peer v4 one-complemented in the last four bytes.
+	if b := ip.To16(); b != nil {
+		if b[0] == 0x20 && b[1] == 0x02 {
+			return blockedIP(net.IP(append([]byte(nil), b[2:6]...)))
+		}
+		if b[0] == 0x20 && b[1] == 0x01 && b[2] == 0x00 && b[3] == 0x00 {
+			v4 := net.IP{^b[12], ^b[13], ^b[14], ^b[15]}
+			return blockedIP(v4)
+		}
+	}
+	return false
+}
+
+// reservedV4 are the non-global unicast v4 ranges net.IP.IsPrivate does not
+// cover (RFC1918 only): CGNAT, IETF protocol assignments, documentation
+// ranges, benchmarking, and class-E/broadcast.
+var reservedV4 = []*net.IPNet{
+	{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)},
+	{IP: net.IPv4(192, 0, 0, 0), Mask: net.CIDRMask(24, 32)},
+	{IP: net.IPv4(192, 0, 2, 0), Mask: net.CIDRMask(24, 32)},
+	{IP: net.IPv4(198, 18, 0, 0), Mask: net.CIDRMask(15, 32)},
+	{IP: net.IPv4(198, 51, 100, 0), Mask: net.CIDRMask(24, 32)},
+	{IP: net.IPv4(203, 0, 113, 0), Mask: net.CIDRMask(24, 32)},
+	{IP: net.IPv4(240, 0, 0, 0), Mask: net.CIDRMask(4, 32)},
+}
+
+func inReservedV4(v4 net.IP) bool {
+	for _, n := range reservedV4 {
+		if n.Contains(v4) {
+			return true
+		}
 	}
 	return false
 }
@@ -112,8 +152,12 @@ func guardedDialContext(allowAddr func(address string) bool) func(ctx context.Co
 // document), the host is lowercased, and utm_* tracking parameters are cut —
 // they carry no context and split the shared URL-cache into duplicates.
 // Anything that is not a plain public http(s) URL is rejected before any
-// request is made.
-func NormalizeURL(raw string) (string, error) {
+// request is made. allowPrivate mirrors fetch_allow_private: without it the
+// name-level pre-guard refuses literal private IPs and special-use names
+// (the authoritative check is guardedDialContext on the resolved address);
+// with it the operator opted in to self-hosted targets, and the name check
+// must not defeat that documented opt-in.
+func NormalizeURL(raw string, allowPrivate bool) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return "", fmt.Errorf("fetch: empty url")
@@ -146,7 +190,7 @@ func NormalizeURL(raw string) (string, error) {
 		// ("admin:secret@host"), so its message would echo the password.
 		return "", fmt.Errorf("fetch: url %q carries user info; remove credentials from the url", config.RedactURL(raw))
 	}
-	if blockedHost(strings.ToLower(u.Hostname())) {
+	if !allowPrivate && blockedHost(strings.ToLower(u.Hostname())) {
 		return "", fmt.Errorf(
 			"fetch: host %q is not a public address; fetch refuses loopback/private/link-local targets "+
 				"(opt in with fetch_allow_private for self-hosted docs)", u.Host)
