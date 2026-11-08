@@ -370,6 +370,59 @@ func TestAddSendsRefreshWaitForForNewFacts(t *testing.T) {
 	if got := puts[0].Query.Get("refresh"); got != "wait_for" {
 		t.Errorf("refresh = %q, want wait_for", got)
 	}
+	if got := puts[0].Query.Get("op_type"); got != "create" {
+		t.Errorf("op_type = %q, want create (a plain index lets a concurrent creator overwrite silently)", got)
+	}
+}
+
+// TestAddCreateRaceFallsToCorrection pins the concurrency contract: when a
+// concurrent process creates the same key between the Get and the create, the
+// version conflict must not fail and must not overwrite — the winner's value
+// goes to history via the scripted correction.
+func TestAddCreateRaceFallsToCorrection(t *testing.T) {
+	gets := 0
+	var updateBody string
+	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
+		switch {
+		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
+			gets++
+			if gets == 1 {
+				return http.StatusNotFound, `{"status":404,"error":"document_missing_exception"}`
+			}
+			return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
+				"fact_id":"winner-id","key":"k","value":"winner",
+				"created_at":"2020-01-01T00:00:00Z","updated_at":"2020-01-01T00:00:00Z",
+				"observed_at":"2020-01-01T00:00:00Z"}}`
+		case r.Method == http.MethodPut && r.Path == "/memento/_doc/k":
+			return http.StatusConflict, `{"error":{"type":"version_conflict_engine_exception","reason":"[k]: version conflict, document already exists"},"status":409}`
+		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+			updateBody = r.Body
+			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+		}
+		return http.StatusInternalServerError, `{"status":500,"error":"unexpected request: ` + r.Method + ` ` + r.Path + `"}`
+	})
+
+	created, err := c.Add(context.Background(), model.NewFact("k", "mine", "config", "p", "test:contract", ""))
+	if err != nil {
+		t.Fatalf("Add lost the create race: %v", err)
+	}
+	if created {
+		t.Error("created = true; the fact was created by the concurrent winner")
+	}
+	if gets != 2 {
+		t.Errorf("gets = %d, want 2 (miss, then re-read of the winner)", gets)
+	}
+	if len(fake.requestsFor(http.MethodPost, "/memento/_update/k")) != 1 {
+		t.Fatalf("no scripted correction after the create conflict: %+v", fake.requests)
+	}
+	// The correction script appends the server-side winner value to history
+	// before replacing it (ctx._source.history), so the first value cannot
+	// vanish.
+	for _, want := range []string{"painless", "ctx._source.history"} {
+		if !strings.Contains(updateBody, want) {
+			t.Errorf("update body lacks %q: %s", want, updateBody)
+		}
+	}
 }
 
 // TestAddBlockedWriteIsActionable is the integration counterpart of the

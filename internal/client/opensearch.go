@@ -77,6 +77,13 @@ func isAlreadyExists(err error) bool {
 	return errors.As(err, &ste) && ste.Err.Type == "resource_already_exists_exception"
 }
 
+// isVersionConflict reports OpenSearch's optimistic-concurrency rejection:
+// op_type=create on an existing document (or an if_seq_no mismatch).
+func isVersionConflict(err error) bool {
+	var ste *opensearch.StructError
+	return errors.As(err, &ste) && ste.Err.Type == "version_conflict_engine_exception"
+}
+
 // isClusterBlock reports whether the error is OpenSearch refusing a write
 // because of a cluster or index block — typically the disk flood stage turning
 // indices read-only, or an explicit read-only block.
@@ -217,20 +224,23 @@ ctx._source.updated_at = params.updated_at;
 // the fact is immediately visible to subsequent Search/List calls.
 func (c *Client) Add(ctx context.Context, f *model.Fact) (created bool, err error) {
 	existing, err := c.Get(ctx, f.Key)
-	switch {
-	case errors.Is(err, ErrNotFound):
-		body, _ := json.Marshal(f)
-		_, err = c.api.Index(ctx, opensearchapi.IndexReq{
-			Index:      c.cfg.IndexName,
-			DocumentID: f.Key,
-			Body:       bytes.NewReader(body),
-			Params:     opensearchapi.IndexParams{Refresh: "wait_for"},
-		})
+	if errors.Is(err, ErrNotFound) {
+		created, err = c.createFact(ctx, f)
 		if err != nil {
-			return false, wrapWriteError("add fact", err)
+			return false, err
 		}
-		return true, nil
-	case err != nil:
+		if created {
+			return true, nil
+		}
+		// op_type=create lost the race to a concurrent Add of the same key
+		// (a plain index would last-write-win and drop the winner's value
+		// with no history): re-read and apply as a correction below, so the
+		// first value reaches history instead of vanishing.
+		existing, err = c.Get(ctx, f.Key)
+		if err != nil {
+			return false, fmt.Errorf("add fact: %w", err)
+		}
+	} else if err != nil {
 		return false, fmt.Errorf("add fact: %w", err)
 	}
 
@@ -281,6 +291,29 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (created bool, err erro
 		return false, wrapWriteError("add fact", err)
 	}
 	return false, nil
+}
+
+// createFact stores a brand-new fact with op_type=create: OpenSearch refuses
+// the write when the document exists, so two concurrent creators of the same
+// key cannot silently overwrite each other (last-write-wins would lose the
+// first value with no history entry). It reports created=true on success and
+// created=false on a version conflict, leaving the caller to re-read the
+// winner and apply the fact as a correction.
+func (c *Client) createFact(ctx context.Context, f *model.Fact) (bool, error) {
+	body, _ := json.Marshal(f)
+	_, err := c.api.Index(ctx, opensearchapi.IndexReq{
+		Index:      c.cfg.IndexName,
+		DocumentID: f.Key,
+		Body:       bytes.NewReader(body),
+		Params:     opensearchapi.IndexParams{Refresh: "wait_for", OpType: "create"},
+	})
+	if err == nil {
+		return true, nil
+	}
+	if isVersionConflict(err) {
+		return false, nil
+	}
+	return false, wrapWriteError("add fact", err)
 }
 
 // Get gets a fact by key. It uses the realtime document GET API, so it sees
