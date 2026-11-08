@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -83,7 +84,12 @@ func blockedHost(host string) bool {
 // (SSRF/DNS-rebinding defense). It is installed on direct (non-proxied)
 // transports only: with a proxy configured, the user chose where the traffic
 // exits, and the proxy — not memento — enforces the target policy.
-func guardedDialContext() func(ctx context.Context, network, address string) (net.Conn, error) {
+//
+// allowAddr (nil = nothing allowed) exempts specific dial addresses: the env
+// proxy's resolved IPs, so a loopback HTTP_PROXY keeps working while every
+// direct hop (including NO_PROXY redirect targets) stays guarded. The dial
+// target is checked after resolution, so DNS rebinding cannot slip past it.
+func guardedDialContext(allowAddr func(address string) bool) func(ctx context.Context, network, address string) (net.Conn, error) {
 	d := &net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}
 	d.Control = func(network, address string, c syscall.RawConn) error {
 		host, _, err := net.SplitHostPort(address)
@@ -91,6 +97,9 @@ func guardedDialContext() func(ctx context.Context, network, address string) (ne
 			return fmt.Errorf("fetch: guard: %w", err)
 		}
 		if blockedIP(net.ParseIP(host)) {
+			if allowAddr != nil && allowAddr(address) {
+				return nil // proxied hop: the dial target is the user's proxy
+			}
 			return fmt.Errorf("fetch: refusing connection to non-public address %s", host)
 		}
 		return nil
@@ -232,15 +241,44 @@ func fetchHTTP(ctx context.Context, cfg *config.Config, normalizedURL string) (c
 			// Direct fetch: enforce the public-address rule on the resolved IP
 			// (closes DNS rebinding: the hostname check alone is not enough).
 			// An env proxy (HTTP_PROXY, honored by the cloned transport) is
-			// user infra like fetch_proxy_url: the dial target is the proxy
-			// (loopback proxies are legit), so guard only truly direct dials.
-			if probe, perr := http.NewRequestWithContext(ctx, http.MethodGet, normalizedURL, nil); perr == nil {
-				if envProxy, perr := http.ProxyFromEnvironment(probe); perr != nil || envProxy == nil {
-					tr.DialContext = guardedDialContext()
+			// user infra like fetch_proxy_url: on a proxied hop the dial target
+			// is the proxy (loopback proxies are legit). The proxy decision is
+			// re-evaluated per hop and only the proxy's resolved addresses are
+			// exempt — every direct hop, including NO_PROXY-exempt redirect
+			// targets, stays guarded.
+			envProxy := tr.Proxy
+			var mu sync.Mutex
+			var proxyIPs []net.IP
+			tr.Proxy = func(req *http.Request) (*url.URL, error) {
+				u, perr := envProxy(req)
+				mu.Lock()
+				proxyIPs = nil
+				if perr == nil && u != nil && u.Hostname() != "" {
+					if ips, aerr := net.LookupIP(u.Hostname()); aerr == nil {
+						proxyIPs = ips
+					}
 				}
-			} else {
-				tr.DialContext = guardedDialContext()
+				mu.Unlock()
+				return u, perr
 			}
+			tr.DialContext = guardedDialContext(func(address string) bool {
+				host, _, err := net.SplitHostPort(address)
+				if err != nil {
+					return false
+				}
+				ip := net.ParseIP(host)
+				if ip == nil {
+					return false
+				}
+				mu.Lock()
+				defer mu.Unlock()
+				for _, a := range proxyIPs {
+					if a.Equal(ip) {
+						return true
+					}
+				}
+				return false
+			})
 		}
 		httpc := &http.Client{Timeout: timeout, Transport: tr}
 		httpc.CheckRedirect = func(req *http.Request, via []*http.Request) error {

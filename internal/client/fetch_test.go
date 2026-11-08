@@ -53,6 +53,29 @@ func TestFetchEnvProxySkipsDialGuard(t *testing.T) {
 	}
 }
 
+// TestGuardedDialContextAllow pins the guard's exemption hook: the dial is
+// refused on blocked addresses unless allowAddr exempts that exact resolved
+// address (the env proxy's IPs), and a public IP is never exempted.
+func TestGuardedDialContextAllow(t *testing.T) {
+	dial := guardedDialContext(nil)
+	_, err := dial(context.Background(), "tcp", "127.0.0.1:19")
+	if err == nil || !strings.Contains(err.Error(), "refusing connection to non-public address") {
+		t.Errorf("loopback without exemption: %v", err)
+	}
+
+	allow := guardedDialContext(func(address string) bool { return address == "127.0.0.1:19" })
+	_, err = allow(context.Background(), "tcp", "127.0.0.1:19")
+	if err != nil && strings.Contains(err.Error(), "refusing connection") {
+		t.Errorf("loopback proxy address must be exempted, got: %v", err)
+	}
+
+	deny := guardedDialContext(func(address string) bool { return address == "127.0.0.1:20" })
+	_, err = deny(context.Background(), "tcp", "127.0.0.1:19")
+	if err == nil || !strings.Contains(err.Error(), "refusing connection") {
+		t.Errorf("non-matching address must stay guarded: %v", err)
+	}
+}
+
 func TestNormalizeURL(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"example.com", "https://example.com/"},

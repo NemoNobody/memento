@@ -180,6 +180,10 @@ func GitHubLocal(cfg *config.Config, normalizedURL string) (string, bool) {
 	// The lexical check is not enough: a symlink committed into the repo
 	// (README.md -> ~/.ssh/id_rsa) passes it and resolves outside the clone.
 	// Evaluate symlinks and re-check containment against the resolved root.
+	// Residual: the path is returned for the caller to open later, and a
+	// writable working tree can swap a component between check and open
+	// (openat2-style resolution is the only true fix). memento only prints
+	// the path, so the window only matters for consumers that read it.
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		return "", false
