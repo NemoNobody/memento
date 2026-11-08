@@ -324,47 +324,87 @@ func ExtractPlainText(body string) (sections []model.Section, truncated bool) {
 	return sections, truncated
 }
 
-// stripElements removes dropTags (and their content) from body. lower is the
-// ASCII-lowercased body (byte-length equal, so indices stay in sync).
+// stripElements removes dropTags (and everything inside them) from body. It
+// runs as one left-to-right pass: the old per-occurrence rebuild
+// (body[:open]+body[end:] for every tag) was quadratic — a 2 MB page made of
+// style tags burned minutes of CPU and GC in a long-lived server, driven
+// there by a single untrusted link (the project's threat model).
+// lower is the ASCII-lowercased body (byte-length equal, so indices stay in
+// sync).
 func stripElements(lower, body string) string {
+	var b strings.Builder
+	b.Grow(len(body))
+	for i := 0; i < len(lower); {
+		lt := strings.IndexByte(lower[i:], '<')
+		if lt < 0 {
+			b.WriteString(body[i:])
+			break
+		}
+		pos := i + lt
+		b.WriteString(body[i:pos])
+		tag := matchDropTag(lower, pos)
+		if tag == "" {
+			b.WriteByte(body[pos])
+			i = pos + 1
+			continue
+		}
+		openEnd := strings.IndexByte(lower[pos:], '>')
+		if openEnd < 0 {
+			// Unterminated open tag: keep the rest verbatim. Markup is broken
+			// from here; deleting anything on a guess would silently lose text.
+			b.WriteString(body[pos:])
+			break
+		}
+		contentStart := pos + openEnd + 1
+		close := findTagStartFrom(lower, "/"+tag, contentStart)
+		if close < 0 {
+			// Self-closed or unclosed element: drop only the tag itself.
+			// Deleting the whole tail would silently lose real content —
+			// unclosed <style>/<svg> and self-closed <svg/> are common.
+			i = contentStart
+			continue
+		}
+		closeEnd := strings.IndexByte(lower[close:], '>')
+		if closeEnd < 0 {
+			b.WriteString(body[pos:])
+			break
+		}
+		i = close + closeEnd + 1 // drop open..close inclusive
+	}
+	return b.String()
+}
+
+// matchDropTag returns the dropTag that starts at pos — "<name" terminated
+// by a tag delimiter — or "" when the tag at pos is kept.
+func matchDropTag(lower string, pos int) string {
+	rest := lower[pos:]
 	for _, tag := range dropTags {
-		for {
-			open := findTagStart(lower, tag)
-			if open < 0 {
-				break
-			}
-			openEnd := strings.IndexByte(lower[open:], '>')
-			if openEnd < 0 {
-				break
-			}
-			contentStart := open + openEnd + 1
-			close := findTagStart(lower, "/"+tag)
-			if close < contentStart {
-				// Self-closed or unclosed element: drop only the tag itself.
-				// Deleting the whole tail would silently lose real content —
-				// unclosed <style>/<svg> and self-closed <svg/> are common.
-				end := open + openEnd + 1
-				body = body[:open] + body[end:]
-				lower = lower[:open] + lower[end:]
-				continue
-			}
-			closeEnd := strings.IndexByte(lower[close:], '>')
-			if closeEnd < 0 {
-				break
-			}
-			end := close + closeEnd + 1
-			body = body[:open] + body[end:]
-			lower = lower[:open] + lower[end:]
+		needle := "<" + tag
+		if !strings.HasPrefix(rest, needle) {
+			continue
+		}
+		next := pos + len(needle)
+		if next >= len(lower) {
+			return tag // name ends the body: it is the whole tag
+		}
+		switch lower[next] {
+		case ' ', '\t', '\n', '\r', '>', '/':
+			return tag
 		}
 	}
-	return body
+	return ""
 }
 
 // findTagStart returns the index of "<name" whose name is terminated by a
 // delimiter, -1 when absent. name may start with "/" for a closing tag.
 func findTagStart(lower, name string) int {
+	return findTagStartFrom(lower, name, 0)
+}
+
+// findTagStartFrom is findTagStart searching from a byte offset.
+func findTagStartFrom(lower, name string, from int) int {
 	needle := "<" + name
-	for from := 0; ; {
+	for from < len(lower) {
 		i := strings.Index(lower[from:], needle)
 		if i < 0 {
 			return -1
@@ -380,6 +420,7 @@ func findTagStart(lower, name string) int {
 		}
 		from = i + len(needle)
 	}
+	return -1
 }
 
 // parseTag reads the tag at pos: its name, end index (after '>'), and whether

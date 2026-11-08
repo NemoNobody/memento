@@ -148,6 +148,37 @@ func TestStripElementsUnclosedTag(t *testing.T) {
 	}
 }
 
+// TestStripElementsNested pins the removal range for nested same-name tags:
+// the element spans to the first matching close (the old code's behavior —
+// "y</style>" survives), the inner open is consumed with the outer element.
+func TestStripElementsNested(t *testing.T) {
+	secs, _, _ := ExtractSections("<style><style>x</style>y</style><h1>Head text</h1><p>kept text</p>")
+	joined := strings.Join(textOfSections(secs), " ")
+	if !strings.Contains(joined, "kept") {
+		t.Fatalf("content after nested <style> deleted: %q", joined)
+	}
+	if strings.Contains(joined, "y") {
+		t.Errorf("nested-drop semantics changed (text between the closes survived): %q", joined)
+	}
+}
+
+// TestStripElementsLinear is the DoS regression: the old per-occurrence
+// string rebuild was quadratic, so a page of many dropTags (all legal under
+// fetch_max_bytes) burned minutes of CPU in the long-lived MCP server. The
+// single pass must finish a 50k-element page in well under a second.
+func TestStripElementsLinear(t *testing.T) {
+	const n = 50000
+	var b strings.Builder
+	b.Grow(n * 12)
+	for i := 0; i < n; i++ {
+		b.WriteString("<style>x</style>")
+	}
+	out := stripElements(lowerASCII(b.String()), b.String())
+	if out != "" {
+		t.Fatalf("all style elements must be dropped, got %d bytes", len(out))
+	}
+}
+
 func textOfSections(secs []model.Section) []string {
 	var out []string
 	for _, s := range secs {
