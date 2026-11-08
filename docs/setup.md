@@ -89,6 +89,7 @@ Create `~/.memento.conf`:
   "opensearch_user": "admin",
   "insecure_skip_verify": true,
   "index_name": "memento",
+  "history_index_period": "month",
   "allow_plaintext": false
 }
 ```
@@ -105,6 +106,19 @@ chmod 600 ~/.memento.conf
   (off by default). Containers and ssh sessions have no keyring — export
   `OPENSEARCH_PASSWORD` there.
 - The index is created automatically on first use — you do not have to create it.
+- The history journal is created automatically on the first accepted write: an
+  ingest pipeline `<index>-journal-ts` (stamps entries with the server clock),
+  a composable index template `<index>-journal`, and dated journal indices
+  `<index>-history-<period>` — monthly by default (`history_index_period`:
+  `day`/`week`/`month`/`quarter`/`year`). The store user needs privileges to
+  create the template, the pipeline, and `<index>-history-*` indices.
+- Journal entries are append-only and never pruned automatically (write
+  forever): disk usage grows with the write rate, not with fact count.
+  Dated indices keep old periods cheap to inspect, delete, or snapshot;
+  `memento prune` is a manual admin tool for one key.
+- Upgrading from a pre-journal release: run `memento migrate-history` (prints
+  the plan; `--yes` writes) to move the old in-doc history arrays into the
+  journal. Unmigrated facts keep working; their history just stays in-doc.
 - A malformed config file fails loudly — `memento` prints which file it tried to
   read.
 
@@ -112,7 +126,8 @@ Environment variables override the file (the complete list; `memento status`
 lists the active ones by name, never by value):
 `OPENSEARCH_URL`, `OPENSEARCH_USER`, `OPENSEARCH_PASSWORD`,
 `OPENSEARCH_INSECURE_SKIP_VERIFY`, `MEMENTO_CONF`, `MEMENTO_INDEX`,
-`MEMENTO_HISTORY_LIMIT`, `MEMENTO_SECRET_GUARD`, `MEMENTO_ALLOW_PLAINTEXT`,
+`MEMENTO_HISTORY_PERIOD`, `MEMENTO_HISTORY_LIMIT`, `MEMENTO_SECRET_GUARD`,
+`MEMENTO_ALLOW_PLAINTEXT`,
 `MEMENTO_DOCS_INDEX`, `MEMENTO_DOCS_TTL_DAYS`, `MEMENTO_FETCH_TIMEOUT`,
 `MEMENTO_FETCH_MAX_BYTES`, `MEMENTO_FETCH_HOSTS`, `MEMENTO_FETCH_USER_AGENT`,
 `MEMENTO_FETCH_PROXY_URL`, `MEMENTO_FETCH_PROXY_FALLBACK`,
@@ -131,6 +146,7 @@ Expected output:
 config file: /home/you/.memento.conf
 url: https://127.0.0.1:9200
 index: memento
+history_index_period: month
 history_limit: 20
 secret_guard: reject
 password: keyring

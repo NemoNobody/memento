@@ -3,6 +3,26 @@
 Notable changes per release tag. v0.6.0 is the pre-publication hardening
 release; v0.1.0 was the first internal build.
 
+## Unreleased
+
+History journal: the in-doc `history` array is replaced by an append-only
+journal of dated indices (`<index>-history-<period>`, monthly by default;
+`history_index_period` config, `MEMENTO_HISTORY_PERIOD` env).
+
+- Every accepted value is journaled before the fact doc is updated; the fact
+  carries `current_ref` to its journal entry. The journal is write-forever
+  (entries are never rewritten, no CAS); `history_limit` is now only the
+  default `--keep` for the manual `memento prune`.
+- New commands: `memento journal <key> [--limit N]`, `memento history-info
+  <key>`, `memento migrate-history [--project p] [--yes]` (one-time move of
+  pre-journal in-doc arrays); new MCP tools `memento_journal`,
+  `memento_history_info` (13 tools).
+- Journal infrastructure (server-clock ingest pipeline, index template) is
+  created automatically on the first accepted write. Dated indices keep old
+  periods cheap to inspect, snapshot, or delete; after an admin deletes old
+  journal indices, read counts are lower bounds.
+- Backups: snapshots must include `memento-history-*` (docs/backup.md).
+
 ## v0.6.0 — 2026-11-08
 
 Internal pre-release. A six-round review cascade (Strata, DeepSeek Flash,

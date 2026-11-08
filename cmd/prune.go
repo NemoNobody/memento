@@ -47,7 +47,16 @@ their approval.`,
 			if err != nil {
 				fatalErr(err)
 			}
+			// Journal-first: a key with journal entries is pruned in the
+			// journal; legacy in-doc arrays are only counted pre-migration.
+			journalTotal, jErr := c.JournalCount(ctx, key)
+			if jErr != nil {
+				fatalErr(jErr)
+			}
 			total := len(f.History)
+			if journalTotal > 0 {
+				total = journalTotal
+			}
 			if total <= keep {
 				line := "key " + strconv.Quote(key) + " has " + strconv.Itoa(total) +
 					" history entries, keep=" + strconv.Itoa(keep) + ": nothing to prune"

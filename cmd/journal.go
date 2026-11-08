@@ -1,0 +1,140 @@
+package cmd
+
+import (
+	"context"
+	"io"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/spf13/cobra"
+)
+
+var journalFlags struct {
+	limit int
+}
+
+func JournalCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "journal <key>",
+		Short: "Read the journal: the append-only history of a fact key",
+		Long: `Read journal entries for a key, newest first.
+
+The journal is the history: every accepted value for the key is one entry
+(op=write; op=rediscovery is the reserved vocabulary for same-value
+re-confirmation by a different author). Counts after an admin deleted old
+journal indices are lower bounds — the surviving journal, not the lifetime.`,
+		Args: cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			key := args[0]
+			ctx := context.Background()
+			c, err := newClient()
+			if err != nil {
+				fatalErr(err)
+			}
+			entries, total, truncated, err := c.JournalEntries(ctx, key, journalFlags.limit)
+			if err != nil {
+				fatalErr(err)
+			}
+			var b strings.Builder
+			b.WriteString("journal for ")
+			b.WriteString(strconv.Quote(key))
+			b.WriteString(": ")
+			b.WriteString(strconv.Itoa(total))
+			b.WriteString(" entries (newest first)")
+			if truncated {
+				b.WriteString(" — showing the newest ")
+				b.WriteString(strconv.Itoa(len(entries)))
+				b.WriteString(" (raise --limit)")
+			}
+			b.WriteString("\n")
+			for _, e := range entries {
+				b.WriteString("  - ")
+				b.WriteString(displayTime(e.CreatedAt))
+				b.WriteString(" [")
+				b.WriteString(e.Op)
+				b.WriteString("]")
+				if e.Source != "" {
+					b.WriteString(" source=")
+					b.WriteString(e.Source)
+				}
+				b.WriteString(" value=")
+				b.WriteString(strconv.Quote(e.Value))
+				b.WriteString("\n")
+			}
+			if _, err := io.WriteString(os.Stdout, b.String()); err != nil {
+				fatalErr(err)
+			}
+		},
+	}
+	cmd.Flags().IntVar(&journalFlags.limit, "limit", 20,
+		"newest entries to show (the journal is a log: bound the read, do not flood the context)")
+	return cmd
+}
+
+func HistoryInfoCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "history-info <key>",
+		Short: "Compact journal overview: writes, rediscoveries, time range",
+		Long: `Fast overview an agent can consult before pulling the full journal:
+how many values this key accepted (changes = writes - 1), how often it was
+re-discovered, and the surviving journal's time range.
+
+Counts are LOWER BOUNDS: an admin pruning old journal indices removes
+entries the app cannot see. Trust them with the category's staleness rule,
+not as lifetime totals.`,
+		Args: cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			key := args[0]
+			ctx := context.Background()
+			c, err := newClient()
+			if err != nil {
+				fatalErr(err)
+			}
+			info, err := c.HistoryInfo(ctx, key)
+			if err != nil {
+				fatalErr(err)
+			}
+			var b strings.Builder
+			b.WriteString("key: ")
+			b.WriteString(strconv.Quote(info.Key))
+			b.WriteString("\n")
+			b.WriteString("writes: ")
+			b.WriteString(strconv.Itoa(info.Writes))
+			b.WriteString("\n")
+			b.WriteString("rediscoveries: ")
+			b.WriteString(strconv.Itoa(info.Rediscoveries))
+			b.WriteString("\n")
+			b.WriteString("first_at: ")
+			b.WriteString(displayTimePtr(info.FirstAt))
+			b.WriteString("\n")
+			b.WriteString("last_at: ")
+			b.WriteString(displayTimePtr(info.LastAt))
+			b.WriteString("\n")
+			if info.Category != "" {
+				b.WriteString("category: ")
+				b.WriteString(strconv.Quote(info.Category))
+				b.WriteString("\n")
+			}
+			if info.CurrentRef != "" {
+				b.WriteString("current_ref: ")
+				b.WriteString(info.CurrentRef)
+				b.WriteString("\n")
+			}
+			if _, err := io.WriteString(os.Stdout, b.String()); err != nil {
+				fatalErr(err)
+			}
+		},
+	}
+	return cmd
+}
+
+// displayTimePtr renders an optional timestamp ("none" when the journal has
+// no entries yet, so the field is never silently absent).
+func displayTimePtr(t *time.Time) string {
+	if t == nil {
+		return "none"
+	}
+	return displayTime(*t)
+}

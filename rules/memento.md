@@ -15,10 +15,10 @@ Paste this into your always-on rules:
 ```
 - Start of a session in a project → `memento_list <project>` (always).
 - Before re-verifying something → `memento_search <query>` / `memento_get <key>`; after verifying something new → `memento_add`.
-- Value changed → correct via the same key; the old value moves to history. A key names a stable subject — predictable English, not a value (`proj:api:port`, not `proj:api:v1`).
+- Value changed → correct via the same key; the accepted value is appended to the history journal. A key names a stable subject — predictable English, not a value (`proj:api:port`, not `proj:api:v1`).
 - Qualifiers and doubts → `notes` ("checked the dev config only"). Subject gone → `memento_obsolete <key> [reason]`.
-- Reads return the current value only (`stale`/`age_days` included); history needs `include_history: true`. `stale: true` → re-verify against the source before trusting.
-- `memento_prune` is destructive: without `confirm: true` it only returns the plan; show the plan to the user and confirm only after their approval.
+- Reads return the current value only (`stale`/`age_days` included); history costs context — use `memento_history_info` (cheap counts) and `memento_journal` (the entries) only when the history matters. `stale: true` → re-verify against the source before trusting.
+- `memento_prune` is destructive and manual (the journal is write-forever by design): without `confirm: true` it only returns the plan; show the plan to the user and confirm only after their approval.
 - **Never store secrets** (passwords, tokens, keys) — the store is plaintext;
   a best-effort secret guard (default `reject`) scans writes, but it is not
   protection: the rule is on you.
@@ -40,7 +40,9 @@ staleness in context. The store never decides.
 | `memento_search <query>` | search in `value` and `notes` (not in keys) |
 | `memento_get <key>` | exact key (`found=false` when absent) |
 | `memento_add <key> <value> [category] [project] [source] [notes]` | upsert (categories: location, config, endpoint, behavior, context_map — unknown ones are rejected) |
-| `memento_prune <key> [keep]` | drop old history (destructive: plan first, `confirm=true` only after the user approves) |
+| `memento_history_info <key>` | cheap history overview: writes, rediscoveries, first/last — no entry bodies |
+| `memento_journal <key> [limit]` | the journal: every accepted value, newest first (read it only when the history matters) |
+| `memento_prune <key> [keep]` | drop old journal entries (destructive: plan first, `confirm=true` only after the user approves) |
 | `memento_obsolete <key> [reason]` | the subject is gone |
 
 ### When to search, when to store
@@ -63,14 +65,15 @@ staleness in context. The store never decides.
 
 - `verified` — the subject exists; `obsolete` — the subject is gone (file
   deleted, endpoint removed without a successor).
-- **Value changed** → `memento_add` with the same key: the old value moves to
-  `history`, `observed_at` = now. That is a correction, not a loss.
-- **Same key + same value** → no history entry; only `notes`/`source` are
+- **Value changed** → `memento_add` with the same key: the accepted value is
+  journaled and the fact points at it, `observed_at` = now. That is a
+  correction, not a loss.
+- **Same key + same value** → no journal entry; only `notes`/`source` are
   updated (and `observed_at` stays — the observation is old, the note is new).
 - **Subject gone** → `memento_obsolete <key> [reason]`: value and `observed_at`
   are kept, the reason is appended to `notes`.
 - **Subject back** → `memento_add` resurrects it: `obsolete` → `verified`, the
-  old value moves to history.
+  new observation is journaled.
 - `obsolete` ≠ "the fact became false": "false" usually means the value
   changed — that is a correction.
 
@@ -97,7 +100,7 @@ re-verify everything from scratch. A doubt is a note, not a status.
 
 ### Staleness is the LLM's call
 
-The store provides evidence (`source`, `observed_at`, `history`) **and a
+The store provides evidence (`source`, `observed_at`, the journal) **and a
 staleness signal** (`age_days`, `stale`, computed at read time from a
 per-category TTL: `config`/`endpoint` 14 days, `location`/`behavior` 30 days,
 `context_map` and unknown categories never). It does not decide. "Old" depends
@@ -109,11 +112,12 @@ categories — you cannot tell how old it is.
 ### History is off by default
 
 Reads (`memento_get`/`memento_search`/`memento_list`) return the current value
-only; pass `include_history: true` when the chain of past observations is
-actually needed (it bloats the context). Corrections trim the oldest entries
-beyond `history_limit` (default 20). `memento_prune` trims on demand and is
-destructive: the plan comes back without `confirm: true`; write only after the
-user approves.
+only. The history of accepted values lives in the append-only journal: use
+`memento_history_info` first (writes, rediscoveries, the time range — cheap),
+and `memento_journal` when the entries themselves are needed. `include_history`
+returns the legacy in-doc array of pre-journal facts. The journal is
+write-forever; `memento_prune` trims one key on demand and is destructive: the
+plan comes back without `confirm: true`; write only after the user approves.
 
 ### Security
 

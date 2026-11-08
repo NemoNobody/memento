@@ -28,6 +28,11 @@ type Fact struct {
 	Source     string         `json:"source" yaml:"source"`
 	Notes      string         `json:"notes,omitempty" yaml:"notes,omitempty"`
 	History    []HistoryEntry `json:"history,omitempty" yaml:"history,omitempty"`
+
+	// CurrentRef is the journal entry id of the current value: the invariant
+	// "the journal contains the current value" as data. Facts created before
+	// the journal (and before the migrate-history run) have it empty.
+	CurrentRef string `json:"current_ref,omitempty" yaml:"current_ref,omitempty"`
 }
 
 // NewFact creates a new fact with a generated ID and timestamps.

@@ -152,6 +152,27 @@ func runMCPServer(confPath string) error {
 	}, s.obsolete)
 
 	mcp.AddTool(srv, &mcp.Tool{
+		Name: "memento_journal",
+		Description: "Read the journal for a key: the append-only history of " +
+			"accepted values (newest first, bounded by limit; changes = writes-1). " +
+			"op=write is an accepted value; op=rediscovery is reserved for " +
+			"same-value re-confirmation by a different author. Counts after an " +
+			"admin deleted old journal indices are lower bounds. Use " +
+			"memento_history_info first for the cheap overview, the full " +
+			"journal only when the history matters.",
+	}, s.journal)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "memento_history_info",
+		Description: "Compact per-key history overview: writes, rediscoveries, " +
+			"first/last timestamp, current_ref — without the entry bodies. " +
+			"Answers 'did this fact change, how often, when was the last time' " +
+			"for fast scouting before a full journal read; a context-cheap " +
+			"summary for reports and trust judgments. Counts are LOWER BOUNDS " +
+			"(admin index pruning is invisible to the app).",
+	}, s.historyInfo)
+
+	mcp.AddTool(srv, &mcp.Tool{
 		Name: "memento_fetch_doc",
 		Description: "Fetch a web page, store its full snapshot in the docs index, " +
 			"and return the outline (hash, title, sections). A second fetch of the " +
@@ -652,6 +673,13 @@ func (s *mcpServer) prune(ctx context.Context, req *mcp.CallToolRequest, in prun
 		return nil, pruneOutput{}, storeError("memento_prune", err)
 	}
 	total := len(f.History)
+	// Journal-first: once a key has journal entries, the journal IS the
+	// history and the legacy in-doc array is only counted pre-migration.
+	if jt, jErr := c.JournalCount(ctx, in.Key); jErr != nil {
+		return nil, pruneOutput{}, storeError("memento_prune", jErr)
+	} else if jt > 0 {
+		total = jt
+	}
 	if total <= keep {
 		return nil, pruneOutput{Key: in.Key, HistoryTotal: total, Keep: total, Removed: 0}, nil
 	}
@@ -675,6 +703,55 @@ func (s *mcpServer) prune(ctx context.Context, req *mcp.CallToolRequest, in prun
 		return nil, pruneOutput{}, storeError("memento_prune", err)
 	}
 	return nil, pruneOutput{Key: in.Key, HistoryTotal: total, Keep: keep, Removed: removed, Pruned: true}, nil
+}
+
+// --- journal (history log index) ---
+
+type journalInput struct {
+	Key   string `json:"key" jsonschema:"exact fact key"`
+	Limit int    `json:"limit,omitempty" jsonschema:"newest entries to return (default 20, cap 1000)"`
+}
+
+type journalOutput struct {
+	Key       string               `json:"key" jsonschema:"the queried key"`
+	Entries   []model.JournalEntry `json:"entries" jsonschema:"journal entries, newest first"`
+	Total     int                  `json:"total" jsonschema:"total entries for the key (lower bound after admin index deletes)"`
+	Truncated bool                 `json:"truncated" jsonschema:"true when more entries exist than returned (raise limit)"`
+}
+
+func (s *mcpServer) journal(ctx context.Context, req *mcp.CallToolRequest, in journalInput) (*mcp.CallToolResult, journalOutput, error) {
+	c, err := s.newClient(ctx)
+	if err != nil {
+		return nil, journalOutput{}, storeError("memento_journal", err)
+	}
+	limit := in.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	entries, total, truncated, err := c.JournalEntries(ctx, in.Key, limit)
+	if err != nil {
+		return nil, journalOutput{}, storeError("memento_journal", err)
+	}
+	if entries == nil {
+		entries = []model.JournalEntry{}
+	}
+	return nil, journalOutput{Key: in.Key, Entries: entries, Total: total, Truncated: truncated}, nil
+}
+
+type historyInfoInput struct {
+	Key string `json:"key" jsonschema:"exact fact key"`
+}
+
+func (s *mcpServer) historyInfo(ctx context.Context, req *mcp.CallToolRequest, in historyInfoInput) (*mcp.CallToolResult, model.HistoryInfo, error) {
+	c, err := s.newClient(ctx)
+	if err != nil {
+		return nil, model.HistoryInfo{}, storeError("memento_history_info", err)
+	}
+	info, err := c.HistoryInfo(ctx, in.Key)
+	if err != nil {
+		return nil, model.HistoryInfo{}, storeError("memento_history_info", err)
+	}
+	return nil, *info, nil
 }
 
 // --- page snapshots (docs index) ---

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/NemoNobody/memento/internal/config"
@@ -28,6 +29,10 @@ var ErrNotFound = errors.New("fact not found")
 type Client struct {
 	api *opensearchapi.Client
 	cfg *config.Config
+
+	// journalOnce guards journal infra installation (pipeline + template):
+	// one idempotent check per process, paid on the first journal append.
+	journalOnce sync.Once
 }
 
 // NewClient creates a new OpenSearch client.
@@ -148,8 +153,11 @@ func buildIndexBody() map[string]interface{} {
 				"observed_at": map[string]interface{}{"type": "date"},
 				"source":      map[string]interface{}{"type": "keyword"},
 				"notes":       map[string]interface{}{"type": "text"},
-				// Stored, never indexed: history is read with the fact, not searched.
+				// Stored, never indexed: legacy history arrays predate the journal
+				// and are read with the fact, not searched.
 				"history": map[string]interface{}{"type": "object", "enabled": false},
+				// Journal entry id of the current value (see model.Fact.CurrentRef).
+				"current_ref": map[string]interface{}{"type": "keyword"},
 			},
 		},
 	}
@@ -189,37 +197,37 @@ func (c *Client) EnsureIndex(ctx context.Context) error {
 	return nil
 }
 
-// addCorrectionScript records a value change: the current observation is
-// appended to history before the new value replaces it. Facts created before
-// observed_at/history existed have neither, so the script falls back to
-// updated_at and initialises the array.
+// addCorrectionScript records a value change on the main fact doc: the new
+// value replaces the old, and current_ref points at the journal entry that
+// was appended for it (the journal append happens BEFORE this script: the
+// journal is the log, the main doc is the projection, and an orphan journal
+// entry from a failed main write is a harmless truth, never a lost value).
 //
-// After the append, the oldest entries beyond params.history_limit are dropped:
-// a correction must not grow one key's history without bound (state keys get
-// corrected daily, and history ships inside every get/list response).
-// history_limit <= 0 means "keep everything".
+// The in-doc history array is no longer maintained: the journal index is the
+// history. Facts created before the journal keep their array until
+// 'memento migrate-history' moves it.
 const addCorrectionScript = `
-def obs = ctx._source.observed_at != null ? ctx._source.observed_at : ctx._source.updated_at;
-def src = ctx._source.source != null ? ctx._source.source : '';
-if (ctx._source.history == null) { ctx._source.history = new ArrayList(); }
-ctx._source.history.add(['value': ctx._source.value, 'observed_at': obs, 'source': src]);
-if (params.history_limit > 0) {
-  while (ctx._source.history.size() > params.history_limit) { ctx._source.history.remove(0); }
-}
 ctx._source.value = params.value;
 ctx._source.category = params.category;
 ctx._source.observed_at = params.observed_at;
 ctx._source.source = params.source;
 if (params.notes != null && params.notes != '') { ctx._source.notes = params.notes; }
 ctx._source.status = 'verified';
+ctx._source.current_ref = params.current_ref;
 ctx._source.updated_at = params.updated_at;
 `
 
-// Add stores a fact under its key. Three cases: the key is new (created); the
-// value is unchanged (only notes/source/status move — observed_at must not, the
-// observation is old and only the qualifier is new); the value changed (the old
-// observation is appended to history and the new one becomes current — this
-// also resurrects an obsolete fact).
+// Add stores a fact under its key. Three cases: the key is new (created, then
+// journaled and linked); the value is unchanged (only notes/source/status
+// move — observed_at must not, the observation is old and only the qualifier
+// is new, and the journal is untouched); the value changed (a journal entry
+// is appended for the new value, then the main doc is corrected to point at
+// it — this also resurrects an obsolete fact).
+//
+// The journal append precedes the main write: the journal is the accepted
+// log, the main doc is the projection. A failed main write leaves an orphan
+// entry (truth: the value was accepted, the projection lags and is fixed by
+// the next write); the reverse order could lose values from the log.
 //
 // Notes are only replaced by a non-empty new note: the CLI flag and the MCP
 // field default to empty, and a correction without --notes must not silently
@@ -229,8 +237,8 @@ ctx._source.updated_at = params.updated_at;
 // validates and canonicalizes it, and a fact stored with the wrong category
 // must not keep the wrong staleness TTL forever (category drives stale).
 //
-// It reports whether the fact was newly created. Writes wait for a refresh, so
-// the fact is immediately visible to subsequent Search/List calls.
+// It reports whether the fact was newly created. Writes wait for a refresh,
+// so the fact is immediately visible to subsequent Search/List calls.
 func (c *Client) Add(ctx context.Context, f *model.Fact) (created bool, err error) {
 	existing, err := c.Get(ctx, f.Key)
 	if errors.Is(err, ErrNotFound) {
@@ -239,12 +247,21 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (created bool, err erro
 			return false, err
 		}
 		if created {
+			// Journal the birth value, then link the fact to it. A journal
+			// failure leaves the fact in the pre-journal shape (migrate-history
+			// catches it), not a broken fact.
+			ref, jErr := c.journalAppend(ctx, f, f.ObservedAt)
+			if jErr != nil {
+				return true, jErr
+			}
+			if lErr := c.linkCurrentRef(ctx, f.Key, ref); lErr != nil {
+				return true, lErr
+			}
 			return true, nil
 		}
 		// op_type=create lost the race to a concurrent Add of the same key
 		// (a plain index would last-write-win and drop the winner's value
-		// with no history): re-read and apply as a correction below, so the
-		// first value reaches history instead of vanishing.
+		// with no journal entry): re-read and apply as a correction below.
 		existing, err = c.Get(ctx, f.Key)
 		if err != nil {
 			return false, fmt.Errorf("add fact: %w", err)
@@ -271,7 +288,7 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (created bool, err erro
 		_, err = c.api.Update(ctx, opensearchapi.UpdateReq{
 			Index:      c.cfg.IndexName,
 			DocumentID: f.Key,
-			Body:       bytes.NewReader(body),
+			Body:       strings.NewReader(string(body)),
 			Params:     opensearchapi.UpdateParams{Refresh: "wait_for"},
 		})
 		if err != nil {
@@ -280,31 +297,65 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (created bool, err erro
 		return false, nil
 	}
 
+	ref, err := c.journalAppend(ctx, f, f.ObservedAt)
+	if err != nil {
+		return false, err
+	}
+
 	body, _ := json.Marshal(map[string]interface{}{
 		"script": map[string]interface{}{
 			"lang":   "painless",
 			"source": addCorrectionScript,
 			"params": map[string]interface{}{
-				"value":         f.Value,
-				"category":      f.Category,
-				"observed_at":   f.ObservedAt.UTC().Format(time.RFC3339),
-				"source":        f.Source,
-				"notes":         f.Notes,
-				"updated_at":    now,
-				"history_limit": c.cfg.HistoryLimit,
+				"value":       f.Value,
+				"category":    f.Category,
+				"observed_at": f.ObservedAt.UTC().Format(time.RFC3339),
+				"source":      f.Source,
+				"notes":       f.Notes,
+				"updated_at":  now,
+				"current_ref": ref,
 			},
 		},
 	})
 	_, err = c.api.Update(ctx, opensearchapi.UpdateReq{
 		Index:      c.cfg.IndexName,
 		DocumentID: f.Key,
-		Body:       bytes.NewReader(body),
+		Body:       strings.NewReader(string(body)),
 		Params:     opensearchapi.UpdateParams{Refresh: "wait_for"},
 	})
 	if err != nil {
 		return false, wrapWriteError("add fact", err)
 	}
 	return false, nil
+}
+
+// journalAppend appends the journal entry for an accepted fact value and
+// returns the entry id. The caller links the fact to it: the correction
+// script carries current_ref, the create path links in a follow-up update.
+func (c *Client) journalAppend(ctx context.Context, f *model.Fact, ts time.Time) (string, error) {
+	if ts.IsZero() {
+		ts = time.Now().UTC()
+	}
+	e := model.NewJournalEntry(f.Key, f.FactID, f.Project, f.Category, model.OpWrite, f.Value, f.Notes, f.Source, ts)
+	return c.AppendJournal(ctx, e)
+}
+
+// linkCurrentRef points a fact at its journal entry. Used on the create path
+// (the birth write happens before the journal id exists); the correction
+// script sets current_ref inside the same write.
+func (c *Client) linkCurrentRef(ctx context.Context, key, ref string) error {
+	body, _ := json.Marshal(map[string]interface{}{
+		"doc": map[string]interface{}{"current_ref": ref},
+	})
+	if _, err := c.api.Update(ctx, opensearchapi.UpdateReq{
+		Index:      c.cfg.IndexName,
+		DocumentID: key,
+		Body:       strings.NewReader(string(body)),
+		Params:     opensearchapi.UpdateParams{Refresh: "wait_for"},
+	}); err != nil {
+		return wrapWriteError("link current_ref", err)
+	}
+	return nil
 }
 
 // createFact stores a brand-new fact with op_type=create: OpenSearch refuses
@@ -438,8 +489,10 @@ func (c *Client) Obsolete(ctx context.Context, key, reason string) error {
 	return nil
 }
 
-// pruneHistoryScript keeps only the newest params.keep history entries.
-// History is oldest-first, so the kept tail is the most recent observations.
+// pruneHistoryScript keeps only the newest params.keep history entries in
+// the legacy in-doc array. It serves facts that predate the journal until
+// 'memento migrate-history' moves their array; journal pruning is
+// PruneJournal (the journal index is the history for journal-era facts).
 const pruneHistoryScript = `
 def h = ctx._source.history;
 if (h != null && h.size() > params.keep) {
@@ -448,14 +501,33 @@ if (h != null && h.size() > params.keep) {
 ctx._source.updated_at = params.updated_at;
 `
 
-// Prune drops history entries beyond the newest keep, keeping the current
-// value untouched. It returns the number of entries removed. Like every
+// JournalEntriesForPrune exposes the journal entry count for a key (the
+// prune planning path shows the journal, not the legacy array, once a key
+// has entries there).
+func (c *Client) JournalCount(ctx context.Context, key string) (int, error) {
+	_, total, _, err := c.JournalEntries(ctx, key, 1)
+	return total, err
+}
+
+// Prune drops history beyond the newest keep. It is journal-first: a key
+// with journal entries is pruned in the journal (the legacy in-doc array is
+// ignored for such keys — migrate-history removes it); keys that predate the
+// journal fall back to the legacy array so live stores prune cleanly between
+// release and migration. It returns the number of entries removed. Like every
 // destructive call it must sit behind an explicit user confirmation — the
 // barrier lives in the CLI (--yes) and the MCP tool (confirm=true).
 func (c *Client) Prune(ctx context.Context, key string, keep int) (int, error) {
 	if keep < 0 {
 		return 0, fmt.Errorf("prune: keep must be >= 0, got %d", keep)
 	}
+	total, err := c.JournalCount(ctx, key)
+	if err != nil {
+		return 0, fmt.Errorf("prune fact: %w", err)
+	}
+	if total > 0 {
+		return c.PruneJournal(ctx, key, keep)
+	}
+
 	existing, err := c.Get(ctx, key)
 	if err != nil {
 		return 0, fmt.Errorf("prune fact: %w", err)

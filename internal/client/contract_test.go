@@ -234,12 +234,17 @@ func TestGetUsesRealtimeDocumentAPI(t *testing.T) {
 	}
 }
 
-// TestAddCorrectionUsesScriptedUpdate pins the history mechanism: a value change
-// must not overwrite the old value — it is appended to history by a scripted
-// update, in one atomic request. A PUT would silently lose the old observation.
+// TestAddCorrectionUsesScriptedUpdate pins the correction mechanism: a value
+// change must not overwrite the old value with a PUT — it is a scripted
+// update that projects the accepted value and points current_ref at the
+// journal entry that carries the history. A PUT would silently lose the old
+// observation (journal_test pins the journal-append-before-main ordering).
 func TestAddCorrectionUsesScriptedUpdate(t *testing.T) {
 	var updateBody string
 	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
+		if code, body := journalRoutesOK(r); code != http.StatusInternalServerError {
+			return code, body
+		}
 		switch {
 		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
 			return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
@@ -281,12 +286,15 @@ func TestAddCorrectionUsesScriptedUpdate(t *testing.T) {
 		t.Fatalf("update body has no script: %s", updateBody)
 	}
 	src, _ := script["source"].(string)
-	if !strings.Contains(src, "history.add") {
-		t.Errorf("script does not append to history: %s", src)
+	if !strings.Contains(src, "current_ref") {
+		t.Errorf("script does not point the fact at its journal entry: %s", src)
 	}
 	params, _ := script["params"].(map[string]any)
 	if params["value"] != "new value" {
 		t.Errorf("params.value = %v, want \"new value\"", params["value"])
+	}
+	if params["current_ref"] != "journal-entry-1" {
+		t.Errorf("params.current_ref = %v, want the journaled entry id", params["current_ref"])
 	}
 }
 
@@ -375,6 +383,9 @@ func TestAddEmptyNotesPreservesNotes(t *testing.T) {
 	// replaces when non-empty).
 	updateBody = ""
 	c2, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+		if code, body := journalRoutesOK(r); code != http.StatusInternalServerError {
+			return code, body
+		}
 		switch {
 		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
 			return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
@@ -399,11 +410,16 @@ func TestAddEmptyNotesPreservesNotes(t *testing.T) {
 // create path, where no previous document exists.
 func TestAddSendsRefreshWaitForForNewFacts(t *testing.T) {
 	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
+		if code, body := journalRoutesOK(r); code != http.StatusInternalServerError {
+			return code, body
+		}
 		switch {
 		case r.Method == http.MethodGet && r.Path == "/memento/_doc/new":
 			return http.StatusNotFound, `{"status":404,"error":"document_missing_exception"}`
 		case r.Method == http.MethodPut && r.Path == "/memento/_doc/new":
 			return http.StatusCreated, `{"_index":"memento","_id":"new","result":"created"}`
+		case r.Method == http.MethodPost && r.Path == "/memento/_update/new":
+			return http.StatusOK, `{"_index":"memento","_id":"new","result":"updated"}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected"}`
 	})
@@ -435,6 +451,9 @@ func TestAddCreateRaceFallsToCorrection(t *testing.T) {
 	gets := 0
 	var updateBody string
 	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
+		if code, body := journalRoutesOK(r); code != http.StatusInternalServerError {
+			return code, body
+		}
 		switch {
 		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
 			gets++
@@ -467,10 +486,10 @@ func TestAddCreateRaceFallsToCorrection(t *testing.T) {
 	if len(fake.requestsFor(http.MethodPost, "/memento/_update/k")) != 1 {
 		t.Fatalf("no scripted correction after the create conflict: %+v", fake.requests)
 	}
-	// The correction script appends the server-side winner value to history
-	// before replacing it (ctx._source.history), so the first value cannot
+	// The correction script points the fact at the journal entry that carries
+	// the accepted value (current_ref), so the winner's first value cannot
 	// vanish.
-	for _, want := range []string{"painless", "ctx._source.history"} {
+	for _, want := range []string{"painless", "current_ref"} {
 		if !strings.Contains(updateBody, want) {
 			t.Errorf("update body lacks %q: %s", want, updateBody)
 		}
@@ -501,59 +520,17 @@ func TestAddBlockedWriteIsActionable(t *testing.T) {
 	}
 }
 
-// TestAddCorrectionCarriesHistoryLimit pins the per-key retention contract:
-// the correction script trims the oldest history beyond params.history_limit,
-// so the limit value must ship with every scripted update. Without it, state
-// keys corrected daily would grow one key's history without bound.
-func TestAddCorrectionCarriesHistoryLimit(t *testing.T) {
-	var updateBody string
-	c, fake := newFakeClientCfg(t, func(cfg *config.Config) { cfg.HistoryLimit = 10 },
-		func(r recordedRequest) (int, string) {
-			switch {
-			case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
-				return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
-					"fact_id":"existing-id","key":"k","value":"old",
-					"created_at":"2020-01-01T00:00:00Z","updated_at":"2020-01-01T00:00:00Z",
-					"observed_at":"2020-01-01T00:00:00Z"}}`
-			case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
-				updateBody = r.Body
-				return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
-			}
-			return http.StatusInternalServerError, `{"status":500,"error":"unexpected"}`
-		})
-
-	if _, err := c.Add(context.Background(), model.NewFact("k", "new value", "config", "p", "test:contract", "")); err != nil {
-		t.Fatalf("Add: %v", err)
-	}
-
-	updates := fake.requestsFor(http.MethodPost, "/memento/_update/k")
-	if len(updates) != 1 {
-		t.Fatalf("expected one scripted update, got %d", len(updates))
-	}
-	var req map[string]any
-	if err := json.Unmarshal([]byte(updateBody), &req); err != nil {
-		t.Fatalf("update body is not JSON: %v (%s)", err, updateBody)
-	}
-	script, ok := req["script"].(map[string]any)
-	if !ok {
-		t.Fatalf("update body has no script: %s", updateBody)
-	}
-	params, _ := script["params"].(map[string]any)
-	if params["history_limit"] != float64(10) {
-		t.Errorf("params.history_limit = %v, want 10", params["history_limit"])
-	}
-	src, _ := script["source"].(string)
-	if !strings.Contains(src, "history_limit") {
-		t.Errorf("script does not apply the retention limit: %s", src)
-	}
-}
-
-// TestPruneScriptedUpdate pins the prune contract: it is a scripted update
-// that keeps the newest tail of history, touches neither value nor
-// observed_at, refreshes for read-after-write, and reports the removed count.
+// TestPruneScriptedUpdate pins the legacy-array fallback: a key with no
+// journal entries (the store predates the journal) is pruned with a scripted
+// update that keeps the newest tail of the in-doc array, touches neither
+// value nor observed_at, refreshes for read-after-write, and reports the
+// removed count. Journal-era keys are pruned in the journal (journal_test).
 func TestPruneScriptedUpdate(t *testing.T) {
 	var updateBody string
 	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
+		if code, body := journalRoutesOK(r); code != http.StatusInternalServerError {
+			return code, body
+		}
 		switch {
 		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
 			return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
@@ -608,6 +585,9 @@ func TestPruneScriptedUpdate(t *testing.T) {
 // so nothing is written — updated_at must not move on a no-op.
 func TestPruneNoWriteWhenWithinLimit(t *testing.T) {
 	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
+		if code, body := journalRoutesOK(r); code != http.StatusInternalServerError {
+			return code, body
+		}
 		if r.Method == http.MethodGet && r.Path == "/memento/_doc/k" {
 			return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
 				"key":"k","value":"v","category":"config","project":"p","status":"verified",

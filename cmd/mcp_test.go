@@ -98,6 +98,7 @@ func childEnv(overrides []string) []string {
 var wantTools = []string{
 	"memento_status", "memento_search", "memento_get",
 	"memento_add", "memento_list", "memento_keys", "memento_prune", "memento_obsolete",
+	"memento_journal", "memento_history_info",
 	"memento_fetch_doc", "memento_get_doc", "memento_search_docs",
 }
 

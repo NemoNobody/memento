@@ -7,6 +7,9 @@ What matters:
 
 - the facts index (`index_name`, default `memento`) — **irreplaceable**: this is
   the accumulated memory;
+- the journal indices (`<index_name>-history-*` — dated, one per period) —
+  **irreplaceable** too: they are the history of every accepted value; a
+  snapshot that skips them keeps the facts and loses the chain;
 - the docs index (`docs_index_name`, default `memento-docs`) — a cache: a lost
   snapshot only costs re-fetches, include it if convenient;
 - snapshots carry **plaintext facts** exactly like the store: the same rule
@@ -46,7 +49,7 @@ curl -k -u "admin:$OPENSEARCH_PASSWORD" -X PUT \
 curl -k -u "admin:$OPENSEARCH_PASSWORD" -X PUT \
   "https://127.0.0.1:9200/_snapshot/memento-fs/backup-$(date +%Y%m%d)?wait_for_completion=true" \
   -H 'Content-Type: application/json' \
-  -d '{"indices":"memento,memento-docs","ignore_unavailable":true,"include_global_state":false}'
+  -d '{"indices":"memento,memento-history-*,memento-docs","ignore_unavailable":true,"include_global_state":false}'
 ```
 
 Check it:
@@ -76,10 +79,14 @@ restore itself:
 curl -k -u "admin:$OPENSEARCH_PASSWORD" -X POST \
   "https://127.0.0.1:9200/_snapshot/memento-fs/backup-YYYYMMDD/_restore" \
   -H 'Content-Type: application/json' \
-  -d '{"indices":"memento","include_global_state":false,
+  -d '{"indices":"memento,memento-history-*","include_global_state":false,
        "rename_pattern":"memento","rename_replacement":"memento-restore-test",
        "index_settings":{"index.number_of_replicas":0}}'
 ```
+
+(`rename_pattern` is a prefix regex: `memento-history-2026.11` restores as
+`memento-restore-test-history-2026.11`; `ignore_unavailable` on the snapshot
+covers stores that never wrote a journal entry.)
 
 (OpenSearch `_restore` has no `wait_for_status` parameter — Elasticsearch
 recipes using it fail with 400 here.)

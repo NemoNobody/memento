@@ -55,22 +55,23 @@ func permWarning(cfg *config.Config, configFile string) string {
 // memento_status MCP tool. It never carries an error: it describes the situation
 // so both a human and an agent can act on it.
 type statusReport struct {
-	OK           bool                 `json:"ok" jsonschema:"true when OpenSearch is reachable and the store is usable"`
-	URL          string               `json:"url" jsonschema:"the OpenSearch URL that was tried"`
-	Index        string               `json:"index" jsonschema:"the index name used for facts"`
-	HistoryLimit int                  `json:"history_limit" jsonschema:"per-key history retention applied on corrections; 0 keeps everything"`
-	SecretGuard  string               `json:"secret_guard,omitempty" jsonschema:"secret guard level in effect on writes: reject | ask | allow"`
-	PasswordFrom string               `json:"password_from,omitempty" jsonschema:"where the OpenSearch password resolves from: env | keyring | file | none; the value is never shown"`
-	PermWarning  string               `json:"perm_warning,omitempty" jsonschema:"plaintext password in a group/world-readable config file: the user should chmod 600 it"`
-	KeyringError string               `json:"keyring_error,omitempty" jsonschema:"keyring provider failure (not 'entry not found'): a bus/wallet outage, not a missing entry"`
-	ConfigFile   string               `json:"config_file" jsonschema:"config file actually used, empty when none was found"`
-	EnvOverrides []string             `json:"env_overrides,omitempty" jsonschema:"environment variables that override the config file"`
-	ClusterName  string               `json:"cluster_name,omitempty" jsonschema:"OpenSearch cluster name, when reachable"`
-	Version      string               `json:"version,omitempty" jsonschema:"OpenSearch version, when reachable"`
-	Storage      *client.StorageState `json:"storage,omitempty" jsonschema:"cluster health, disk usage and read-only state; absent when the store is unreachable"`
-	StorageNote  string               `json:"storage_note,omitempty" jsonschema:"what the health status means for this index, in words"`
-	Error        string               `json:"error,omitempty" jsonschema:"why the store is not usable"`
-	Hint         string               `json:"hint,omitempty" jsonschema:"what the user should do about it"`
+	OK                 bool                 `json:"ok" jsonschema:"true when OpenSearch is reachable and the store is usable"`
+	URL                string               `json:"url" jsonschema:"the OpenSearch URL that was tried"`
+	Index              string               `json:"index" jsonschema:"the index name used for facts"`
+	HistoryIndexPeriod string               `json:"history_index_period" jsonschema:"date granularity of the journal indices: day | week | month | quarter | year"`
+	HistoryLimit       int                  `json:"history_limit" jsonschema:"default keep for 'prune' (the journal itself is write-forever); 0 demands an explicit keep"`
+	SecretGuard        string               `json:"secret_guard,omitempty" jsonschema:"secret guard level in effect on writes: reject | ask | allow"`
+	PasswordFrom       string               `json:"password_from,omitempty" jsonschema:"where the OpenSearch password resolves from: env | keyring | file | none; the value is never shown"`
+	PermWarning        string               `json:"perm_warning,omitempty" jsonschema:"plaintext password in a group/world-readable config file: the user should chmod 600 it"`
+	KeyringError       string               `json:"keyring_error,omitempty" jsonschema:"keyring provider failure (not 'entry not found'): a bus/wallet outage, not a missing entry"`
+	ConfigFile         string               `json:"config_file" jsonschema:"config file actually used, empty when none was found"`
+	EnvOverrides       []string             `json:"env_overrides,omitempty" jsonschema:"environment variables that override the config file"`
+	ClusterName        string               `json:"cluster_name,omitempty" jsonschema:"OpenSearch cluster name, when reachable"`
+	Version            string               `json:"version,omitempty" jsonschema:"OpenSearch version, when reachable"`
+	Storage            *client.StorageState `json:"storage,omitempty" jsonschema:"cluster health, disk usage and read-only state; absent when the store is unreachable"`
+	StorageNote        string               `json:"storage_note,omitempty" jsonschema:"what the health status means for this index, in words"`
+	Error              string               `json:"error,omitempty" jsonschema:"why the store is not usable"`
+	Hint               string               `json:"hint,omitempty" jsonschema:"what the user should do about it"`
 }
 
 // resolvedConfigPath returns the config file that would be used, given an
@@ -135,6 +136,7 @@ func collectStatus(ctx context.Context, confPath string, noCWD bool) statusRepor
 	}
 	rep.URL = config.RedactURL(cfg.OpenSearchURL)
 	rep.Index = cfg.IndexName
+	rep.HistoryIndexPeriod = cfg.HistoryIndexPeriod
 	rep.HistoryLimit = cfg.HistoryLimit
 	rep.SecretGuard = cfg.SecretGuard
 	rep.PasswordFrom = cfg.PasswordSource
@@ -270,6 +272,8 @@ func printStatus(w io.Writer, rep statusReport) error {
 	b.WriteString(rep.URL)
 	b.WriteString("\nindex: ")
 	b.WriteString(rep.Index)
+	b.WriteString("\nhistory_index_period: ")
+	b.WriteString(rep.HistoryIndexPeriod)
 	b.WriteString("\nhistory_limit: ")
 	b.WriteString(strconv.Itoa(rep.HistoryLimit))
 	b.WriteString("\nsecret_guard: ")

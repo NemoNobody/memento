@@ -15,9 +15,10 @@ Each fact carries evidence, not verdicts:
 - **provenance** (`source`): where it came from — `tool:read_file`,
   `experiment`, `user:confirmed`, `doc:*`;
 - **observation time** (`observed_at`): when the value was actually seen;
-- **history**: a changed value moves the old one to `history` instead of
-  overwriting it; bounded per key by `history_limit` (default 20, oldest
-  entries dropped first);
+- **history**: every accepted value is appended to an append-only journal
+  index (`<index>-history-<period>`, monthly by default) instead of
+  overwriting the fact; entries are never rewritten and the journal is not
+  pruned by default (write-forever), so history shows how old it is;
 - **notes**: free-text qualifiers, e.g. "checked the dev config only";
 - **secret guard**: writes scan for credential-like text (the index is
   plaintext) — `reject` by default, `ask` needs an explicit confirmation,
@@ -60,6 +61,7 @@ and fill in your OpenSearch connection.
   "opensearch_user": "admin",
   "insecure_skip_verify": false,
   "index_name": "memento",
+  "history_index_period": "month",
   "history_limit": 20,
   "secret_guard": "reject",
   "allow_plaintext": false,
@@ -76,9 +78,9 @@ set `insecure_skip_verify: true` — dev only; verification is on by default.
 
 The index is created automatically on first use. Env vars override the file:
 `OPENSEARCH_URL`, `OPENSEARCH_USER`, `OPENSEARCH_PASSWORD`,
-`OPENSEARCH_INSECURE_SKIP_VERIFY`, `MEMENTO_INDEX`, `MEMENTO_HISTORY_LIMIT`,
-`MEMENTO_SECRET_GUARD`, `MEMENTO_ALLOW_PLAINTEXT`; `MEMENTO_CONF` points at an
-explicit config file. Fetch
+`OPENSEARCH_INSECURE_SKIP_VERIFY`, `MEMENTO_INDEX`, `MEMENTO_HISTORY_PERIOD`,
+`MEMENTO_HISTORY_LIMIT`, `MEMENTO_SECRET_GUARD`, `MEMENTO_ALLOW_PLAINTEXT`;
+`MEMENTO_CONF` points at an explicit config file. Fetch
 options (`memento fetch`): `MEMENTO_DOCS_INDEX`, `MEMENTO_DOCS_TTL_DAYS`,
 `MEMENTO_FETCH_TIMEOUT`, `MEMENTO_FETCH_MAX_BYTES`, `MEMENTO_FETCH_HOSTS`,
 `MEMENTO_FETCH_USER_AGENT`, `MEMENTO_FETCH_PROXY_URL`,
@@ -116,12 +118,15 @@ memento docs "example"
 
 | Command | Description |
 |---------|-------------|
-| `memento add <key> <value> <category> [--project <p>] [--source <s>] [--notes <n>] [--allow-secret]` | Add or correct a fact (old value goes to history) |
-| `memento get <key> [--history]` | Get a fact by key (history is off by default; `--history` prints the full chain) |
+| `memento add <key> <value> <category> [--project <p>] [--source <s>] [--notes <n>] [--allow-secret]` | Add or correct a fact (the accepted value is appended to the journal) |
+| `memento get <key> [--history]` | Get a fact by key (history is off by default; `--history` prints the journal chain) |
 | `memento search <query> [--project <p>] [--category <c>] [--status <s>] [--limit N]` | Full-text search over values and notes (`--status any` disables the status filter; `--limit 0` = up to 1000) |
 | `memento keys [prefix] [--match <s>] [--project <p>] [--status <s>]` | Find facts by key: prefix and/or substring (`*`, `?` wildcards in `--match`), across projects |
 | `memento list <project> [--prefix <p>]` | List all facts for a project, optionally narrowed to a key prefix (trailing `*` allowed) |
-| `memento prune <key> [--keep N] [--yes]` | Drop old history entries, keeping the newest N (destructive: without `--yes` only the plan is printed) |
+| `memento journal <key> [--limit N]` | Read the journal: the append-only history of a key, newest first |
+| `memento history-info <key>` | Compact journal overview: writes, rediscoveries, time range (no entry text) |
+| `memento prune <key> [--keep N] [--yes]` | Drop old journal entries, keeping the newest N (manual admin tool: destructive, without `--yes` only the plan is printed) |
+| `memento migrate-history [--project <p>] [--yes]` | Move pre-journal in-doc history arrays into the journal (one-time; plan first, `--yes` to write) |
 | `memento obsolete <key> [reason] [--allow-secret]` | Mark a fact obsolete because its subject is gone (reason appended to notes) |
 | `memento status [--conf <path>]` | Check connectivity and show the effective configuration (env overrides are listed by name, never values) |
 | `memento creds set\|status\|rm [--url <u>]` | Manage the OpenSearch password in the OS keyring: `set` reads a hidden prompt (piped stdin for scripts), `status` shows only the source (`env\|keyring\|file\|none`), `rm` deletes the entry; the stored value is never printed |
@@ -132,17 +137,20 @@ memento docs "example"
 
 Key convention: the key names a **stable subject**, not its current value —
 `demo:api:port`, not `demo:api:v1`. Re-using the same key with a new value is a
-correction that keeps the old value in history; re-adding the same value updates
-notes only.
+correction: the new value is journaled and the fact points at it; re-adding the
+same value updates notes only and leaves the journal untouched.
 
 ## MCP server
 
 `memento mcp` speaks MCP over stdio, so agents (VS Code, others) call
 `memento_status`, `memento_search`, `memento_get`, `memento_add`, `memento_list`,
-`memento_keys`, `memento_prune`, `memento_obsolete`, `memento_fetch_doc`,
-`memento_get_doc` and `memento_search_docs` directly. Reads omit
+`memento_keys`, `memento_journal`, `memento_history_info`, `memento_prune`,
+`memento_obsolete`, `memento_fetch_doc`, `memento_get_doc` and
+`memento_search_docs` directly. Reads omit
 history unless
-`include_history=true` is passed, and carry `age_days`/`stale`. Registration and
+`include_history=true` is passed (that chain is the legacy pre-journal
+in-doc array; journal history is read with `memento_journal` /
+`memento_history_info`), and carry `age_days`/`stale`. Registration and
 troubleshooting: [docs/mcp.md](docs/mcp.md).
 
 ## Use with agents

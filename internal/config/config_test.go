@@ -76,6 +76,7 @@ func clearEnv(t *testing.T) {
 		"OPENSEARCH_PASSWORD",
 		"MEMENTO_INDEX",
 		"MEMENTO_HISTORY_LIMIT",
+		"MEMENTO_HISTORY_PERIOD",
 		"MEMENTO_SECRET_GUARD",
 		"MEMENTO_ALLOW_PLAINTEXT",
 		"MEMENTO_DOCS_INDEX",
@@ -183,6 +184,9 @@ func TestDefaultConfig(t *testing.T) {
 	}
 	if cfg.HistoryLimit != 20 {
 		t.Errorf("HistoryLimit = %d, want default 20", cfg.HistoryLimit)
+	}
+	if cfg.HistoryIndexPeriod != PeriodMonth {
+		t.Errorf("HistoryIndexPeriod = %q, want default %q", cfg.HistoryIndexPeriod, PeriodMonth)
 	}
 	if cfg.SecretGuard != GuardReject {
 		t.Errorf("SecretGuard = %q, want the safe default %q", cfg.SecretGuard, GuardReject)
@@ -380,6 +384,65 @@ func TestLoadConfig_SecretGuardBadValuesAreErrors(t *testing.T) {
 	t.Setenv("MEMENTO_SECRET_GUARD", "yes-please")
 	if _, err := LoadConfig(); err == nil {
 		t.Error("LoadConfig() = nil error for MEMENTO_SECRET_GUARD=yes-please, want error")
+	}
+}
+
+func TestLoadConfig_HistoryIndexPeriod(t *testing.T) {
+	cases := []struct {
+		name string
+		file string
+		env  string
+		want string
+	}{
+		{"file quarter", `{"history_index_period": "quarter"}`, "", PeriodQuarter},
+		{"file canonicalizes", `{"history_index_period": "  Week "}`, "", PeriodWeek},
+		{"env overrides file", `{"history_index_period": "year"}`, "day", PeriodDay},
+		{"env canonicalizes", `{}`, "Quarter", PeriodQuarter},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			restore := chdir(t, dir)
+			defer restore()
+			clearEnv(t)
+			fc := filepath.Join(dir, "memento.conf")
+			if err := os.WriteFile(fc, []byte(tc.file), 0644); err != nil {
+				t.Fatalf("write memento.conf: %v", err)
+			}
+			if tc.env != "" {
+				t.Setenv("MEMENTO_HISTORY_PERIOD", tc.env)
+			}
+			cfg, err := LoadConfig()
+			if err != nil {
+				t.Fatalf("LoadConfig: %v", err)
+			}
+			if cfg.HistoryIndexPeriod != tc.want {
+				t.Errorf("HistoryIndexPeriod = %q, want %q", cfg.HistoryIndexPeriod, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadConfig_HistoryIndexPeriodBadValuesAreErrors(t *testing.T) {
+	dir := t.TempDir()
+	restore := chdir(t, dir)
+	defer restore()
+	clearEnv(t)
+
+	fc := filepath.Join(dir, "memento.conf")
+	if err := os.WriteFile(fc, []byte(`{"history_index_period": "fortnight"}`), 0644); err != nil {
+		t.Fatalf("write memento.conf: %v", err)
+	}
+	if _, err := LoadConfig(); err == nil {
+		t.Error("LoadConfig() = nil error for history_index_period=fortnight, want error")
+	}
+
+	if err := os.WriteFile(fc, []byte(`{}`), 0644); err != nil {
+		t.Fatalf("write memento.conf: %v", err)
+	}
+	t.Setenv("MEMENTO_HISTORY_PERIOD", "biweekly")
+	if _, err := LoadConfig(); err == nil {
+		t.Error("LoadConfig() = nil error for MEMENTO_HISTORY_PERIOD=biweekly, want error")
 	}
 }
 

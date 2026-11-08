@@ -20,12 +20,14 @@ document keyed by its `key` (the key is the document ID).
 | `observed_at` | date | when the current value was seen (moves only on value change) |
 | `source` | keyword | `tool:read_file \| experiment \| user:confirmed \| doc:*` |
 | `notes` | text | free-text qualifiers (omitted when empty; obsolete reasons appended here) |
-| `history` | object (`enabled: false`) | past observations `[{value, observed_at, source}]` — stored, never indexed |
+| `current_ref` | keyword | id of the journal entry that carries the current value |
+| `history` | object (`enabled: false`) | **legacy** pre-journal array `[{value, observed_at, source}]` — stored, never indexed; `memento migrate-history` moves it into the journal and removes the field |
 
 ### Key conventions
 
 - `key` is the document ID. Re-adding the same key is an idempotent upsert:
-  a new value moves the old one to `history`; the same value updates notes only.
+  a new value is appended to the journal and the fact points at the entry
+  (`current_ref`); the same value updates notes only.
 - `key` should be stable, unique per fact, and written in **predictable English**
   (`project:area:location:detail`) — a later session must be able to guess it
   without searching.
@@ -39,9 +41,10 @@ document keyed by its `key` (the key is the document ID).
 memento add <key> <value> <category> [--project <p>] [--source <s>] [--notes <n>]
 ```
 
-Adds a fact. If the key exists: a different value corrects it (the old value
-moves to `history`); the same value updates `notes`/`source` only (no history
-entry, `observed_at` stays). `--notes` carries qualifiers ("checked dev config
+Adds a fact. If the key exists: a different value corrects it (the accepted
+value is appended to the journal, then the main doc is updated to point at the
+entry); the same value updates `notes`/`source` only (no journal entry,
+`observed_at` stays). `--notes` carries qualifiers ("checked dev config
 only") to later sessions.
 
 ### get
@@ -52,7 +55,9 @@ memento get <key> [--history]
 
 Returns the fact for a key, plus the freshness signal (`age_days`, `stale`).
 The history chain is **off by default** (it bloats the context of agents that
-read facts on every turn); `--history` prints it.
+read facts on every turn); `--history` prints the legacy in-doc array of
+pre-journal facts. Journal-era history is read with `memento journal` /
+`memento history-info`.
 
 ### search
 
@@ -74,14 +79,29 @@ All facts for a project, optionally narrowed to a key prefix (navigation cap
 1000; the CLI says when the answer was truncated). Stale facts are marked
 `[stale: Nd]`.
 
+### journal / history-info
+
+```
+memento journal <key> [--limit N]
+memento history-info <key>
+```
+
+`journal` reads the journal for a key: every accepted value, newest first
+(`--limit` caps the page). `history-info` is the cheap overview: writes,
+rediscoveries, first/last timestamps, `current_ref` — no entry bodies. Use it
+to answer "did this fact change, how often, when last" before pulling the
+full journal.
+
 ### prune
 
 ```
 memento prune <key> [--keep N] [--yes]
 ```
 
-Drops history entries beyond the newest `N`, keeping the current value
-untouched. `N` defaults to `history_limit` from the config.
+Drops journal entries beyond the newest `N` (journal-first; keys that predate
+the journal fall back to the legacy in-doc array), keeping the current value
+untouched. `N` defaults to `history_limit` from the config. The journal is
+write-forever by design, so pruning is a manual admin tool, never automatic.
 
 Pruning is destructive (dropped observations have no undo), so it sits behind a
 barrier: **without `--yes` nothing is written** — the command prints the plan
@@ -97,17 +117,59 @@ memento obsolete <key> [reason]
 
 Marks the fact `obsolete` because its subject is gone (file deleted, endpoint
 removed). The value and `observed_at` are kept; the reason is appended to
-`notes`. Use `add` instead when the value merely changed — corrections keep the
-old value in `history`.
+`notes`. Use `add` instead when the value merely changed — corrections journal
+the new value.
+
+## The journal (history)
+
+History is an append-only **journal** of dated indices, not an array inside
+the fact doc:
+
+- One entry per accepted value: `fact_key`, `op` (`write`; `rediscovery` is
+  reserved for same-value re-confirmation by a different author), `value`,
+  `notes`, `source`, `created_at`, author fields. `op_type=create`: appends
+  never overwrite each other, there is no CAS.
+- Entries live in `<index>-history-<period>`: the period granularity is
+  `history_index_period` (config; env `MEMENTO_HISTORY_PERIOD`; default
+  `month` — `2026.11`; also `day`, `week` (`2026-W46`), `quarter`
+  (`2026-Q4`), `year`). Dated indices keep old periods small, inspectable,
+  and deletable (the admin pruning path).
+- The journal infrastructure (ingest pipeline `<index>-journal-ts` stamping
+  entries with the **server clock** — writer clocks skew on a shared store;
+  index template `<index>-journal` with explicit mappings) is created
+  automatically on the first accepted write.
+- Write order: the journal append happens **before** the main-doc update.
+  The journal is the accepted log, the fact doc is the projection. A failed
+  main write leaves an orphan entry (truth: the value was accepted, the
+  projection is fixed by the next write); the reverse order could lose
+  values from the log.
+- The journal is never pruned automatically (write-forever): history shows
+  how old it is. `history_limit` is only the default `--keep` for the manual
+  `memento prune`.
+- After an admin deleted old journal indices, read counts are lower bounds —
+  the app cannot see deletions it did not perform.
+
+### migrate-history
+
+```
+memento migrate-history [--project <p>] [--yes]
+```
+
+One-time upgrade step from pre-journal releases: moves each fact's in-doc
+`history` array into the journal (entries land in the index of their
+`observed_at`), appends the current value, sets `current_ref`, and removes
+the array. It prints the plan first; `--yes` writes. Unmigrated facts keep
+working; their history just stays in-doc until the next correction.
 
 ## History retention
 
-Corrections are frequent (state keys get re-observed daily), so an unbounded
-`history` array bloats every response. The correction script appends the old
-value and then trims the oldest entries beyond `history_limit` (config key
-`history_limit`, env `MEMENTO_HISTORY_LIMIT`, default 20; `0` keeps
-everything). `memento prune` applies the same idea on demand, behind a
-confirmation barrier.
+Corrections are frequent (state keys get re-observed daily), so history is
+kept out of the fact doc entirely: the journal carries it and fact reads stay
+cheap. The journal is write-forever; `history_limit` (config key
+`history_limit`, env `MEMENTO_HISTORY_LIMIT`, default 20) is the default
+`--keep` for `memento prune`, which applies it on demand, behind a
+confirmation barrier. Dated journal indices are the retention lever: an admin
+can close, snapshot, or delete whole periods with standard OpenSearch tools.
 
 ## Staleness
 
@@ -177,7 +239,8 @@ come from a config file:
 
 Env vars override the file: `OPENSEARCH_URL`, `OPENSEARCH_USER`,
 `OPENSEARCH_PASSWORD`, `OPENSEARCH_INSECURE_SKIP_VERIFY`, `MEMENTO_CONF`,
-`MEMENTO_INDEX`, `MEMENTO_HISTORY_LIMIT`, `MEMENTO_SECRET_GUARD`,
+`MEMENTO_INDEX`, `MEMENTO_HISTORY_PERIOD`, `MEMENTO_HISTORY_LIMIT`,
+`MEMENTO_SECRET_GUARD`,
 `MEMENTO_ALLOW_PLAINTEXT`, plus the `MEMENTO_FETCH_*` / `MEMENTO_DOCS_*` /
 `MEMENTO_LOCAL_REPO_ROOTS` / `MEMENTO_REPO_SCAN_DEPTH` fetch options (the
 full list lives in README and docs/setup.md).
@@ -191,4 +254,6 @@ config.
 - `insecure_skip_verify` defaults to `false`: TLS certificates are verified.
   The local OpenSearch uses a self-signed cert, so a local setup sets it to
   `true` explicitly. Never enable it for a shared network.
-- The index is created automatically on first run.
+- The index is created automatically on first run. The journal infrastructure
+  (pipeline, template, dated journal indices) is created on the first
+  accepted write.

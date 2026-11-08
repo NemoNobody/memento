@@ -214,6 +214,7 @@ func TestBuildIndexBody_Mappings(t *testing.T) {
 		"observed_at": "date",
 		"source":      "keyword",
 		"notes":       "text",
+		"current_ref": "keyword",
 	}
 
 	for field, expectedType := range expectedTypes {
@@ -240,8 +241,8 @@ func TestBuildIndexBody_Mappings(t *testing.T) {
 		t.Errorf("history enabled = %v, want false (stored, not indexed)", history["enabled"])
 	}
 
-	if len(props) != 12 {
-		t.Errorf("expected 12 mappings, got %d", len(props))
+	if len(props) != 13 {
+		t.Errorf("expected 13 mappings, got %d", len(props))
 	}
 }
 

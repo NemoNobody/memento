@@ -22,6 +22,17 @@ const (
 	GuardAllow  = "allow"  // deliberate opt-out: scan nothing
 )
 
+// Journal index period names (config history_index_period). A period typo
+// would silently split the journal across two naming schemes, so load
+// rejects anything outside this set loudly.
+const (
+	PeriodDay     = "day"
+	PeriodWeek    = "week"
+	PeriodMonth   = "month"
+	PeriodQuarter = "quarter"
+	PeriodYear    = "year"
+)
+
 // Config holds configuration for the memento CLI.
 type Config struct {
 	OpenSearchURL      string `json:"opensearch_url"`
@@ -30,10 +41,19 @@ type Config struct {
 	InsecureSkipVerify bool   `json:"insecure_skip_verify"`
 	IndexName          string `json:"index_name"`
 
-	// HistoryLimit bounds per-key history on every correction: after the old
-	// value is appended, the oldest entries beyond this limit are dropped.
-	// 0 means "keep everything".
+	// HistoryLimit is the default keep-N for `prune`. It no longer trims on
+	// write: corrections append to the journal index without a bound
+	// (write-forever by design — disk growth equals write count, cleanup is
+	// the admin's per-period index delete). 0 means "no default": prune then
+	// demands an explicit --keep.
 	HistoryLimit int `json:"history_limit"`
+
+	// HistoryIndexPeriod is the date granularity of the journal indices:
+	// day | week | month | quarter | year (default month). The journal lives
+	// in <index>-history-<period-with-date> indices: one index per period is
+	// the hygiene tradeoff (too many indices = shard overhead on the cluster,
+	// too coarse a period = the admin cannot prune history by date).
+	HistoryIndexPeriod string `json:"history_index_period"`
 
 	// SecretGuard is one of GuardReject / GuardAsk / GuardAllow. It applies to
 	// every write path (CLI add/obsolete, MCP memento_add/memento_obsolete).
@@ -139,6 +159,7 @@ func DefaultConfig() *Config {
 		InsecureSkipVerify:  false,
 		IndexName:           "memento",
 		HistoryLimit:        20,
+		HistoryIndexPeriod:  PeriodMonth,
 		SecretGuard:         GuardReject,
 		DocsIndexName:       "memento-docs",
 		FetchTimeoutSeconds: 30,
@@ -220,6 +241,13 @@ func loadConfig(explicitPath string, finder func() string) (*Config, error) {
 			return nil, fmt.Errorf("MEMENTO_HISTORY_LIMIT: %w", err)
 		}
 		cfg.HistoryLimit = n
+	}
+	if v := os.Getenv("MEMENTO_HISTORY_PERIOD"); v != "" {
+		p, err := normalizePeriod(v)
+		if err != nil {
+			return nil, fmt.Errorf("MEMENTO_HISTORY_PERIOD: %w", err)
+		}
+		cfg.HistoryIndexPeriod = p
 	}
 	if v := os.Getenv("MEMENTO_SECRET_GUARD"); v != "" {
 		g, err := normalizeGuard(v)
@@ -378,6 +406,7 @@ type fileConfig struct {
 	InsecureSkipVerify  *bool    `json:"insecure_skip_verify"`
 	IndexName           string   `json:"index_name"`
 	HistoryLimit        *int     `json:"history_limit"`
+	HistoryIndexPeriod  *string  `json:"history_index_period"`
 	SecretGuard         *string  `json:"secret_guard"`
 	DocsIndexName       string   `json:"docs_index_name"`
 	FetchTimeoutSeconds *int     `json:"fetch_timeout_seconds"`
@@ -451,6 +480,13 @@ func loadFile(cfg *Config, path string) error {
 	if c.HistoryLimit != nil {
 		cfg.HistoryLimit = *c.HistoryLimit
 	}
+	if c.HistoryIndexPeriod != nil {
+		p, err := normalizePeriod(*c.HistoryIndexPeriod)
+		if err != nil {
+			return fmt.Errorf("config %s: history_index_period: %w", path, err)
+		}
+		cfg.HistoryIndexPeriod = p
+	}
 	if c.SecretGuard != nil {
 		g, err := normalizeGuard(*c.SecretGuard)
 		if err != nil {
@@ -498,6 +534,18 @@ func loadFile(cfg *Config, path string) error {
 		cfg.AllowPlaintext = *c.AllowPlaintext
 	}
 	return nil
+}
+
+// normalizePeriod maps a configured journal period to its canonical form,
+// rejecting typos loudly: a silently ignored period would split the journal
+// across two naming schemes and hide entries from reads.
+func normalizePeriod(v string) (string, error) {
+	p := strings.ToLower(strings.TrimSpace(v))
+	switch p {
+	case PeriodDay, PeriodWeek, PeriodMonth, PeriodQuarter, PeriodYear:
+		return p, nil
+	}
+	return "", fmt.Errorf("must be one of day|week|month|quarter|year, got %q", v)
 }
 
 // normalizeGuard maps a configured level to its canonical form, rejecting
