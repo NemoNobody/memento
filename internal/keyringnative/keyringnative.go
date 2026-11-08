@@ -20,8 +20,10 @@
 // asks for a dedicated wallet password, because PAM auto-opens exactly one
 // wallet. Secret Service has no per-collection ACLs, so such collections
 // buy namespace, not isolation; items in every collection are identified
-// by the same "service"/"username" attributes zalando uses. Every prompt
-// is bounded by a timeout and a dismissed prompt is a hard error.
+// by the same "service"/"username" attributes zalando uses. Every method
+// call carries a deadline (rpcTimeout), every dialog is bounded by
+// promptTimeout, and a dismissed prompt is a hard error: a wedged or
+// restarting provider can never hang the process.
 //
 // Provider note: on KDE the Secret Service name is served by kwalletd6
 // (collections = wallets, aliases from kwalletrc "Default Wallet");
@@ -31,6 +33,7 @@
 package keyringnative
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -66,7 +69,28 @@ const (
 	// promptTimeout bounds the interactive part: unlocking a closed wallet
 	// needs a human at the desktop dialog; 120s is generous.
 	promptTimeout = 120 * time.Second
+
+	// rpcTimeout bounds every non-interactive D-Bus call. Flagless Call
+	// carries no deadline at all: a wedged or restarting provider (a
+	// kwalletd mid-restart) must not hang a CLI command or an MCP tool
+	// call forever.
+	rpcTimeout = 15 * time.Second
 )
+
+// rpcCall runs a D-Bus method call under the rpc deadline.
+func (c *client) rpcCall(ctx context.Context, obj dbus.BusObject, method string, args ...interface{}) *dbus.Call {
+	return obj.CallWithContext(ctx, method, 0, args...)
+}
+
+// getProperty is GetProperty with a deadline (GetProperty itself has no
+// context variant; Properties.Get is the identical call underneath).
+func (c *client) getProperty(ctx context.Context, obj dbus.BusObject, iface, prop string) (dbus.Variant, error) {
+	var v dbus.Variant
+	if err := c.rpcCall(ctx, obj, "org.freedesktop.DBus.Properties.Get", iface, prop).Store(&v); err != nil {
+		return dbus.Variant{}, err
+	}
+	return v, nil
+}
 
 // ErrNotFound is returned when the collection or the item does not exist.
 // Callers match it with errors.Is, like zalando's keyring.ErrNotFound.
@@ -131,7 +155,9 @@ func newClient() (*client, error) {
 	}
 	c := &client{conn: conn, service: conn.Object(busName, objPath)}
 	var ignored dbus.Variant
-	if err := c.service.Call(ifaceService+".OpenSession", 0, "plain", dbus.MakeVariant("plain")).Store(&ignored, &c.session); err != nil {
+	sessionCtx, cancelSession := context.WithTimeout(context.Background(), rpcTimeout)
+	defer cancelSession()
+	if err := c.rpcCall(sessionCtx, c.service, ifaceService+".OpenSession", "plain", dbus.MakeVariant("plain")).Store(&ignored, &c.session); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("open secret-service session: %w", err)
 	}
@@ -139,7 +165,9 @@ func newClient() (*client, error) {
 }
 
 func (c *client) close() {
-	_ = c.conn.Object(busName, c.session).Call(ifaceSession+".Close", 0).Store()
+	closeCtx, cancelClose := context.WithTimeout(context.Background(), rpcTimeout)
+	defer cancelClose()
+	_ = c.rpcCall(closeCtx, c.conn.Object(busName, c.session), ifaceSession+".Close").Store()
 	_ = c.conn.Close()
 }
 
@@ -149,7 +177,9 @@ func (c *client) close() {
 func (c *client) unlock(path dbus.ObjectPath) error {
 	var unlocked []dbus.ObjectPath
 	var prompt dbus.ObjectPath
-	if err := c.service.Call(ifaceService+".Unlock", 0, []dbus.ObjectPath{path}).Store(&unlocked, &prompt); err != nil {
+	unlockCtx, cancelUnlock := context.WithTimeout(context.Background(), rpcTimeout)
+	defer cancelUnlock()
+	if err := c.rpcCall(unlockCtx, c.service, ifaceService+".Unlock", []dbus.ObjectPath{path}).Store(&unlocked, &prompt); err != nil {
 		return fmt.Errorf("unlock: %w", err)
 	}
 	if len(unlocked) > 0 || prompt == "/" {
@@ -170,7 +200,9 @@ func (c *client) unlock(path dbus.ObjectPath) error {
 // items array), so the items property is read from the searches object as a
 // fallback.
 func (c *client) searchItems(collection dbus.ObjectPath, attrs map[string]string) ([]dbus.ObjectPath, error) {
-	call := c.conn.Object(busName, collection).Call(ifaceCollection+".SearchItems", 0, attrs)
+	searchCtx, cancelSearch := context.WithTimeout(context.Background(), rpcTimeout)
+	defer cancelSearch()
+	call := c.rpcCall(searchCtx, c.conn.Object(busName, collection), ifaceCollection+".SearchItems", attrs)
 	var items []dbus.ObjectPath
 	var searches dbus.ObjectPath
 	if err := call.Store(&searches, &items); err != nil {
@@ -210,7 +242,12 @@ func (c *client) handlePrompt(prompt dbus.ObjectPath) (bool, dbus.Variant, error
 
 	// Prompt(STRING interaction_requestor): ksecretd (Plasma 6) declares
 	// (s); the freedesktop spec's (s,b) is rejected by it, so send (s).
-	if err := c.conn.Object(busName, prompt).Call(ifacePrompt+".Prompt", 0, "").Store(); err != nil {
+	// The Prompt call blocks while the dialog is open (providers keep it
+	// pending), so it is bounded by the generous dialog timeout, not the
+	// rpc deadline.
+	promptCtx, cancelPrompt := context.WithTimeout(context.Background(), promptTimeout)
+	defer cancelPrompt()
+	if err := c.rpcCall(promptCtx, c.conn.Object(busName, prompt), ifacePrompt+".Prompt", "").Store(); err != nil {
 		return false, dbus.Variant{}, fmt.Errorf("prompt: %w", err)
 	}
 
@@ -243,7 +280,9 @@ func attributes(service, user string) map[string]string {
 // "/collection/login" is in Collections, the object is gone), and property
 // reads on such paths fail.
 func (c *client) collectionLabel(p dbus.ObjectPath) (string, error) {
-	v, err := c.conn.Object(busName, p).GetProperty(ifaceCollection + ".Label")
+	labelCtx, cancelLabel := context.WithTimeout(context.Background(), rpcTimeout)
+	defer cancelLabel()
+	v, err := c.getProperty(labelCtx, c.conn.Object(busName, p), ifaceCollection, "Label")
 	if err != nil {
 		return "", err
 	}
@@ -258,7 +297,9 @@ func (c *client) collectionLabel(p dbus.ObjectPath) (string, error) {
 // if one exists. Dead listed collections are skipped (their Label read
 // fails).
 func (c *client) findCollection(label string) (dbus.ObjectPath, error) {
-	v, err := c.service.GetProperty(ifaceService + ".Collections")
+	collCtx, cancelColl := context.WithTimeout(context.Background(), rpcTimeout)
+	defer cancelColl()
+	v, err := c.getProperty(collCtx, c.service, ifaceService, "Collections")
 	if err != nil {
 		return "", fmt.Errorf("list collections: %w", err)
 	}
@@ -299,7 +340,9 @@ func (c *client) createCollection(label string) (dbus.ObjectPath, error) {
 		ifaceCollection + ".Label": dbus.MakeVariant(label),
 	}
 	var coll, prompt dbus.ObjectPath
-	if err := c.service.Call(ifaceService+".CreateCollection", 0, props, "").Store(&coll, &prompt); err != nil {
+	createCtx, cancelCreate := context.WithTimeout(context.Background(), rpcTimeout)
+	defer cancelCreate()
+	if err := c.rpcCall(createCtx, c.service, ifaceService+".CreateCollection", props, "").Store(&coll, &prompt); err != nil {
 		return "", fmt.Errorf("create collection: %w", err)
 	}
 	// ksecretd returns collection="/" plus a prompt; the real path arrives
@@ -369,7 +412,9 @@ func Get(service, user string) (string, error) {
 		return "", err
 	}
 	var sec secret
-	if err := c.conn.Object(busName, items[0]).Call(ifaceItem+".GetSecret", 0, c.session).Store(&sec); err != nil {
+	secretCtx, cancelSecret := context.WithTimeout(context.Background(), rpcTimeout)
+	defer cancelSecret()
+	if err := c.rpcCall(secretCtx, c.conn.Object(busName, items[0]), ifaceItem+".GetSecret", c.session).Store(&sec); err != nil {
 		return "", fmt.Errorf("read secret: %w", err)
 	}
 	return string(sec.Value), nil
@@ -397,8 +442,9 @@ func Set(service, user, value string) error {
 		ifaceItem + ".Attributes": dbus.MakeVariant(attributes(service, user)),
 	}
 	var item, prompt dbus.ObjectPath
-	if err := c.conn.Object(busName, coll).
-		Call(ifaceCollection+".CreateItem", 0, props, newSecret(c.session, value), true).
+	itemCtx, cancelItem := context.WithTimeout(context.Background(), rpcTimeout)
+	defer cancelItem()
+	if err := c.rpcCall(itemCtx, c.conn.Object(busName, coll), ifaceCollection+".CreateItem", props, newSecret(c.session, value), true).
 		Store(&item, &prompt); err != nil {
 		return fmt.Errorf("store secret: %w", err)
 	}
@@ -437,7 +483,9 @@ func Delete(service, user string) error {
 		return ErrNotFound
 	}
 	var prompt dbus.ObjectPath
-	if err := c.conn.Object(busName, items[0]).Call(ifaceItem+".Delete", 0).Store(&prompt); err != nil {
+	deleteCtx, cancelDelete := context.WithTimeout(context.Background(), rpcTimeout)
+	defer cancelDelete()
+	if err := c.rpcCall(deleteCtx, c.conn.Object(busName, items[0]), ifaceItem+".Delete").Store(&prompt); err != nil {
 		return fmt.Errorf("delete entry: %w", err)
 	}
 	if prompt != "/" {
