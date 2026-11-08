@@ -78,7 +78,8 @@ options (`memento fetch`): `MEMENTO_DOCS_INDEX`, `MEMENTO_DOCS_TTL_DAYS`,
 `MEMENTO_FETCH_TIMEOUT`, `MEMENTO_FETCH_MAX_BYTES`, `MEMENTO_FETCH_HOSTS`,
 `MEMENTO_FETCH_USER_AGENT`, `MEMENTO_FETCH_PROXY_URL`,
 `MEMENTO_FETCH_PROXY_FALLBACK`, `MEMENTO_FETCH_RESPECT_ROBOTS`,
-`MEMENTO_LOCAL_REPO_ROOTS`, `MEMENTO_REPO_SCAN_DEPTH`.
+`MEMENTO_FETCH_ALLOW_PRIVATE`, `MEMENTO_LOCAL_REPO_ROOTS`,
+`MEMENTO_REPO_SCAN_DEPTH`.
 
 The password resolves from `OPENSEARCH_PASSWORD`, then the OS keyring (service
 `memento`, account `host[:port]`), then the config file — only when
@@ -162,17 +163,20 @@ cluster: [docs/setup.md](docs/setup.md). Schema and design:
 OpenSearch snapshot API): [docs/backup.md](docs/backup.md).
 
 **Secrets do not belong in facts** (passwords, tokens, private keys) — a rule for
-agents and humans, not a guarantee: the store is plaintext, and nothing filters
-what gets written.
+agents and humans, not a guarantee: the store is plaintext, and the
+best-effort secret guard (default `reject`) scans writes for credential-like
+text, but a secret with no known shape passes. The rule stays the first line
+of defense.
 
 ## Platform notes
 
 The Linux keyring provider (native D-Bus Secret Service) is the daily driver
 and is exercised live. The darwin/windows providers (system Keychain /
-Credential Manager via zalando/go-keyring) are built in CI and unit-tested,
-but not smoke-tested on real Apple/Windows hardware by the author. If you are
-on those platforms and the keyring misbehaves, open an issue — reports from
-those machines are welcome.
+Credential Manager via zalando/go-keyring) compile in CI (cross-build checks)
+and are unit-tested, but not smoke-tested on real Apple/Windows hardware by
+the author. Release binaries cover linux/amd64, linux/arm64 and darwin/arm64;
+Windows builds are not published. If you are on those platforms and the
+keyring misbehaves, open an issue — reports from those machines are welcome.
 
 ## License
 

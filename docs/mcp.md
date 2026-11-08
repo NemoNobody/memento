@@ -92,7 +92,7 @@ latter only when `allow_plaintext` is on).
 | `memento_status` | Is the store reachable? What is the effective config and storage state? | **Never fails** — `ok=false` plus a hint instead, so the agent can explain the problem; includes `password_from` (`env`/`keyring`/`file`/`none`, never the value) |
 | `memento_search` | Full-text search over fact values and notes | Trusted facts only by default; `status: "any"` includes obsolete ones; history off unless `include_history: true` |
 | `memento_get` | Exact fact by key | `found: false` when absent — not an error; history off unless `include_history: true` |
-| `memento_add` | Store a verified fact | Shape is validated before the guard and the store: non-empty `key`/`value`, and `category` one of `location`/`config`/`endpoint`/`behavior`/`context_map` (an unknown category never ages — silent rot). Corrects by key: a new value moves the old one to history (trimmed to `history_limit`); the same value updates notes only; `secret_guard` rejects credential-like text before any store contact |
+| `memento_add` | Store a verified fact | Shape is validated before the guard and the store: non-empty `key`/`value`, and `category` one of `location`/`config`/`endpoint`/`behavior`/`context_map`, stored lowercase (an unknown category never ages — silent rot). Corrects by key: a new value moves the old one to history (trimmed to `history_limit`); the same value updates notes/source only. `notes` are replaced only by a non-empty new note (an omitted `notes` leaves the stored qualifiers alone — they never enter history, so erasing them is irreversible); `secret_guard` rejects credential-like text before any store contact |
 | `memento_list` | Facts of a project | Same trust default as search; `prefix` keeps only keys starting with it (trailing `*` allowed); history off unless `include_history: true` |
 | `memento_keys` | Find facts by key across all projects | `prefix` (key start) and/or `match` (key substring; `*`, `?` wildcards); at least one required; sorted by key; `project` is an optional filter; key matching is case-sensitive (keys conventionally lowercase) |
 | `memento_prune` | Drop old history entries under a key, keeping the newest `keep` | **DESTRUCTIVE** — without `confirm: true` nothing is written, the call returns the plan; show it to the user and re-call only after their approval |
@@ -105,10 +105,13 @@ Note: `memento_search` does **not** match keys — use `memento_get` for an exac
 key, `memento_keys` for key navigation (prefix/substring across projects).
 
 Facts tools answer with `count` and the honest truncation signal: `truncated:
-true` means the cluster saw more matches than the navigation cap (1000) —
-narrow the query; a page exactly filling the cap is a complete result.
-`skipped: N` means N stored hits failed to decode (index corruption): report
-it to the user; the answer is incomplete, never silently.
+true` means the cluster matched more facts than this page delivered — for
+`memento_search` the page is the requested `limit` (raise it, max 50, before
+narrowing the query); for `memento_list`/`memento_keys` it is the navigation
+cap (1000) — narrow with prefix/project/status. A page exactly filling its cap
+is a complete result. `skipped: N` means N stored hits failed to decode
+(index corruption): report it to the user; the answer is incomplete, never
+silently.
 
 The `secret_guard` (config, default `reject`) scans `memento_add` and
 `memento_obsolete` writes for credential-like text and refuses them before any
