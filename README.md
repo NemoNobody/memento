@@ -182,9 +182,10 @@ Credential Manager via zalando/go-keyring) are compile-checked in CI
 unit-tested with a fake provider, but the Keychain/Credential Manager
 backends themselves are not exercised in CI and not smoke-tested on real
 Apple/Windows hardware by the author. Release binaries cover linux/amd64,
-linux/arm64 and darwin/arm64;
-Windows builds are not published. If you are on those platforms and the
-keyring misbehaves, open an issue — reports from those machines are welcome.
+linux/arm64, darwin/amd64, darwin/arm64 and windows/amd64; only linux/amd64
+is smoke-tested by the author — reports from the other machines are welcome
+and move this section. If the keyring misbehaves on your platform, open an
+issue.
 
 ## License
 
