@@ -10,7 +10,10 @@ import (
 	"github.com/NemoNobody/memento/internal/model"
 )
 
-func docsMutate(cfg *config.Config) { cfg.DocsIndexName = "memento-docs" }
+func docsMutate(cfg *config.Config) {
+	cfg.DocsIndexName = "memento-docs"
+	cfg.FetchAllowPrivate = true // fetch targets are httptest loopback servers
+}
 
 func TestBuildDocsIndexBodyHTMLNotIndexed(t *testing.T) {
 	props := buildDocsIndexBody()["mappings"].(map[string]interface{})["properties"].(map[string]interface{})

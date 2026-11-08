@@ -184,6 +184,7 @@ config.
 
 ## Notes
 
-- `insecure_skip_verify` is `true` by default because the local OpenSearch
-  uses a self-signed cert. Set it to `false` for a trusted CA.
+- `insecure_skip_verify` defaults to `false`: TLS certificates are verified.
+  The local OpenSearch uses a self-signed cert, so a local setup sets it to
+  `true` explicitly. Never enable it for a shared network.
 - The index is created automatically on first run.

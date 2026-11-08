@@ -6,10 +6,12 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/NemoNobody/memento/internal/config"
@@ -33,6 +35,67 @@ const (
 var ipBlockStatuses = map[int]bool{
 	http.StatusForbidden:           true, // 403
 	http.StatusUnprocessableEntity: true, // 422
+}
+
+// blockedIP reports addresses a fetch must never connect to. Fetch follows
+// untrusted URLs and agent-supplied links, so the default must never reach
+// internal services: loopback, RFC1918, link-local (cloud metadata sits at
+// 169.254.169.254), multicast, the unspecified address, and 0.0.0.0/8 (which
+// routes to loopback on Linux). fetch_allow_private is the explicit opt-in for
+// self-hosted targets.
+func blockedIP(ip net.IP) bool {
+	if ip == nil {
+		return true
+	}
+	if ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() || ip.IsInterfaceLocalMulticast() ||
+		ip.IsMulticast() || ip.IsPrivate() {
+		return true
+	}
+	if v4 := ip.To4(); v4 != nil && v4[0] == 0 {
+		return true
+	}
+	return false
+}
+
+// blockedHost is the cheap pre-DNS guard: literal IPs are checked directly,
+// and special-use domains that resolve loopback (localhost, .local, .internal,
+// .home, .home.arpa, .test) are refused by name. The authoritative check is
+// guardedDialContext, which sees the resolved address.
+func blockedHost(host string) bool {
+	if ip := net.ParseIP(host); ip != nil {
+		return blockedIP(ip)
+	}
+	switch {
+	case host == "localhost",
+		strings.HasSuffix(host, ".localhost"),
+		strings.HasSuffix(host, ".local"),
+		strings.HasSuffix(host, ".internal"),
+		strings.HasSuffix(host, ".home"),
+		strings.HasSuffix(host, ".home.arpa"),
+		strings.HasSuffix(host, ".test"):
+		return true
+	}
+	return false
+}
+
+// guardedDialContext refuses connections whose resolved address is not public
+// (SSRF/DNS-rebinding defense). It is installed on direct (non-proxied)
+// transports only: with a proxy configured, the user chose where the traffic
+// exits, and the proxy — not memento — enforces the target policy.
+func guardedDialContext() func(ctx context.Context, network, address string) (net.Conn, error) {
+	d := &net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}
+	d.Control = func(network, address string, c syscall.RawConn) error {
+		host, _, err := net.SplitHostPort(address)
+		if err != nil {
+			return fmt.Errorf("fetch: guard: %w", err)
+		}
+		if blockedIP(net.ParseIP(host)) {
+			return fmt.Errorf("fetch: refusing connection to non-public address %s", host)
+		}
+		return nil
+	}
+	return d.DialContext
 }
 
 // NormalizeURL turns user input into a canonical fetchable URL: a missing
@@ -60,6 +123,11 @@ func NormalizeURL(raw string) (string, error) {
 	}
 	if u.Host == "" {
 		return "", fmt.Errorf("fetch: url %q has no host", raw)
+	}
+	if blockedHost(strings.ToLower(u.Hostname())) {
+		return "", fmt.Errorf(
+			"fetch: host %q is not a public address; fetch refuses loopback/private/link-local targets "+
+				"(opt in with fetch_allow_private for self-hosted docs)", u.Host)
 	}
 	if u.User != nil {
 		// Credentials in a URL are a leak vector (they reach the target host);
@@ -155,6 +223,10 @@ func fetchHTTP(ctx context.Context, cfg *config.Config, normalizedURL string) (c
 		tr := http.DefaultTransport.(*http.Transport).Clone()
 		if p != nil {
 			tr.Proxy = func(*http.Request) (*url.URL, error) { return p, nil }
+		} else if !cfg.FetchAllowPrivate {
+			// Direct fetch: enforce the public-address rule on the resolved IP
+			// (closes DNS rebinding: the hostname check alone is not enough).
+			tr.DialContext = guardedDialContext()
 		}
 		httpc := &http.Client{Timeout: timeout, Transport: tr}
 		httpc.CheckRedirect = func(req *http.Request, via []*http.Request) error {
@@ -166,6 +238,9 @@ func fetchHTTP(ctx context.Context, cfg *config.Config, normalizedURL string) (c
 			// (SSRF via redirect would silently break the privacy guarantee).
 			if err := HostAllowed(cfg, req.URL.String()); err != nil {
 				return fmt.Errorf("fetch: redirect chain: %w", err)
+			}
+			if !cfg.FetchAllowPrivate && blockedHost(strings.ToLower(req.URL.Hostname())) {
+				return fmt.Errorf("fetch: redirect chain: %s is not a public address", req.URL.Host)
 			}
 			return nil
 		}

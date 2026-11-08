@@ -45,6 +45,54 @@ func TestNormalizeURL(t *testing.T) {
 	}
 }
 
+// The SSRF guard: fetch follows untrusted URLs, so internal addresses are
+// refused by default (loopback, RFC1918, link-local incl. cloud metadata,
+// multicast, 0/8, special-use domains).
+func TestBlockedHostGuard(t *testing.T) {
+	for _, h := range []string{
+		"127.0.0.1", "127.1.2.3", "::1", "0.0.0.0", "0.1.2.3",
+		"10.0.0.5", "172.16.0.1", "192.168.88.37", "169.254.169.254",
+		"ff02::1", "224.0.0.1", "fc00::1", "fd12:3456::7",
+		"localhost", "api.localhost", "router.local", "svc.internal",
+		"box.home.arpa", "intranet.home", "a.test",
+	} {
+		if !blockedHost(h) {
+			t.Errorf("blockedHost(%q) = false, want blocked", h)
+		}
+	}
+	for _, h := range []string{
+		"example.com", "docs.gitlab.com", "8.8.8.8", "1.1.1.1",
+		"93.184.216.34", "localedge.dev", "test.example.com", "notlocalhost.dev",
+	} {
+		if blockedHost(h) {
+			t.Errorf("blockedHost(%q) = true, want allowed", h)
+		}
+	}
+}
+
+func TestNormalizeURLBlocksNonPublic(t *testing.T) {
+	for _, bad := range []string{
+		"http://127.0.0.1:9200/_cat/indices",
+		"http://localhost/x",
+		"http://[::1]/x",
+		"http://169.254.169.254/latest/meta-data/",
+		"http://192.168.88.37/docs",
+		"http://router.local/config",
+	} {
+		if _, err := NormalizeURL(bad); err == nil {
+			t.Errorf("NormalizeURL(%q): want refusal, got nil", bad)
+		}
+	}
+}
+
+func TestFetchRefusesLoopbackByDefault(t *testing.T) {
+	ft := newFetchTarget(t)
+	if _, err := FetchPage(context.Background(), config.DefaultConfig(), ft.srv.URL+"/page"); err == nil ||
+		!strings.Contains(err.Error(), "non-public") {
+		t.Errorf("loopback target must be refused by default, got: %v", err)
+	}
+}
+
 func TestURLHashStableAcrossNormalizations(t *testing.T) {
 	a, err := NormalizeURL("example.com")
 	if err != nil {
@@ -146,6 +194,8 @@ func newProxyServer(t *testing.T) *httptest.Server {
 func TestFetchPageHTML(t *testing.T) {
 	ft := newFetchTarget(t)
 	cfg := config.DefaultConfig()
+
+	cfg.FetchAllowPrivate = true
 	cfg.FetchUserAgent = "unit-agent"
 
 	doc, err := FetchPage(context.Background(), cfg, ft.srv.URL+"/page")
@@ -187,6 +237,8 @@ func TestFetchPageHTML(t *testing.T) {
 func TestFetchPagePlainTextAndRejects(t *testing.T) {
 	ft := newFetchTarget(t)
 	cfg := config.DefaultConfig()
+
+	cfg.FetchAllowPrivate = true
 	ctx := context.Background()
 
 	doc, err := FetchPage(ctx, cfg, ft.srv.URL+"/plain")
@@ -203,6 +255,8 @@ func TestFetchPagePlainTextAndRejects(t *testing.T) {
 	}
 
 	oversize := config.DefaultConfig()
+
+	oversize.FetchAllowPrivate = true
 	oversize.FetchMaxBytes = 100
 	if _, err := FetchPage(ctx, oversize, ft.srv.URL+"/big"); err == nil ||
 		!strings.Contains(err.Error(), "exceeds fetch_max_bytes") {
@@ -212,7 +266,9 @@ func TestFetchPagePlainTextAndRejects(t *testing.T) {
 
 func TestFetchPageRedirect(t *testing.T) {
 	ft := newFetchTarget(t)
-	doc, err := FetchPage(context.Background(), config.DefaultConfig(), ft.srv.URL+"/redirect")
+	cfg := config.DefaultConfig()
+	cfg.FetchAllowPrivate = true
+	doc, err := FetchPage(context.Background(), cfg, ft.srv.URL+"/redirect")
 	if err != nil {
 		t.Fatalf("redirect fetch: %v", err)
 	}
@@ -228,6 +284,8 @@ func TestFetchPageProxyFallback(t *testing.T) {
 
 	// IP-ban status with fallback on → the proxy route serves the page.
 	fb := config.DefaultConfig()
+
+	fb.FetchAllowPrivate = true
 	fb.FetchProxyURL = proxy.URL
 	fb.FetchProxyFallback = true
 	doc, err := FetchPage(ctx, fb, ft.srv.URL+"/blocked")
@@ -249,6 +307,8 @@ func TestFetchPageProxyFallback(t *testing.T) {
 
 	// Proxy-only mode (fallback off, proxy set): every request is proxied.
 	only := config.DefaultConfig()
+
+	only.FetchAllowPrivate = true
 	only.FetchProxyURL = proxy.URL
 	doc, err = FetchPage(ctx, only, ft.srv.URL+"/missing")
 	if err != nil {

@@ -15,6 +15,7 @@
   "fetch_user_agent": "memento/fetch (+OpenSearch docs cache)",
   "fetch_proxy_url": "",
   "fetch_proxy_fallback": false,
+  "fetch_allow_private": false,
   "fetch_respect_robots": false,
   "local_repo_roots": [],
   "local_repo_scan_depth": 2

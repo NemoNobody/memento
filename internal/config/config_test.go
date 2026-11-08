@@ -103,8 +103,8 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.OpenSearchUser != "admin" {
 		t.Errorf("OpenSearchUser = %q, want admin", cfg.OpenSearchUser)
 	}
-	if !cfg.InsecureSkipVerify {
-		t.Error("InsecureSkipVerify should be true by default")
+	if cfg.InsecureSkipVerify {
+		t.Error("InsecureSkipVerify must be false by default (TLS is verified)")
 	}
 	if cfg.IndexName != "memento" {
 		t.Errorf("IndexName = %q, want memento", cfg.IndexName)
@@ -164,9 +164,10 @@ func TestLoadConfig_File(t *testing.T) {
 	if cfg.IndexName != "myindex" {
 		t.Errorf("IndexName = %q, want myindex", cfg.IndexName)
 	}
-	// Regression: a file without insecure_skip_verify must keep the default.
-	if !cfg.InsecureSkipVerify {
-		t.Error("InsecureSkipVerify = false, want default true when key omitted")
+	// Regression: a file without insecure_skip_verify must keep the default
+	// (verified TLS: verification is only ever off by explicit opt-in).
+	if cfg.InsecureSkipVerify {
+		t.Error("InsecureSkipVerify = true, want default false when key omitted")
 	}
 }
 

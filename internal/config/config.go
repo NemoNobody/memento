@@ -59,6 +59,13 @@ type Config struct {
 	// dot) their subdomains. Empty means "any public host".
 	FetchAllowHosts []string `json:"fetch_allow_hosts"`
 
+	// FetchAllowPrivate relaxes the SSRF guard for self-hosted targets: it
+	// permits loopback, RFC1918, link-local and multicast addresses. Off by
+	// default: fetch follows untrusted URLs and agent-supplied links, so the
+	// default must never touch internal services (cloud metadata, OpenSearch
+	// itself, routers).
+	FetchAllowPrivate bool `json:"fetch_allow_private"`
+
 	// FetchUserAgent is sent verbatim on document fetches. Some sites reject
 	// generic clients; the identity is config, not hardcoded, and it is never
 	// a fingerprint: no cookies, no headers beyond Accept/UA.
@@ -118,10 +125,13 @@ const KeyringService = "memento"
 // DefaultConfig returns the default configuration.
 func DefaultConfig() *Config {
 	return &Config{
-		OpenSearchURL:       "https://127.0.0.1:9200",
-		OpenSearchUser:      "admin",
-		OpenSearchPassword:  "",
-		InsecureSkipVerify:  true,
+		OpenSearchURL:      "https://127.0.0.1:9200",
+		OpenSearchUser:     "admin",
+		OpenSearchPassword: "",
+		// TLS verification is on by default: credentials and facts must not
+		// transit a MITM-able channel. Self-signed dev clusters (the common
+		// local case) set insecure_skip_verify explicitly.
+		InsecureSkipVerify:  false,
 		IndexName:           "memento",
 		HistoryLimit:        20,
 		SecretGuard:         GuardReject,
@@ -155,7 +165,8 @@ func LoadConfig() (*Config, error) {
 // MEMENTO_FETCH_TIMEOUT, MEMENTO_FETCH_MAX_BYTES, MEMENTO_DOCS_TTL_DAYS,
 // MEMENTO_FETCH_HOSTS (comma-separated), MEMENTO_FETCH_USER_AGENT,
 // MEMENTO_FETCH_PROXY_URL, MEMENTO_FETCH_PROXY_FALLBACK,
-// MEMENTO_LOCAL_REPO_ROOTS (comma-separated), MEMENTO_REPO_SCAN_DEPTH.
+// MEMENTO_FETCH_ALLOW_PRIVATE, MEMENTO_LOCAL_REPO_ROOTS (comma-separated),
+// MEMENTO_REPO_SCAN_DEPTH.
 func LoadConfigFrom(explicitPath string) (*Config, error) {
 	cfg := DefaultConfig()
 	path := explicitPath
@@ -254,6 +265,13 @@ func LoadConfigFrom(explicitPath string) (*Config, error) {
 		}
 		cfg.FetchProxyFallback = b
 	}
+	if v := os.Getenv("MEMENTO_FETCH_ALLOW_PRIVATE"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("MEMENTO_FETCH_ALLOW_PRIVATE: %w", err)
+		}
+		cfg.FetchAllowPrivate = b
+	}
 	if v := os.Getenv("MEMENTO_LOCAL_REPO_ROOTS"); v != "" {
 		cfg.LocalRepoRoots = splitCSV(v)
 	}
@@ -325,6 +343,7 @@ type fileConfig struct {
 	FetchRespectRobots  *bool    `json:"fetch_respect_robots"`
 	FetchProxyURL       string   `json:"fetch_proxy_url"`
 	FetchProxyFallback  *bool    `json:"fetch_proxy_fallback"`
+	FetchAllowPrivate   *bool    `json:"fetch_allow_private"`
 	LocalRepoRoots      []string `json:"local_repo_roots"`
 	LocalRepoScanDepth  *int     `json:"local_repo_scan_depth"`
 	AllowPlaintext      *bool    `json:"allow_plaintext"`
@@ -417,6 +436,9 @@ func loadFile(cfg *Config, path string) error {
 	}
 	if c.FetchProxyFallback != nil {
 		cfg.FetchProxyFallback = *c.FetchProxyFallback
+	}
+	if c.FetchAllowPrivate != nil {
+		cfg.FetchAllowPrivate = *c.FetchAllowPrivate
 	}
 	if len(c.LocalRepoRoots) > 0 {
 		cfg.LocalRepoRoots = splitCSV(strings.Join(c.LocalRepoRoots, ","))

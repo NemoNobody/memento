@@ -116,8 +116,8 @@ lists the active ones by name, never by value):
 `MEMENTO_DOCS_INDEX`, `MEMENTO_DOCS_TTL_DAYS`, `MEMENTO_FETCH_TIMEOUT`,
 `MEMENTO_FETCH_MAX_BYTES`, `MEMENTO_FETCH_HOSTS`, `MEMENTO_FETCH_USER_AGENT`,
 `MEMENTO_FETCH_PROXY_URL`, `MEMENTO_FETCH_PROXY_FALLBACK`,
-`MEMENTO_FETCH_RESPECT_ROBOTS`, `MEMENTO_LOCAL_REPO_ROOTS`,
-`MEMENTO_REPO_SCAN_DEPTH`.
+`MEMENTO_FETCH_RESPECT_ROBOTS`, `MEMENTO_FETCH_ALLOW_PRIVATE`,
+`MEMENTO_LOCAL_REPO_ROOTS`, `MEMENTO_REPO_SCAN_DEPTH`.
 
 ## 4. Verify
 
@@ -202,5 +202,6 @@ sources:
 - Change the default `admin` password before the cluster is reachable by anyone else.
 - The facts index is the accumulated memory — back it up (snapshot API; recipe:
   [docs/backup.md](backup.md)). Snapshots are plaintext, like the store.
-- `insecure_skip_verify: true` disables certificate verification. It is fine for a
-  local node with the demo certificate and wrong for anything shared.
+- `insecure_skip_verify: true` disables certificate verification. TLS is
+  verified by default; enable this only for a local node with the demo
+  certificate, never for anything shared.

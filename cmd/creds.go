@@ -121,7 +121,9 @@ func credsStatusCmd() *cobra.Command {
 func renderCredsStatus(host string, cfg *config.Config, keyringErr error) string {
 	var b strings.Builder
 	b.WriteString("account: ")
-	b.WriteString(config.KeyringService + "/" + host)
+	b.WriteString(config.KeyringService)
+	b.WriteString("/")
+	b.WriteString(host)
 	b.WriteString("\nsource: ")
 	b.WriteString(cfg.PasswordSource)
 	b.WriteString("\nkeyring: ")

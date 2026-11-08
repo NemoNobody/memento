@@ -93,6 +93,8 @@ func newRobotsServer(t *testing.T, robotsBody string, hits *int32) *httptest.Ser
 
 func robotsCfg() *config.Config {
 	cfg := config.DefaultConfig()
+
+	cfg.FetchAllowPrivate = true
 	cfg.FetchRespectRobots = true
 	cfg.FetchUserAgent = "memento/test (robots test)"
 	return cfg
@@ -118,6 +120,8 @@ func TestCheckRobots(t *testing.T) {
 	}
 	// Disabled feature: no robots traffic, no restriction.
 	off := config.DefaultConfig()
+
+	off.FetchAllowPrivate = true
 	off.FetchUserAgent = "memento/test"
 	if err := CheckRobots(ctx, off, srv.URL+"/secret"); err != nil {
 		t.Errorf("robots off: %v", err)
