@@ -388,6 +388,37 @@ func (c *client) pickCollection(write bool) (dbus.ObjectPath, error) {
 	return c.createCollection(collectionName)
 }
 
+// deleteItems removes every item in the collection matching attrs, handling
+// provider prompts. Providers may keep more than one item per attribute set
+// (CreateItem never deduplicates), so the upsert contract requires clearing
+// all matches: leaving a stale duplicate makes Get read whichever item the
+// provider lists first — typically the oldest, i.e. the pre-rotation password.
+func (c *client) deleteItems(coll dbus.ObjectPath, attrs map[string]string) (int, error) {
+	items, err := c.searchItems(coll, attrs)
+	if err != nil {
+		return 0, err
+	}
+	for _, p := range items {
+		var prompt dbus.ObjectPath
+		deleteCtx, cancelDelete := context.WithTimeout(context.Background(), rpcTimeout)
+		err := c.rpcCall(deleteCtx, c.conn.Object(busName, p), ifaceItem+".Delete").Store(&prompt)
+		cancelDelete()
+		if err != nil {
+			return 0, fmt.Errorf("delete entry: %w", err)
+		}
+		if prompt != "/" {
+			dismissed, _, err := c.handlePrompt(prompt)
+			if err != nil {
+				return 0, err
+			}
+			if dismissed {
+				return 0, errors.New("the keyring dialog was cancelled (delete)")
+			}
+		}
+	}
+	return len(items), nil
+}
+
 // Get returns the secret stored for (service, user). Read-only: it never
 // creates collections.
 func Get(service, user string) (string, error) {
@@ -437,6 +468,12 @@ func Set(service, user, value string) error {
 	if err := c.unlock(coll); err != nil {
 		return err
 	}
+	// Upsert: clear every existing item for these attributes first (the
+	// zalando pattern). CreateItem appends, and a wallet with two items for
+	// one (service, user) makes Get return a provider-chosen one.
+	if _, err := c.deleteItems(coll, attributes(service, user)); err != nil {
+		return err
+	}
 	props := map[string]dbus.Variant{
 		ifaceItem + ".Label":      dbus.MakeVariant(appCollectionLabel + " API key for " + user),
 		ifaceItem + ".Attributes": dbus.MakeVariant(attributes(service, user)),
@@ -475,27 +512,12 @@ func Delete(service, user string) error {
 	if err := c.unlock(coll); err != nil {
 		return err
 	}
-	items, err := c.searchItems(coll, attributes(service, user))
+	n, err := c.deleteItems(coll, attributes(service, user))
 	if err != nil {
 		return err
 	}
-	if len(items) == 0 {
+	if n == 0 {
 		return ErrNotFound
-	}
-	var prompt dbus.ObjectPath
-	deleteCtx, cancelDelete := context.WithTimeout(context.Background(), rpcTimeout)
-	defer cancelDelete()
-	if err := c.rpcCall(deleteCtx, c.conn.Object(busName, items[0]), ifaceItem+".Delete").Store(&prompt); err != nil {
-		return fmt.Errorf("delete entry: %w", err)
-	}
-	if prompt != "/" {
-		dismissed, _, err := c.handlePrompt(prompt)
-		if err != nil {
-			return err
-		}
-		if dismissed {
-			return errors.New("the keyring dialog was cancelled (delete)")
-		}
 	}
 	return nil
 }
