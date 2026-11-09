@@ -137,7 +137,7 @@ the fact doc:
   reserved for same-value re-confirmation by a different author), `value`,
   `notes`, `source`, `created_at`, author fields. `op_type=create`: appends
   never overwrite each other, there is no CAS.
-- Entries live in `<index>-history-<period>`: the period granularity is
+- Entries live in `<index>-history-<period-date>`: the period granularity is
   `history_index_period` (config; env `MEMENTO_HISTORY_PERIOD`; default
   `month` — `2026.11`; also `day`, `week` (`2026-W46`), `quarter`
   (`2026-Q4`), `year`). Dated indices keep old periods small, inspectable,

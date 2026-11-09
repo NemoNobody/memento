@@ -37,6 +37,10 @@ type Client struct {
 	journalInfraMu sync.Mutex
 	journalInfraOK bool
 
+	// journalIdxPipeline tracks journal indices whose default_pipeline has
+	// been pinned in this process (see ensureJournalIndexPipeline).
+	journalIdxPipeline map[string]bool
+
 	// authorMu guards the writer-label cache: a security-resolved identity
 	// lives for the process; a degraded chain is re-probed with backoff
 	// (see resolveAuthor).

@@ -100,6 +100,10 @@ If a value matters, verify against the code; `doc:*` is only "where to look".
 `notes` holds qualifiers that are not facts: "checked the dev config only",
 "conflicts with key X".
 
+**Precision costs resources.** If you only checked part of it, record *how far*
+you got — otherwise the next session will either trust an under-verified fact or
+re-verify everything from scratch. A doubt is a note, not a status.
+
 ### summary — the store's table of contents
 
 A value over `summary_min_len` (default 2000) must ship a `summary`: a short
@@ -107,13 +111,6 @@ rendering of what the value contains (under `summary_max_len`, default ~400
 chars ≈ 100 tokens). The agent writes it at add time; searches match it, so a
 listing can be skimmed without pulling full values into context — find by
 summary, read the full value by key only when it matters.
-
-`notes` holds qualifiers that are not facts: "checked the dev config only",
-"conflicts with key X".
-
-**Precision costs resources.** If you only checked part of it, record *how far*
-you got — otherwise the next session will either trust an under-verified fact or
-re-verify everything from scratch. A doubt is a note, not a status.
 
 ### Staleness is the LLM's call
 

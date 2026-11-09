@@ -224,8 +224,8 @@ What the app touches, permission by permission:
 |---|---|---|
 | cluster | version probe, `status` health/disk, journal infra | `cluster:monitor/main`, `cluster:monitor/health`, `cluster:monitor/nodes/stats`, `manage_index_templates`, `manage_ingest_pipelines` |
 | `memento` (facts) | read, search, create/update docs | `read`, `search`, `indices:data/write/index`, `indices:data/write/update`, `indices:admin/create` — **no delete** (the app never deletes facts; `obsolete` is a status, and index loss must be an admin decision) |
-| `memento-history-*` | append entries, read journal, `prune` | `read`, `search`, `indices:data/write/*` (the journal is append-only by app design; `delete` here exists only for the manual `prune`) |
-| `memento-docs` | fetch cache: store, read, search snapshots | `read`, `search`, `indices:data/write/index`, `indices:admin/create` |
+| `memento-history-*` | append entries, read journal, `prune`, pin the ts pipeline | `read`, `search`, `indices:data/write/*` (append-only by app design; `delete` here exists only for the manual `prune`), `indices:admin/create` (a new period index is auto-created on the first append of that period), `indices:admin/settings/update` (the app pins the ts pipeline on journal indices) |
+| `memento-docs` | fetch cache: store, read, search, re-tag snapshots | `read`, `search`, `indices:data/write/index`, `indices:data/write/update` (re-tagging a stored snapshot with a different project), `indices:admin/create` |
 
 `GET /_security/authinfo` (the authorship probe) is self-service: every
 authenticated user may call it for themselves, so no extra permission is
@@ -250,10 +250,11 @@ cat > /tmp/memento_role.json << 'EOF'
      "allowed_actions": ["read", "search", "indices:data/write/index",
                          "indices:data/write/update", "indices:admin/create"]},
     {"index_patterns": ["memento-history-*"],
-     "allowed_actions": ["read", "search", "indices:data/write/*"]},
+     "allowed_actions": ["read", "search", "indices:data/write/*",
+                         "indices:admin/create", "indices:admin/settings/update"]},
     {"index_patterns": ["memento-docs"],
      "allowed_actions": ["read", "search", "indices:data/write/index",
-                         "indices:admin/create"]}
+                         "indices:data/write/update", "indices:admin/create"]}
   ]
 }
 EOF
@@ -280,7 +281,7 @@ rm -f /tmp/memento_role.json
 Then set `opensearch_user: "memento"` in the config and run `memento creds set`
 (and `memento status`). Two side effects worth knowing:
 
-- Writes now stamp `author: memento (security)` — the name the *server*
+- Writes now stamp `author: "memento" (security)` — the name the *server*
   authenticated, which is exactly the point of a shared store.
 - The journal template pins `index.number_of_replicas: 0`: on a single-node
   cluster journal indices stay green (replicas would hang unassigned — the

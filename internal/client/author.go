@@ -87,6 +87,12 @@ func (c *Client) resolveAuthor(ctx context.Context) AuthorInfo {
 	c.authorResolved = true
 	if info.AuthorSource != AuthorSourceSecurity {
 		c.authorRetryAt = now.Add(authorRetryBackoff)
+		if ctx.Err() != nil {
+			// The probe died with the CALLER's context (an abandoned
+			// request), not with the plugin: do not punish the next healthy
+			// call with the full backoff.
+			c.authorRetryAt = now
+		}
 	}
 	return c.author
 }

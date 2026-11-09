@@ -193,6 +193,9 @@ func (c *Client) appendJournalID(ctx context.Context, e *model.JournalEntry, id 
 		return "", err
 	}
 	index := journalIndexName(c.cfg.IndexName, c.cfg.HistoryIndexPeriod, e.CreatedAt)
+	if err := c.ensureJournalIndexPipeline(ctx, index); err != nil {
+		return "", err
+	}
 	body, _ := json.Marshal(e)
 	resp, err := c.api.Index(ctx, opensearchapi.IndexReq{
 		Index:      index,
@@ -212,6 +215,39 @@ func (c *Client) appendJournalID(ctx context.Context, e *model.JournalEntry, id 
 		return "", wrapWriteError("journal append", err)
 	}
 	return resp.ID, nil
+}
+
+// ensureJournalIndexPipeline pins the ts pipeline on a journal index that
+// already exists. The heal path matters for indices auto-created during the
+// window when infra install failed (journal entries would carry no
+// ingest_at: they sort last in reads and become the first prune victims).
+// A 404 means the index does not exist yet — its creation applies the
+// template (which wires the pipeline), so nothing more is needed. One
+// idempotent settings PUT per index per process.
+func (c *Client) ensureJournalIndexPipeline(ctx context.Context, index string) error {
+	c.journalInfraMu.Lock()
+	if c.journalIdxPipeline == nil {
+		c.journalIdxPipeline = map[string]bool{}
+	}
+	need := !c.journalIdxPipeline[index]
+	c.journalInfraMu.Unlock()
+	if !need {
+		return nil
+	}
+	body, _ := json.Marshal(map[string]interface{}{
+		"index.default_pipeline": journalPipelineName(c.cfg.IndexName),
+	})
+	_, err := c.api.Indices.Settings.Put(ctx, opensearchapi.SettingsPutReq{
+		Indices: []string{index},
+		Body:    strings.NewReader(string(body)),
+	})
+	if err != nil && !isNotFound(err) {
+		return wrapWriteError("journal index pipeline", err)
+	}
+	c.journalInfraMu.Lock()
+	c.journalIdxPipeline[index] = true
+	c.journalInfraMu.Unlock()
+	return nil
 }
 
 // journalEntryID derives a deterministic doc id for a journal entry from
@@ -441,8 +477,8 @@ func (c *Client) PruneJournal(ctx context.Context, key string, keep int) (int, e
 	return len(drop), nil
 }
 
-// journalOnce lives on the Client (see opensearch.go); journal infra is
-// installed idempotently on the first append.
+// journalInfraMu lives on the Client (see opensearch.go); journal infra is
+// (re)installed until it succeeds (see ensureJournalInfra).
 
 // MigrateFact moves one fact's in-doc history array into the journal
 // (big-bang migration, one-time): history entries become op=write entries
@@ -453,10 +489,13 @@ func (c *Client) PruneJournal(ctx context.Context, key string, keep int) (int, e
 // The appends use deterministic doc ids (journalEntryID): a rerun after a
 // partial failure (some entries appended, the link update failed) collides
 // with the entries the previous run wrote and treats the collision as
-// success, so reruns never duplicate. The link script only sets current_ref
-// when it is still empty: a concurrent Add that already linked the fact
-// carries a fresher ref (the migration's snapshot predates it), and
-// overwriting it would point the new value at the old journal entry.
+// success, so reruns never duplicate. The timestamp fed into the id is the
+// entry's stored observation time — never the rerun's clock — so the id
+// reproduces exactly across reruns; facts with no timestamps at all hash a
+// zero-time marker, which is equally stable. The link script only sets
+// current_ref when it is still empty: a concurrent Add that already linked
+// the fact carries a fresher ref (the migration's snapshot predates it),
+// and overwriting it would point the new value at the old journal entry.
 func (c *Client) MigrateFact(ctx context.Context, f *model.Fact, now time.Time) (int, error) {
 	if f.CurrentRef != "" {
 		return 0, nil // already migrated (journal-first facts have a ref)
@@ -474,9 +513,15 @@ func (c *Client) MigrateFact(ctx context.Context, f *model.Fact, now time.Time) 
 		if ts.IsZero() {
 			ts = now
 		}
+		// idTs excludes the now-fallback on purpose: the id must reproduce
+		// on a rerun, and the rerun's clock does not.
+		idTs := h.ObservedAt
+		if idTs.IsZero() {
+			idTs = f.UpdatedAt
+		}
 		e := model.NewJournalEntry(f.Key, f.FactID, f.Project, f.Category, model.OpWrite, h.Value, "", h.Source, ts)
 		info.applyTo(e)
-		if _, err := c.appendJournalID(ctx, e, journalEntryID(f.Key, model.OpWrite, h.Value, "", h.Source, ts)); err != nil {
+		if _, err := c.appendJournalID(ctx, e, journalEntryID(f.Key, model.OpWrite, h.Value, "", h.Source, idTs)); err != nil {
 			return appended, fmt.Errorf("migrate %q: history entry: %w", f.Key, err)
 		}
 		appended++
@@ -488,9 +533,13 @@ func (c *Client) MigrateFact(ctx context.Context, f *model.Fact, now time.Time) 
 	if ts.IsZero() {
 		ts = now
 	}
+	idTs := f.ObservedAt
+	if idTs.IsZero() {
+		idTs = f.UpdatedAt
+	}
 	cur := model.NewJournalEntry(f.Key, f.FactID, f.Project, f.Category, model.OpWrite, f.Value, f.Notes, f.Source, ts)
 	info.applyTo(cur)
-	ref := journalEntryID(f.Key, model.OpWrite, f.Value, f.Notes, f.Source, ts)
+	ref := journalEntryID(f.Key, model.OpWrite, f.Value, f.Notes, f.Source, idTs)
 	if _, err := c.appendJournalID(ctx, cur, ref); err != nil {
 		return appended, fmt.Errorf("migrate %q: current entry: %w", f.Key, err)
 	}
@@ -506,7 +555,7 @@ if (ctx._source.updated_at == null || params.updated_at.compareTo(ctx._source.up
 `,
 			"params": map[string]interface{}{
 				"ref":        ref,
-				"updated_at": now.UTC().Format(time.RFC3339),
+				"updated_at": now.UTC().Format(time.RFC3339Nano),
 			},
 		},
 	})

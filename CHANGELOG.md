@@ -45,7 +45,10 @@ Fixed:
 - Journal infrastructure: a failed first install (403, network blip) is
   no longer remembered as "installed" — appends retry it until it lands,
   so a long-lived MCP server never journals without the template and the
-  server-clock pipeline.
+  server-clock pipeline. Journal indices created while that was broken are
+  healed: before appending, the app pins the ts pipeline on the index
+  (idempotent settings PUT), so entries never sort as the oldest and
+  become the first prune victims.
 - `memento migrate-history` reruns are safe after a partial failure:
   entries are appended under content-derived ids, so the rerun collides
   with (and skips) what the previous run wrote instead of duplicating;

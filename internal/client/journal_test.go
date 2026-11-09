@@ -20,6 +20,8 @@ func journalInfraOK(r recordedRequest) (int, string) {
 		return http.StatusOK, `{"memento-journal-ts":{"processors":[]}}`
 	case r.Method == http.MethodHead && strings.HasPrefix(r.Path, "/_index_template/"):
 		return http.StatusOK, ""
+	case r.Method == http.MethodPut && strings.HasSuffix(r.Path, "/_settings"):
+		return http.StatusOK, `{"acknowledged":true}`
 	}
 	return http.StatusInternalServerError, `{"status":500,"error":"unexpected: ` + r.Method + " " + r.Path + `"}`
 }
@@ -410,6 +412,8 @@ func TestEnsureJournalInfraRetriesAfterFailure(t *testing.T) {
 				return http.StatusForbidden, `{"status":403,"error":{"type":"security_exception","reason":"no permission"}}`
 			}
 			return http.StatusOK, `{"acknowledged":true}`
+		case r.Method == http.MethodPut && strings.HasSuffix(r.Path, "/_settings"):
+			return http.StatusOK, `{"acknowledged":true}`
 		case r.Method == http.MethodPost && r.Path == "/memento-history-2026.11/_doc":
 			return http.StatusOK, `{"_id":"e1","result":"created"}`
 		}
@@ -527,6 +531,57 @@ func TestMigrateFactRerunCollidesOnDeterministicIDs(t *testing.T) {
 	}
 }
 
+// TestMigrateFactZeroTimestampRerunCollides: legacy facts with NO
+// timestamps at all (observed_at/updated_at both zero) must stay rerun-safe
+// too: the id hashes a zero-time marker, not the rerun's clock, so the
+// second run collides with the first even when the runs are days apart.
+func TestMigrateFactZeroTimestampRerunCollides(t *testing.T) {
+	var mu sync.Mutex
+	seen := map[string]bool{}
+	updateCalls := 0
+	c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+		if code, body := journalInfraOK(r); code != http.StatusInternalServerError {
+			return code, body
+		}
+		switch {
+		case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-"):
+			mu.Lock()
+			defer mu.Unlock()
+			if seen[r.Path] {
+				return http.StatusConflict, `{"error":{"type":"version_conflict_engine_exception","reason":"document already exists"},"status":409}`
+			}
+			seen[r.Path] = true
+			return http.StatusOK, `{"_id":"x","result":"created"}`
+		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+			updateCalls++
+			if updateCalls == 1 {
+				return http.StatusInternalServerError, `{"status":500,"error":"transient link failure"}`
+			}
+			return http.StatusOK, `{"result":"updated"}`
+		}
+		return http.StatusInternalServerError, `{"status":500,"error":"unexpected: ` + r.Path + `"}`
+	})
+	mk := func() *model.Fact {
+		f := model.NewFact("k", "v2", "config", "p", "s", "")
+		f.ObservedAt = time.Time{}
+		f.UpdatedAt = time.Time{}
+		f.History = []model.HistoryEntry{{Value: "v1", Source: "a"}} // no timestamp
+		return f
+	}
+	if _, err := c.MigrateFact(context.Background(), mk(), time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC)); err == nil {
+		t.Fatal("first run must report the link failure")
+	}
+	// A rerun days later: the ids must still reproduce.
+	if _, err := c.MigrateFact(context.Background(), mk(), time.Date(2026, 11, 14, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("rerun must succeed on collisions: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 2 {
+		t.Errorf("journal docs = %d, want 2: zero-timestamp rerun must not duplicate", len(seen))
+	}
+}
+
 // TestAddCorrectionJournalsDocFactID: the journal entry of a correction
 // carries the doc's fact_id (the identity that survives), not the fresh
 // uuid of the caller's in-memory fact.
@@ -571,5 +626,36 @@ func TestJournalEntriesSortedByStoreClockFirst(t *testing.T) {
 	}
 	if _, ok := sortKeys[1]["created_at"]; !ok {
 		t.Errorf("second sort key must be created_at: %v", sortKeys[1])
+	}
+}
+
+// TestAppendJournalPinsPipelineOnExistingIndex: an append pins the ts
+// pipeline on the journal index via one idempotent settings PUT — the heal
+// path for indices auto-created while infra install was broken (entries
+// without ingest_at sort last and become the first prune victims). One PUT
+// per index per process.
+func TestAppendJournalPinsPipelineOnExistingIndex(t *testing.T) {
+	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
+		if code, body := journalInfraOK(r); code != http.StatusInternalServerError {
+			return code, body
+		}
+		if r.Method == http.MethodPost && r.Path == "/memento-history-2026.11/_doc" {
+			return http.StatusOK, `{"_id":"e1","result":"created"}`
+		}
+		return http.StatusInternalServerError, `{"status":500,"error":"unexpected: ` + r.Method + " " + r.Path + `"}`
+	})
+	e := model.NewJournalEntry("k", "id", "p", "config", model.OpWrite, "v", "", "s", time.Date(2026, 11, 9, 10, 0, 0, 0, time.UTC))
+	if _, err := c.AppendJournal(context.Background(), e); err != nil {
+		t.Fatalf("AppendJournal: %v", err)
+	}
+	if _, err := c.AppendJournal(context.Background(), e); err != nil {
+		t.Fatalf("AppendJournal #2: %v", err)
+	}
+	puts := fake.requestsFor(http.MethodPut, "/memento-history-2026.11/_settings")
+	if len(puts) != 1 {
+		t.Errorf("settings PUTs = %d, want 1 (pinned once per index per process)", len(puts))
+	}
+	if !strings.Contains(puts[0].Body, "memento-journal-ts") {
+		t.Errorf("settings body must wire the ts pipeline: %s", puts[0].Body)
 	}
 }
