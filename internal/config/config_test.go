@@ -504,6 +504,25 @@ func TestLoadConfig_AuthorLabelsBadAreErrors(t *testing.T) {
 	if _, err := LoadConfig(); err == nil {
 		t.Error("LoadConfig() = nil error for a 201-rune MEMENTO_MODEL, want error")
 	}
+
+	// A blank-after-trim label must be loud, not silently "absent": it
+	// would fall back to the OS user in the audit chain (file field).
+	if err := os.WriteFile(fc, []byte(`{"author": "   "}`), 0644); err != nil {
+		t.Fatalf("write memento.conf: %v", err)
+	}
+	if _, err := LoadConfig(); err == nil {
+		t.Error("LoadConfig() = nil error for a whitespace-only author, want error")
+	}
+
+	// Same bound on the env path: MEMENTO_AUTHOR=" " passes the non-empty
+	// env guard and must not overwrite the file author with a blank label.
+	if err := os.WriteFile(fc, []byte(`{"author": "alice"}`), 0644); err != nil {
+		t.Fatalf("write memento.conf: %v", err)
+	}
+	t.Setenv("MEMENTO_AUTHOR", "  ")
+	if _, err := LoadConfig(); err == nil {
+		t.Error("LoadConfig() = nil error for MEMENTO_AUTHOR of only spaces, want error")
+	}
 }
 
 func TestLoadConfig_SummaryLimits(t *testing.T) {
@@ -556,6 +575,22 @@ func TestLoadConfig_SummaryLimits(t *testing.T) {
 	t.Setenv("MEMENTO_SUMMARY_MAX_LEN", "")
 	if _, err := LoadConfig(); err == nil {
 		t.Error("LoadConfig() = nil error for summary_min_len=-1, want error")
+	}
+
+	// The env path carries the same bound as the file path: a negative
+	// value silently disables the corresponding check (the checks are "> 0").
+	if err := os.WriteFile(fc, []byte(`{}`), 0644); err != nil {
+		t.Fatalf("write memento.conf: %v", err)
+	}
+	t.Setenv("MEMENTO_SUMMARY_MIN_LEN", "")
+	t.Setenv("MEMENTO_SUMMARY_MAX_LEN", "-5")
+	if _, err := LoadConfig(); err == nil {
+		t.Error("LoadConfig() = nil error for MEMENTO_SUMMARY_MAX_LEN=-5, want error")
+	}
+	t.Setenv("MEMENTO_SUMMARY_MAX_LEN", "")
+	t.Setenv("MEMENTO_SUMMARY_MIN_LEN", "-5")
+	if _, err := LoadConfig(); err == nil {
+		t.Error("LoadConfig() = nil error for MEMENTO_SUMMARY_MIN_LEN=-5, want error")
 	}
 }
 

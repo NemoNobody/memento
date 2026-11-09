@@ -96,7 +96,7 @@ func AddCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&addFlags.notes, "notes", "n", "",
 		"qualifiers: what was checked, how far, caveats")
 	cmd.Flags().StringVar(&addFlags.summary, "summary", "",
-		"short table-of-contents rendering of the value (under summary_max_len chars); required when the value is longer than summary_min_len")
+		"short table-of-contents rendering of the value (under summary_max_len chars); required when the value is longer than summary_min_len; ignored when the value is unchanged (same-value re-add touches notes/source only)")
 	cmd.Flags().BoolVar(&addFlags.allowSecret, "allow-secret", false,
 		"confirm the flagged text is not a secret (secret_guard=ask only, after user approval)")
 	return cmd

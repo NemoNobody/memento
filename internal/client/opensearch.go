@@ -31,14 +31,19 @@ type Client struct {
 	api *opensearchapi.Client
 	cfg *config.Config
 
-	// journalOnce guards journal infra installation (pipeline + template):
-	// one idempotent check per process, paid on the first journal append.
-	journalOnce sync.Once
+	// journalInfraMu guards journal infra installation (pipeline +
+	// template): the idempotent check runs until it succeeds — a failed
+	// probe must not mark the infra as installed (see ensureJournalInfra).
+	journalInfraMu sync.Mutex
+	journalInfraOK bool
 
-	// authorOnce resolves the writer labels (author chain, host, model,
-	// session) once per process: the security probe runs at most once.
-	authorOnce sync.Once
-	author     AuthorInfo
+	// authorMu guards the writer-label cache: a security-resolved identity
+	// lives for the process; a degraded chain is re-probed with backoff
+	// (see resolveAuthor).
+	authorMu       sync.Mutex
+	authorResolved bool
+	authorRetryAt  time.Time
+	author         AuthorInfo
 }
 
 // NewClient creates a new OpenSearch client.
@@ -258,6 +263,11 @@ ctx._source.updated_at = params.updated_at;
 // validates and canonicalizes it, and a fact stored with the wrong category
 // must not keep the wrong staleness TTL forever (category drives stale).
 //
+// The summary moves with the value unconditionally: the summary describes the
+// current value, and a correction to a short value (no summary required)
+// erasing the old summary is the honest state — an old table of contents for
+// a new value is a lie.
+//
 // It reports whether the fact was newly created. Writes wait for a refresh,
 // so the fact is immediately visible to subsequent Search/List calls.
 func (c *Client) Add(ctx context.Context, f *model.Fact) (created bool, err error) {
@@ -284,7 +294,7 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (created bool, err erro
 			// Journal the birth value, then link the fact to it. A journal
 			// failure leaves the fact in the pre-journal shape (migrate-history
 			// catches it), not a broken fact.
-			ref, jErr := c.journalAppend(ctx, f, f.ObservedAt)
+			ref, jErr := c.journalAppend(ctx, f, f.FactID, f.ObservedAt)
 			if jErr != nil {
 				return true, jErr
 			}
@@ -336,7 +346,10 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (created bool, err erro
 		return false, err
 	}
 
-	ref, err := c.journalAppend(ctx, f, f.ObservedAt)
+	// The journal entry carries the doc's fact_id (not the caller's fresh
+	// uuid): entries group by the identity that survives, and the doc's
+	// fact_id is that identity.
+	ref, err := c.journalAppend(ctx, f, existing.FactID, f.ObservedAt)
 	if err != nil {
 		return false, err
 	}
@@ -374,12 +387,13 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (created bool, err erro
 // returns the entry id. The caller links the fact to it: the correction
 // script carries current_ref, the create path links in a follow-up update.
 // The entry carries its own author labels: "who wrote this version" is a
-// per-entry fact of the log.
-func (c *Client) journalAppend(ctx context.Context, f *model.Fact, ts time.Time) (string, error) {
+// per-entry fact of the log; factID is the identity the entry belongs to
+// (the doc's fact_id, which survives key renames).
+func (c *Client) journalAppend(ctx context.Context, f *model.Fact, factID string, ts time.Time) (string, error) {
 	if ts.IsZero() {
 		ts = time.Now().UTC()
 	}
-	e := model.NewJournalEntry(f.Key, f.FactID, f.Project, f.Category, model.OpWrite, f.Value, f.Notes, f.Source, ts)
+	e := model.NewJournalEntry(f.Key, factID, f.Project, f.Category, model.OpWrite, f.Value, f.Notes, f.Source, ts)
 	c.resolveAuthor(ctx).applyTo(e)
 	return c.AppendJournal(ctx, e)
 }

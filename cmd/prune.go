@@ -73,9 +73,9 @@ their approval.`,
 				b.WriteString(strconv.Itoa(total))
 				b.WriteString(" history entries — keep the newest ")
 				b.WriteString(strconv.Itoa(keep))
-				b.WriteString(", drop ")
+				b.WriteString(", drop at most ")
 				b.WriteString(strconv.Itoa(total - keep))
-				b.WriteString(".")
+				b.WriteString(" (the entry carrying the current value is always spared).")
 				b.WriteString("\nthis removes the dropped observations for good; re-run with --yes to confirm")
 				if err := writeLine(os.Stdout, b.String()); err != nil {
 					fatalErr(err)

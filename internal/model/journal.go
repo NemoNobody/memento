@@ -82,7 +82,4 @@ type HistoryInfo struct {
 	LastAt        *time.Time `json:"last_at,omitempty"`
 	Category      string     `json:"category,omitempty"`
 	CurrentRef    string     `json:"current_ref,omitempty"`
-	// Truncated reports a bounded read: the journal has more entries than the
-	// query returned (honesty-first convention: a cut answer never reads complete).
-	Truncated bool `json:"truncated,omitempty"`
 }

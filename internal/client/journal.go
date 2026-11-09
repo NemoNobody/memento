@@ -2,6 +2,8 @@ package client
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,6 +33,7 @@ import (
 // index, which defeats the point). Names: 2026-W02 (ISO week), 2026-Q1,
 // 2026.11, 2026.11.09, 2026.
 func journalIndexName(prefix, period string, t time.Time) string {
+	t = t.UTC()
 	var date string
 	switch period {
 	case "week":
@@ -118,37 +121,44 @@ func buildJournalPipelineBody(prefix string) map[string]interface{} {
 }
 
 // ensureJournalInfra installs the journal pipeline and index template.
-// It runs once per process (the journal write path is the only caller):
 // PUT pipeline and the template existence check are idempotent, and the
-// create-race between processes is benign.
+// create-race between processes is benign. The success flag is set ONLY on
+// success: a first-call failure (network blip, 403) must leave the next
+// write in the same process free to retry, or a long-lived MCP server
+// would append journal entries forever without the template's mappings and
+// the server-clock pipeline. The mutex serializes concurrent appends so
+// only one pays the probes.
 func (c *Client) ensureJournalInfra(ctx context.Context) error {
-	var err error
-	c.journalOnce.Do(func() {
-		pipeline := journalPipelineName(c.cfg.IndexName)
-		_, getErr := c.api.Ingest.Get(ctx, &opensearchapi.IngestGetReq{PipelineIDs: []string{pipeline}})
-		if getErr != nil {
-			body, _ := json.Marshal(buildJournalPipelineBody(c.cfg.IndexName))
-			if _, mkErr := c.api.Ingest.Create(ctx, opensearchapi.IngestCreateReq{
-				PipelineID: pipeline,
-				Body:       strings.NewReader(string(body)),
-			}); mkErr != nil && !statusIs(mkErr, 409) { // lost the create race: it exists now
-				err = wrapWriteError("create journal pipeline", mkErr)
-			}
+	c.journalInfraMu.Lock()
+	defer c.journalInfraMu.Unlock()
+	if c.journalInfraOK {
+		return nil
+	}
+	pipeline := journalPipelineName(c.cfg.IndexName)
+	_, getErr := c.api.Ingest.Get(ctx, &opensearchapi.IngestGetReq{PipelineIDs: []string{pipeline}})
+	if getErr != nil {
+		body, _ := json.Marshal(buildJournalPipelineBody(c.cfg.IndexName))
+		if _, mkErr := c.api.Ingest.Create(ctx, opensearchapi.IngestCreateReq{
+			PipelineID: pipeline,
+			Body:       strings.NewReader(string(body)),
+		}); mkErr != nil && !statusIs(mkErr, 409) { // lost the create race: it exists now
+			return wrapWriteError("create journal pipeline", mkErr)
 		}
+	}
 
-		tpl := journalTemplateName(c.cfg.IndexName)
-		_, exErr := c.api.IndexTemplate.Exists(ctx, opensearchapi.IndexTemplateExistsReq{IndexTemplate: tpl})
-		if exErr != nil {
-			body, _ := json.Marshal(buildJournalTemplateBody(c.cfg.IndexName))
-			if _, mkErr := c.api.IndexTemplate.Create(ctx, opensearchapi.IndexTemplateCreateReq{
-				IndexTemplate: tpl,
-				Body:          strings.NewReader(string(body)),
-			}); mkErr != nil {
-				err = wrapWriteError("create journal template", mkErr)
-			}
+	tpl := journalTemplateName(c.cfg.IndexName)
+	_, exErr := c.api.IndexTemplate.Exists(ctx, opensearchapi.IndexTemplateExistsReq{IndexTemplate: tpl})
+	if exErr != nil {
+		body, _ := json.Marshal(buildJournalTemplateBody(c.cfg.IndexName))
+		if _, mkErr := c.api.IndexTemplate.Create(ctx, opensearchapi.IndexTemplateCreateReq{
+			IndexTemplate: tpl,
+			Body:          strings.NewReader(string(body)),
+		}); mkErr != nil {
+			return wrapWriteError("create journal template", mkErr)
 		}
-	})
-	return err
+	}
+	c.journalInfraOK = true
+	return nil
 }
 
 // statusIs reports whether a typed API error carries an HTTP status code
@@ -168,6 +178,14 @@ func statusIs(err error, code int) bool {
 // AppendJournal appends one accepted entry (op_type=create: appends never
 // overwrite each other) and returns the entry id.
 func (c *Client) AppendJournal(ctx context.Context, e *model.JournalEntry) (string, error) {
+	return c.appendJournalID(ctx, e, "")
+}
+
+// appendJournalID appends one entry, optionally under a caller-chosen doc
+// id. A chosen id with op_type=create makes the append idempotent: a retry
+// of the same logical entry collides (409) instead of duplicating — the
+// migration path uses this to survive partial-failure reruns.
+func (c *Client) appendJournalID(ctx context.Context, e *model.JournalEntry, id string) (string, error) {
 	if !model.ValidOp(e.Op) {
 		return "", fmt.Errorf("journal: unknown op %q", e.Op)
 	}
@@ -177,21 +195,43 @@ func (c *Client) AppendJournal(ctx context.Context, e *model.JournalEntry) (stri
 	index := journalIndexName(c.cfg.IndexName, c.cfg.HistoryIndexPeriod, e.CreatedAt)
 	body, _ := json.Marshal(e)
 	resp, err := c.api.Index(ctx, opensearchapi.IndexReq{
-		Index: index,
-		Body:  strings.NewReader(string(body)),
+		Index:      index,
+		DocumentID: id,
+		Body:       strings.NewReader(string(body)),
 		Params: opensearchapi.IndexParams{
 			Refresh: "wait_for",
 			OpType:  "create",
 		},
 	})
 	if err != nil {
+		if id != "" && isVersionConflict(err) {
+			// The entry is already there (a retry of a deterministic id):
+			// the append succeeded before the caller's view of it broke.
+			return id, nil
+		}
 		return "", wrapWriteError("journal append", err)
 	}
 	return resp.ID, nil
 }
 
+// journalEntryID derives a deterministic doc id for a journal entry from
+// its observation content (key, op, value, notes, source, timestamp). The
+// migration uses it so a rerun after a partial failure re-appends collide
+// with the entries the previous run wrote instead of duplicating them.
+func journalEntryID(factKey, op, value, notes, source string, ts time.Time) string {
+	h := sha256.New()
+	for _, part := range []string{factKey, op, value, notes, source, ts.UTC().Format(time.RFC3339Nano)} {
+		h.Write([]byte(part))
+		h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 // buildJournalEntriesBody builds the journal read: one fact key, newest
-// first, bounded size.
+// first, bounded size. Ordering is the ingest pipeline's server clock
+// first (writer clocks skew on a shared store — that is why the pipeline
+// exists), the entry's own created_at as fallback for entries stored
+// without the pipeline.
 func buildJournalEntriesBody(key string, limit int) map[string]interface{} {
 	size := limit
 	if size <= 0 || size > NavSizeCap {
@@ -202,6 +242,7 @@ func buildJournalEntriesBody(key string, limit int) map[string]interface{} {
 			"term": map[string]interface{}{"fact_key": key},
 		},
 		"sort": []map[string]interface{}{
+			{"ingest_at": map[string]interface{}{"order": "desc"}},
 			{"created_at": map[string]interface{}{"order": "desc"}},
 		},
 		"size": size,
@@ -284,7 +325,7 @@ func (c *Client) HistoryInfo(ctx context.Context, key string) (*model.HistoryInf
 	if err == nil {
 		info.Category = fact.Category
 		info.CurrentRef = fact.CurrentRef
-	} else if !strings.Contains(err.Error(), ErrNotFound.Error()) {
+	} else if !errors.Is(err, ErrNotFound) {
 		return nil, err
 	}
 
@@ -346,13 +387,26 @@ func (c *Client) PruneJournal(ctx context.Context, key string, keep int) (int, e
 		return 0, err
 	}
 	if resp.Hits.Total.Value > len(resp.Hits.Hits) {
-		return 0, fmt.Errorf("prune journal: %d entries for %q exceeds the readable cap %d", resp.Hits.Total.Value, key, NavSizeCap)
+		atLeast := ""
+		if resp.Hits.Total.Relation == "gte" {
+			// track_total_hits caps the reported total at 10000 by default:
+			// do not report a clipped number as an exact count.
+			atLeast = "at least "
+		}
+		return 0, fmt.Errorf("prune journal: %s%d entries for %q exceeds the readable cap %d", atLeast, resp.Hits.Total.Value, key, NavSizeCap)
 	}
 	if len(resp.Hits.Hits) <= keep {
 		return 0, nil
 	}
 	ref := ""
-	if fact, err := c.Get(ctx, key); err == nil {
+	fact, gErr := c.Get(ctx, key)
+	if gErr != nil && !errors.Is(gErr, ErrNotFound) {
+		// A transient read failure must not silently disarm the current_ref
+		// protection: deleting the entry that carries the current value
+		// breaks the journal's central invariant.
+		return 0, fmt.Errorf("prune journal: read fact for %q: %w", key, gErr)
+	}
+	if gErr == nil {
 		ref = fact.CurrentRef
 	}
 
@@ -395,6 +449,14 @@ func (c *Client) PruneJournal(ctx context.Context, key string, keep int) (int, e
 // in oldest-first order, the current value gets its own entry, current_ref
 // points at it, and the array is removed from _source. It returns the
 // number of journal entries appended.
+//
+// The appends use deterministic doc ids (journalEntryID): a rerun after a
+// partial failure (some entries appended, the link update failed) collides
+// with the entries the previous run wrote and treats the collision as
+// success, so reruns never duplicate. The link script only sets current_ref
+// when it is still empty: a concurrent Add that already linked the fact
+// carries a fresher ref (the migration's snapshot predates it), and
+// overwriting it would point the new value at the old journal entry.
 func (c *Client) MigrateFact(ctx context.Context, f *model.Fact, now time.Time) (int, error) {
 	if f.CurrentRef != "" {
 		return 0, nil // already migrated (journal-first facts have a ref)
@@ -414,7 +476,7 @@ func (c *Client) MigrateFact(ctx context.Context, f *model.Fact, now time.Time) 
 		}
 		e := model.NewJournalEntry(f.Key, f.FactID, f.Project, f.Category, model.OpWrite, h.Value, "", h.Source, ts)
 		info.applyTo(e)
-		if _, err := c.AppendJournal(ctx, e); err != nil {
+		if _, err := c.appendJournalID(ctx, e, journalEntryID(f.Key, model.OpWrite, h.Value, "", h.Source, ts)); err != nil {
 			return appended, fmt.Errorf("migrate %q: history entry: %w", f.Key, err)
 		}
 		appended++
@@ -428,8 +490,8 @@ func (c *Client) MigrateFact(ctx context.Context, f *model.Fact, now time.Time) 
 	}
 	cur := model.NewJournalEntry(f.Key, f.FactID, f.Project, f.Category, model.OpWrite, f.Value, f.Notes, f.Source, ts)
 	info.applyTo(cur)
-	ref, err := c.AppendJournal(ctx, cur)
-	if err != nil {
+	ref := journalEntryID(f.Key, model.OpWrite, f.Value, f.Notes, f.Source, ts)
+	if _, err := c.appendJournalID(ctx, cur, ref); err != nil {
 		return appended, fmt.Errorf("migrate %q: current entry: %w", f.Key, err)
 	}
 	appended++
@@ -438,9 +500,9 @@ func (c *Client) MigrateFact(ctx context.Context, f *model.Fact, now time.Time) 
 		"script": map[string]interface{}{
 			"lang": "painless",
 			"source": `
-ctx._source.current_ref = params.ref;
+if (ctx._source.current_ref == null || ctx._source.current_ref == '') { ctx._source.current_ref = params.ref; }
 ctx._source.remove('history');
-ctx._source.updated_at = params.updated_at;
+if (ctx._source.updated_at == null || params.updated_at.compareTo(ctx._source.updated_at) > 0) { ctx._source.updated_at = params.updated_at; }
 `,
 			"params": map[string]interface{}{
 				"ref":        ref,

@@ -155,7 +155,11 @@ func collectStatus(ctx context.Context, confPath string, noCWD bool) statusRepor
 	rep.Author, rep.AuthorSource = cfg.Author, "config"
 	if cfg.Author == "" {
 		if u, err := user.Current(); err == nil && u.Username != "" {
-			rep.Author, rep.AuthorSource = u.Username, "os"
+			// Same bound as the client's chain: a hostile-length username must
+			// not reach the terminal unfiltered.
+			if s, nErr := config.NormalizeLabel(u.Username); nErr == nil && s != "" {
+				rep.Author, rep.AuthorSource = s, "os"
+			}
 		}
 	}
 
@@ -299,8 +303,10 @@ func printStatus(w io.Writer, rep statusReport) error {
 	b.WriteString("\nsecret_guard: ")
 	b.WriteString(rep.SecretGuard)
 	if rep.Author != "" {
+		// Quoted: the label is self-reported (server/OS user) and can contain
+		// spaces; strconv.Quote also escapes any control byte that survived.
 		b.WriteString("\nauthor: ")
-		b.WriteString(rep.Author)
+		b.WriteString(strconv.Quote(rep.Author))
 		b.WriteString(" (")
 		b.WriteString(rep.AuthorSource)
 		b.WriteString(")")

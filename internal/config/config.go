@@ -211,7 +211,9 @@ func LoadConfig() (*Config, error) {
 //
 // Env vars override the file: OPENSEARCH_URL, OPENSEARCH_USER,
 // OPENSEARCH_PASSWORD, OPENSEARCH_INSECURE_SKIP_VERIFY, MEMENTO_INDEX,
-// MEMENTO_HISTORY_LIMIT, MEMENTO_SECRET_GUARD, MEMENTO_ALLOW_PLAINTEXT,
+// MEMENTO_HISTORY_LIMIT, MEMENTO_HISTORY_PERIOD, MEMENTO_SUMMARY_MIN_LEN,
+// MEMENTO_SUMMARY_MAX_LEN, MEMENTO_SECRET_GUARD, MEMENTO_ALLOW_PLAINTEXT,
+// MEMENTO_AUTHOR, MEMENTO_MODEL, MEMENTO_HOST, MEMENTO_SESSION,
 // MEMENTO_DOCS_INDEX, MEMENTO_FETCH_TIMEOUT, MEMENTO_FETCH_MAX_BYTES,
 // MEMENTO_DOCS_TTL_DAYS, MEMENTO_FETCH_HOSTS (comma-separated),
 // MEMENTO_FETCH_USER_AGENT, MEMENTO_FETCH_PROXY_URL,
@@ -288,28 +290,28 @@ func loadConfig(explicitPath string, finder func() string) (*Config, error) {
 		cfg.AllowPlaintext = b
 	}
 	if v := os.Getenv("MEMENTO_AUTHOR"); v != "" {
-		a, err := normalizeLabel(v)
+		a, err := NormalizeLabel(v)
 		if err != nil {
 			return nil, fmt.Errorf("MEMENTO_AUTHOR: %w", err)
 		}
 		cfg.Author = a
 	}
 	if v := os.Getenv("MEMENTO_MODEL"); v != "" {
-		m, err := normalizeLabel(v)
+		m, err := NormalizeLabel(v)
 		if err != nil {
 			return nil, fmt.Errorf("MEMENTO_MODEL: %w", err)
 		}
 		cfg.Model = m
 	}
 	if v := os.Getenv("MEMENTO_HOST"); v != "" {
-		h, err := normalizeLabel(v)
+		h, err := NormalizeLabel(v)
 		if err != nil {
 			return nil, fmt.Errorf("MEMENTO_HOST: %w", err)
 		}
 		cfg.Host = h
 	}
 	if v := os.Getenv("MEMENTO_SESSION"); v != "" {
-		s, err := normalizeLabel(v)
+		s, err := NormalizeLabel(v)
 		if err != nil {
 			return nil, fmt.Errorf("MEMENTO_SESSION: %w", err)
 		}
@@ -320,12 +322,20 @@ func loadConfig(explicitPath string, finder func() string) (*Config, error) {
 		if err != nil {
 			return nil, fmt.Errorf("MEMENTO_SUMMARY_MIN_LEN: %w", err)
 		}
+		// Same bound as the file path: a negative min would silently disable
+		// the summary requirement (the check is "> 0"), a negative cap the cap.
+		if n < 0 {
+			return nil, fmt.Errorf("MEMENTO_SUMMARY_MIN_LEN: must be >= 0, got %d", n)
+		}
 		cfg.SummaryMinLen = n
 	}
 	if v := os.Getenv("MEMENTO_SUMMARY_MAX_LEN"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
 			return nil, fmt.Errorf("MEMENTO_SUMMARY_MAX_LEN: %w", err)
+		}
+		if n < 0 {
+			return nil, fmt.Errorf("MEMENTO_SUMMARY_MAX_LEN: must be >= 0, got %d", n)
 		}
 		cfg.SummaryMaxLen = n
 	}
@@ -618,7 +628,7 @@ func loadFile(cfg *Config, path string) error {
 		if l.in == nil {
 			continue
 		}
-		v, err := normalizeLabel(*l.in)
+		v, err := NormalizeLabel(*l.in)
 		if err != nil {
 			return fmt.Errorf("config %s: %s: %w", path, l.name, err)
 		}
@@ -662,16 +672,22 @@ func normalizeGuard(v string) (string, error) {
 	return "", fmt.Errorf("must be one of reject|ask|allow, got %q", v)
 }
 
-// labelMaxRunes caps every authorship label. They land in stored documents
+// LabelMaxRunes caps every authorship label. They land in stored documents
 // and in listings: a runaway label bloats every later read, so the config
-// edge is where the bound lives.
-const labelMaxRunes = 200
+// edge is where the bound lives (the client's sanitizeLabel enforces the
+// same bound on labels that come from outside: server, OS user, hostname).
+const LabelMaxRunes = 200
 
-// normalizeLabel canonicalizes an authorship label (author, model, host,
+// NormalizeLabel canonicalizes an authorship label (author, model, host,
 // session): trim, drop control bytes (they would forge terminal output in
-// listings), and cap the length. The chain fallbacks live in the client;
-// the config only guarantees the stored shape is sane.
-func normalizeLabel(v string) (string, error) {
+// listings), and cap the length. A label that is blank after normalization
+// is an error, not an empty string: a blank label silently falls back to
+// the next chain link (the OS user), and "the config said nothing" reads
+// as "the config said this" in a shared store's audit metadata.
+func NormalizeLabel(v string) (string, error) {
+	if v == "" {
+		return "", nil
+	}
 	s := strings.Map(func(r rune) rune {
 		if r < 0x20 || r == 0x7f {
 			return -1
@@ -679,8 +695,11 @@ func normalizeLabel(v string) (string, error) {
 		return r
 	}, strings.TrimSpace(v))
 	s = strings.TrimSpace(s)
-	if utf8.RuneCountInString(s) > labelMaxRunes {
-		return "", fmt.Errorf("label longer than %d characters", labelMaxRunes)
+	if s == "" {
+		return "", fmt.Errorf("label is blank after trimming: refusing a blank label that would silently fall back to the OS user")
+	}
+	if utf8.RuneCountInString(s) > LabelMaxRunes {
+		return "", fmt.Errorf("label longer than %d characters", LabelMaxRunes)
 	}
 	return s, nil
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,6 +33,9 @@ func journalRoutesOK(r recordedRequest) (int, string) {
 	switch {
 	case r.Method == http.MethodPost && strings.HasPrefix(r.Path, "/memento-history-") && strings.HasSuffix(r.Path, "/_doc"):
 		return http.StatusOK, `{"_id":"journal-entry-1","result":"created"}`
+	case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-"):
+		// deterministic-id appends (migration): PUT /<index>/_doc/<id>
+		return http.StatusOK, `{"_id":"journal-entry-1","result":"created"}`
 	case r.Method == http.MethodPost && strings.HasPrefix(r.Path, "/memento-history-") && strings.HasSuffix(r.Path, "/_search"):
 		return http.StatusOK, `{"took":1,"hits":{"total":{"value":0,"relation":"eq"},"hits":[]}}`
 	}
@@ -52,6 +56,9 @@ func TestJournalIndexNamePeriods(t *testing.T) {
 		{"month", day, "memento-history-2026.11"},
 		{"quarter", day, "memento-history-2026-Q4"},
 		{"quarter", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), "memento-history-2026-Q1"},
+		// quarter/year must partition on UTC, not the writer's zone: 00:30
+		// at UTC+3 on Oct 1 is Sep 30 21:30 UTC — the previous quarter.
+		{"quarter", time.Date(2026, 10, 1, 0, 30, 0, 0, time.FixedZone("UTC+3", 3*3600)), "memento-history-2026-Q3"},
 		{"year", day, "memento-history-2026"},
 		{"bogus", day, "memento-history-2026.11"}, // config validates; raw calls default to month
 	}
@@ -296,7 +303,7 @@ func TestMigrateFactMovesArrayToJournal(t *testing.T) {
 			return code, body
 		}
 		switch {
-		case r.Method == http.MethodPost && strings.HasPrefix(r.Path, "/memento-history-"):
+		case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-"):
 			return http.StatusOK, `{"_id":"entry","result":"created"}`
 		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
 			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
@@ -320,11 +327,11 @@ func TestMigrateFactMovesArrayToJournal(t *testing.T) {
 	var oct, nov int
 	fake.mu.Lock()
 	for _, r := range fake.requests {
-		if r.Method == http.MethodPost && strings.HasPrefix(r.Path, "/memento-history-") {
-			switch r.Path {
-			case "/memento-history-2026.10/_doc":
+		if r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-") {
+			switch {
+			case strings.HasPrefix(r.Path, "/memento-history-2026.10/_doc/"):
 				oct++
-			case "/memento-history-2026.11/_doc":
+			case strings.HasPrefix(r.Path, "/memento-history-2026.11/_doc/"):
 				nov++
 			}
 		}
@@ -340,6 +347,12 @@ func TestMigrateFactMovesArrayToJournal(t *testing.T) {
 	}
 	if !strings.Contains(updates[0].Body, "remove('history')") || !strings.Contains(updates[0].Body, "current_ref") {
 		t.Errorf("migration update must link current_ref and drop the array, body=%s", updates[0].Body)
+	}
+	// The link must be conditional: a concurrent Add that already set
+	// current_ref carries a fresher ref; overwriting it would point the new
+	// value at the old journal entry.
+	if !strings.Contains(updates[0].Body, "current_ref == null || ctx._source.current_ref == ''") {
+		t.Errorf("migration link must only set current_ref while empty, body=%s", updates[0].Body)
 	}
 }
 
@@ -375,5 +388,188 @@ func TestAddCreatesIndexThenJournalsNewFact(t *testing.T) {
 	updates := fake.requestsFor(http.MethodPost, "/memento/_update/k")
 	if len(updates) != 1 || !strings.Contains(updates[0].Body, "current_ref") {
 		t.Error("the created fact must be linked to its journal entry (current_ref)")
+	}
+}
+
+// TestEnsureJournalInfraRetriesAfterFailure pins the infra-install caching
+// contract: only SUCCESS is remembered. A failed first attempt (403,
+// network blip) must not mark the infra as installed for the rest of the
+// process — a long-lived MCP server would append journal entries forever
+// without the template's mappings and the server-clock pipeline.
+func TestEnsureJournalInfraRetriesAfterFailure(t *testing.T) {
+	tplPuts := 0
+	c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasPrefix(r.Path, "/_ingest/pipeline/"):
+			return http.StatusOK, `{"memento-journal-ts":{"processors":[]}}`
+		case r.Method == http.MethodHead && strings.HasPrefix(r.Path, "/_index_template/"):
+			return http.StatusNotFound, "" // template missing
+		case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/_index_template/"):
+			tplPuts++
+			if tplPuts == 1 {
+				return http.StatusForbidden, `{"status":403,"error":{"type":"security_exception","reason":"no permission"}}`
+			}
+			return http.StatusOK, `{"acknowledged":true}`
+		case r.Method == http.MethodPost && r.Path == "/memento-history-2026.11/_doc":
+			return http.StatusOK, `{"_id":"e1","result":"created"}`
+		}
+		return http.StatusInternalServerError, `{"status":500,"error":"unexpected: ` + r.Method + " " + r.Path + `"}`
+	})
+	e := model.NewJournalEntry("k", "id", "p", "config", model.OpWrite, "v", "", "s", time.Date(2026, 11, 9, 10, 0, 0, 0, time.UTC))
+	if _, err := c.AppendJournal(context.Background(), e); err == nil {
+		t.Fatal("first append must fail while the template cannot be installed")
+	}
+	if _, err := c.AppendJournal(context.Background(), e); err != nil {
+		t.Fatalf("second append must re-attempt the infra install: %v", err)
+	}
+	if tplPuts != 2 {
+		t.Errorf("template PUTs = %d, want 2: a failed install is not a success", tplPuts)
+	}
+}
+
+// TestPruneJournalFailsOnFactReadFailure pins that a transient Get failure
+// must abort the prune: swallowing it reads as "no current_ref to spare",
+// silently disarming the protection of the entry that carries the current
+// value.
+func TestPruneJournalFailsOnFactReadFailure(t *testing.T) {
+	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
+		switch {
+		case r.Method == http.MethodPost && r.Path == "/memento-history-*/_search":
+			return http.StatusOK, `{"took":1,"hits":{"total":{"value":2,"relation":"eq"},"hits":[
+				{"_index":"memento-history-2026.11","_id":"a","_source":{"fact_key":"k","op":"write","value":"v1","created_at":"2026-11-01T10:00:00Z"}},
+				{"_index":"memento-history-2026.11","_id":"b","_source":{"fact_key":"k","op":"write","value":"v0","created_at":"2026-10-01T10:00:00Z"}}]}}`
+		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
+			return http.StatusInternalServerError, `{"status":500,"error":"transient"}`
+		}
+		return http.StatusInternalServerError, `{"status":500,"error":"unexpected: ` + r.Path + `"}`
+	})
+	if _, err := c.PruneJournal(context.Background(), "k", 1); err == nil {
+		t.Fatal("a transient fact-read failure must not disarm the current_ref protection")
+	} else if !strings.Contains(err.Error(), "read fact") {
+		t.Errorf("the error must name the fact read: %v", err)
+	}
+	if fake.sawAnyPrefix("/_bulk") {
+		t.Error("no bulk deletes may be issued when the fact read failed")
+	}
+}
+
+// TestPruneJournalCapMessageIsHonestOnGTE: track_total_hits clips the
+// reported total at 10000 (relation=gte); the cap message must not report
+// the clipped number as an exact count.
+func TestPruneJournalCapMessageIsHonestOnGTE(t *testing.T) {
+	c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+		if r.Method == http.MethodPost && r.Path == "/memento-history-*/_search" {
+			return http.StatusOK, `{"took":1,"hits":{"total":{"value":10000,"relation":"gte"},"hits":[
+				{"_index":"memento-history-2026.11","_id":"a","_source":{"fact_key":"k","op":"write","value":"v1","created_at":"2026-11-01T10:00:00Z"}}]}}`
+		}
+		return http.StatusInternalServerError, `{"status":500,"error":"unexpected: ` + r.Path + `"}`
+	})
+	_, err := c.PruneJournal(context.Background(), "k", 1)
+	if err == nil {
+		t.Fatal("exceeding the readable cap must be an error")
+	}
+	if !strings.Contains(err.Error(), "at least 10000") {
+		t.Errorf("a gte total must be reported as a bound: %v", err)
+	}
+}
+
+// TestMigrateFactRerunCollidesOnDeterministicIDs pins the partial-failure
+// recovery contract: the migration appends under ids derived from the entry
+// content, so the rerun the CLI instructs collides with the entries the
+// first run wrote (409 = success) instead of duplicating them.
+func TestMigrateFactRerunCollidesOnDeterministicIDs(t *testing.T) {
+	var mu sync.Mutex
+	seen := map[string]bool{}
+	updateCalls := 0
+	c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+		if code, body := journalInfraOK(r); code != http.StatusInternalServerError {
+			return code, body
+		}
+		switch {
+		case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-"):
+			mu.Lock()
+			defer mu.Unlock()
+			if seen[r.Path] {
+				return http.StatusConflict, `{"error":{"type":"version_conflict_engine_exception","reason":"document already exists"},"status":409}`
+			}
+			seen[r.Path] = true
+			return http.StatusOK, `{"_id":"x","result":"created"}`
+		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+			updateCalls++
+			if updateCalls == 1 {
+				return http.StatusInternalServerError, `{"status":500,"error":"transient link failure"}`
+			}
+			return http.StatusOK, `{"result":"updated"}`
+		}
+		return http.StatusInternalServerError, `{"status":500,"error":"unexpected: ` + r.Path + `"}`
+	})
+	mk := func() *model.Fact {
+		f := model.NewFact("k", "v3", "config", "p", "s", "")
+		f.ObservedAt = time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
+		f.History = []model.HistoryEntry{
+			{Value: "v1", ObservedAt: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), Source: "a"},
+		}
+		return f
+	}
+	// First run: the appends land, the link update fails (partial failure).
+	if _, err := c.MigrateFact(context.Background(), mk(), time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC)); err == nil {
+		t.Fatal("first run must report the link failure")
+	}
+	// The rerun re-appends the same logical entries: the ids collide, and
+	// the collision is success, not duplication.
+	if _, err := c.MigrateFact(context.Background(), mk(), time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("rerun must succeed on collisions: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 2 {
+		t.Errorf("journal docs = %d, want 2: the rerun must not duplicate entries", len(seen))
+	}
+}
+
+// TestAddCorrectionJournalsDocFactID: the journal entry of a correction
+// carries the doc's fact_id (the identity that survives), not the fresh
+// uuid of the caller's in-memory fact.
+func TestAddCorrectionJournalsDocFactID(t *testing.T) {
+	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
+		if code, body := journalRoutesOK(r); code != http.StatusInternalServerError {
+			return code, body
+		}
+		switch {
+		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
+			return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
+				"key":"k","fact_id":"doc-1","value":"old","category":"config","status":"verified"}}`
+		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+			return http.StatusOK, `{"result":"updated"}`
+		}
+		return http.StatusInternalServerError, `{"status":500,"error":"unexpected: ` + r.Path + `"}`
+	})
+	f := model.NewFact("k", "new", "config", "p", "s", "")
+	if _, err := c.Add(context.Background(), f); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	writes := fake.requestsFor(http.MethodPost, "/memento-history-2026.11/_doc")
+	if len(writes) != 1 {
+		t.Fatalf("journal appends = %d, want 1", len(writes))
+	}
+	if !strings.Contains(writes[0].Body, `"fact_id":"doc-1"`) {
+		t.Errorf("the correction entry must carry the doc's fact_id, body=%s", writes[0].Body)
+	}
+}
+
+// TestJournalEntriesSortedByStoreClockFirst: the pipeline stamps ingest_at
+// with the store clock so ordering survives writer clock skew; reads must
+// honor that clock, not the clients'.
+func TestJournalEntriesSortedByStoreClockFirst(t *testing.T) {
+	body := buildJournalEntriesBody("k", 5)
+	sortKeys, ok := body["sort"].([]map[string]interface{})
+	if !ok || len(sortKeys) != 2 {
+		t.Fatalf("sort = %v, want two keys", body["sort"])
+	}
+	if _, ok := sortKeys[0]["ingest_at"]; !ok {
+		t.Errorf("first sort key must be the pipeline's server clock: %v", sortKeys[0])
+	}
+	if _, ok := sortKeys[1]["created_at"]; !ok {
+		t.Errorf("second sort key must be created_at: %v", sortKeys[1])
 	}
 }

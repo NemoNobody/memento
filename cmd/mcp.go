@@ -111,8 +111,10 @@ func runMCPServer(confPath string) error {
 		Description: "Store a verified fact: file locations, config and endpoint " +
 			"values, behavior. Re-use the same key to correct a fact — the " +
 			"accepted value is appended to the history journal and the fact " +
-			"points at it. Re-adding the same value updates notes only, " +
-			"without a journal entry. Values longer than summary_min_len " +
+			"points at it. Re-adding the same value is a notes/source touch: no " +
+			"journal entry, observed_at stays, status returns to verified " +
+			"(resurrects an obsolete fact), updated_by moves. Values longer " +
+			"than summary_min_len " +
 			"require a summary (kept under summary_max_len): it is the " +
 			"store's table of contents. Never store secrets (passwords, " +
 			"tokens, keys): the store is plaintext and a secret_guard rejects " +
@@ -708,7 +710,7 @@ func (s *mcpServer) prune(ctx context.Context, req *mcp.CallToolRequest, in prun
 			Keep:         keep,
 			Removed:      0,
 			Pruned:       false,
-			Plan: fmt.Sprintf("key %q has %d history entries; confirm=true keeps the newest %d and drops %d observations for good. Nothing was written. Show this plan to the user and re-call with confirm=true only after their approval",
+			Plan: fmt.Sprintf("key %q has %d history entries; confirm=true keeps the newest %d and drops at most %d observations for good (the entry that carries the current value is always spared). Nothing was written. Show this plan to the user and re-call with confirm=true only after their approval",
 				in.Key, total, keep, total-keep),
 		}, nil
 	}
@@ -726,11 +728,41 @@ type journalInput struct {
 	Limit int    `json:"limit,omitempty" jsonschema:"newest entries to return (default 20, cap 1000)"`
 }
 
+type journalEntryView struct {
+	FactKey      string    `json:"fact_key" jsonschema:"the fact key this entry observes"`
+	FactID       string    `json:"fact_id,omitempty" jsonschema:"stable fact identity the entry belongs to"`
+	Project      string    `json:"project,omitempty" jsonschema:"project of the entry"`
+	Category     string    `json:"category,omitempty" jsonschema:"category at the time of the entry"`
+	Op           string    `json:"op" jsonschema:"write (an accepted value) | rediscovery (reserved: same value, different author)"`
+	Value        string    `json:"value" jsonschema:"the accepted value at that moment"`
+	Notes        string    `json:"notes,omitempty" jsonschema:"notes shipped with the write"`
+	Source       string    `json:"source,omitempty" jsonschema:"source shipped with the write"`
+	CreatedAt    time.Time `json:"created_at" jsonschema:"writer-side observation time (UTC)"`
+	Author       string    `json:"author,omitempty" jsonschema:"who appended this entry (self-reported label)"`
+	AuthorSource string    `json:"author_source,omitempty" jsonschema:"security | config | os | none for this writer"`
+	Model        string    `json:"model,omitempty" jsonschema:"model label of this writer"`
+	Host         string    `json:"host,omitempty" jsonschema:"host label of this writer"`
+	Session      string    `json:"session,omitempty" jsonschema:"agent session label of this writer"`
+}
+
+func newJournalEntryViews(entries []model.JournalEntry) []journalEntryView {
+	views := make([]journalEntryView, 0, len(entries))
+	for _, e := range entries {
+		views = append(views, journalEntryView{
+			FactKey: e.FactKey, FactID: e.FactID, Project: e.Project, Category: e.Category,
+			Op: e.Op, Value: e.Value, Notes: e.Notes, Source: e.Source, CreatedAt: e.CreatedAt,
+			Author: e.Author, AuthorSource: e.AuthorSource, Model: e.Model,
+			Host: e.Host, Session: e.Session,
+		})
+	}
+	return views
+}
+
 type journalOutput struct {
-	Key       string               `json:"key" jsonschema:"the queried key"`
-	Entries   []model.JournalEntry `json:"entries" jsonschema:"journal entries, newest first"`
-	Total     int                  `json:"total" jsonschema:"total entries for the key (lower bound after admin index deletes)"`
-	Truncated bool                 `json:"truncated" jsonschema:"true when more entries exist than returned (raise limit)"`
+	Key       string             `json:"key" jsonschema:"the queried key"`
+	Entries   []journalEntryView `json:"entries" jsonschema:"journal entries, newest first (store-clock order)"`
+	Total     int                `json:"total" jsonschema:"total entries for the key (lower bound after admin index deletes)"`
+	Truncated bool               `json:"truncated" jsonschema:"true when more entries exist than returned (raise limit)"`
 }
 
 func (s *mcpServer) journal(ctx context.Context, req *mcp.CallToolRequest, in journalInput) (*mcp.CallToolResult, journalOutput, error) {
@@ -749,23 +781,37 @@ func (s *mcpServer) journal(ctx context.Context, req *mcp.CallToolRequest, in jo
 	if entries == nil {
 		entries = []model.JournalEntry{}
 	}
-	return nil, journalOutput{Key: in.Key, Entries: entries, Total: total, Truncated: truncated}, nil
+	return nil, journalOutput{Key: in.Key, Entries: newJournalEntryViews(entries), Total: total, Truncated: truncated}, nil
 }
 
 type historyInfoInput struct {
 	Key string `json:"key" jsonschema:"exact fact key"`
 }
 
-func (s *mcpServer) historyInfo(ctx context.Context, req *mcp.CallToolRequest, in historyInfoInput) (*mcp.CallToolResult, model.HistoryInfo, error) {
+type historyInfoOutput struct {
+	Key           string     `json:"key" jsonschema:"the fact key"`
+	Writes        int        `json:"writes" jsonschema:"accepted values journaled (changes = writes-1); LOWER BOUND after admin index deletes"`
+	Rediscoveries int        `json:"rediscoveries" jsonschema:"same-value re-confirmations journaled"`
+	FirstAt       *time.Time `json:"first_at,omitempty" jsonschema:"earliest surviving entry (UTC)"`
+	LastAt        *time.Time `json:"last_at,omitempty" jsonschema:"newest surviving entry (UTC)"`
+	Category      string     `json:"category,omitempty" jsonschema:"current category of the fact"`
+	CurrentRef    string     `json:"current_ref,omitempty" jsonschema:"journal entry id carrying the current value"`
+}
+
+func (s *mcpServer) historyInfo(ctx context.Context, req *mcp.CallToolRequest, in historyInfoInput) (*mcp.CallToolResult, historyInfoOutput, error) {
 	c, err := s.newClient(ctx)
 	if err != nil {
-		return nil, model.HistoryInfo{}, storeError("memento_history_info", err)
+		return nil, historyInfoOutput{}, storeError("memento_history_info", err)
 	}
 	info, err := c.HistoryInfo(ctx, in.Key)
 	if err != nil {
-		return nil, model.HistoryInfo{}, storeError("memento_history_info", err)
+		return nil, historyInfoOutput{}, storeError("memento_history_info", err)
 	}
-	return nil, *info, nil
+	return nil, historyInfoOutput{
+		Key: info.Key, Writes: info.Writes, Rediscoveries: info.Rediscoveries,
+		FirstAt: info.FirstAt, LastAt: info.LastAt,
+		Category: info.Category, CurrentRef: info.CurrentRef,
+	}, nil
 }
 
 // --- page snapshots (docs index) ---

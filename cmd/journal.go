@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"strconv"
@@ -28,6 +29,11 @@ journal indices are lower bounds — the surviving journal, not the lifetime.`,
 		Args: cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			key := args[0]
+			if journalFlags.limit < 1 {
+				// A zero/negative limit collapsing to the 1000-entry cap reads
+				// as a small page; demand an explicit positive bound.
+				fatalErr(fmt.Errorf("journal: --limit must be >= 1, got %d", journalFlags.limit))
+			}
 			ctx := context.Background()
 			c, err := newClient()
 			if err != nil {
@@ -60,8 +66,10 @@ journal indices are lower bounds — the surviving journal, not the lifetime.`,
 					b.WriteString(e.Source)
 				}
 				if e.Author != "" {
+					// Quoted: labels are self-reported (server/OS user), and
+					// an unquoted "John Doe" parses ambiguously in listings.
 					b.WriteString(" author=")
-					b.WriteString(e.Author)
+					b.WriteString(strconv.Quote(e.Author))
 				}
 				b.WriteString(" value=")
 				b.WriteString(strconv.Quote(e.Value))

@@ -6,6 +6,7 @@ import (
 	"os/user"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/NemoNobody/memento/internal/config"
 	"github.com/NemoNobody/memento/internal/model"
@@ -198,5 +199,65 @@ func TestAddSameValueCarriesUpdatedBy(t *testing.T) {
 	}
 	if !strings.Contains(updateBody, `"updated_by":"carol"`) {
 		t.Errorf("notes-only update must stamp updated_by: %s", updateBody)
+	}
+}
+
+// sanitizeLabel is the filter for labels the config edge does not pass
+// (server usernames, OS usernames, hostnames): non-printable runes — C0/C1
+// controls, bidi overrides, zero-width format runes — would forge terminal
+// output in get/journal/status listings.
+func TestSanitizeLabelStripsNonPrintable(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"alice", "alice"},
+		{"al ice", "al ice"}, // spaces stay: they are printable
+		{"a\u202eb", "ab"},   // bidi override
+		{"a\u200bb", "ab"},   // zero-width space
+		{"a\u0085b", "ab"},   // C1 control
+		{"a\tb", "ab"},       // C0 control
+		{"  alice  ", "alice"},
+		{strings.Repeat("x", 201), ""}, // over-long: dropped whole
+	} {
+		if got := sanitizeLabel(tc.in); got != tc.want {
+			t.Errorf("sanitizeLabel(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// A degraded chain (security probe failed: outage, plugin cold start) must
+// be re-probed after a backoff: a long-lived MCP process may not freeze a
+// transient outage as the writer identity forever. The probe never runs
+// more than once per backoff window.
+func TestAuthorChainSecurityProbeRetriedAfterBackoff(t *testing.T) {
+	probeCalls := 0
+	c, _ := newFakeClientCfg(t, func(cfg *config.Config) { cfg.Author = "cfg-user" },
+		func(r recordedRequest) (int, string) {
+			if r.Method == http.MethodGet && r.Path == "/_security/authinfo" {
+				probeCalls++
+				if probeCalls == 1 {
+					// 403, not 503: the transport retries 5xx (the outage
+					// would self-heal inside one probe call).
+					return http.StatusForbidden, `{"status":403,"error":{"type":"security_exception","reason":"no privilege"}}`
+				}
+				return http.StatusOK, `{"user_name":"alice"}`
+			}
+			return http.StatusNotFound, `{"status":404}`
+		})
+	info := c.resolveAuthor(context.Background())
+	if info.AuthorSource != AuthorSourceConfig {
+		t.Fatalf("first resolve = %q, want config (a probe outage degrades the chain)", info.AuthorSource)
+	}
+	c.resolveAuthor(context.Background())
+	if probeCalls != 1 {
+		t.Fatalf("probes = %d, want 1: the degraded chain is cached inside the backoff window", probeCalls)
+	}
+	c.authorRetryAt = time.Now().Add(-time.Second) // simulate the window expiring
+	info = c.resolveAuthor(context.Background())
+	if info.Author != "alice" || info.AuthorSource != AuthorSourceSecurity {
+		t.Errorf("after the backoff: author = %q/%q, want alice/security", info.Author, info.AuthorSource)
+	}
+	// A security-resolved identity is stable: no further probes scheduled.
+	info = c.resolveAuthor(context.Background())
+	if info.AuthorSource != AuthorSourceSecurity || probeCalls != 2 {
+		t.Errorf("security identity must be cached: source=%q probes=%d", info.AuthorSource, probeCalls)
 	}
 }

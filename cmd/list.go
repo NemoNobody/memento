@@ -62,13 +62,21 @@ var listFlags struct {
 }
 
 // printFacts renders one-line fact listings to w; shared by list and search.
+// The line shows the summary when one is stored (the table-of-contents
+// contract: listings stay skimmable without pulling long values), and the
+// value for facts stored before summaries existed.
 func printFacts(w io.Writer, facts []model.Fact, now time.Time) error {
 	var b strings.Builder
 	for _, f := range facts {
 		b.WriteString("  ")
 		b.WriteString(f.Key)
 		b.WriteString(": ")
-		b.WriteString(f.Value)
+		if f.Summary != "" {
+			b.WriteString(f.Summary)
+			b.WriteString(" [summary]")
+		} else {
+			b.WriteString(f.Value)
+		}
 		b.WriteString(" (status=")
 		b.WriteString(strconv.Quote(f.Status))
 		b.WriteString(")")

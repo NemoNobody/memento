@@ -9,8 +9,10 @@ import (
 	"os/user"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
+	"github.com/NemoNobody/memento/internal/config"
 	"github.com/NemoNobody/memento/internal/model"
 )
 
@@ -32,11 +34,19 @@ type AuthorInfo struct {
 	Session      string
 }
 
-// resolveAuthor resolves the writer label once per process and caches it
-// in the client: every caller (journal append, correction script, create
-// stamp) reads the same labels, and the security probe runs at most once.
-// Chain: store-authenticated user (security plugin) → config author → OS
-// user.
+// authorRetryBackoff bounds how often resolveAuthor re-probes the security
+// plugin after a failed probe: a long-lived MCP server should not cache a
+// transient outage (plugin not up yet, network blip) as the writer identity
+// forever, and it should not hammer authinfo on every write either.
+const authorRetryBackoff = 5 * time.Minute
+
+// resolveAuthor resolves the writer labels and caches them in the client:
+// every caller (journal append, correction script, create stamp) reads the
+// same labels. Chain: store-authenticated user (security plugin) → config
+// author → OS user. A resolved security label is cached for the process
+// lifetime; a degraded chain (security probe failed) is retried after
+// authorRetryBackoff, so the store-authenticated name takes over as soon as
+// the plugin answers.
 //
 // Authorship is SELF-REPORTED by design: the chain is best-effort audit
 // metadata for shared stores, not an authentication factor (the threat
@@ -44,28 +54,40 @@ type AuthorInfo struct {
 // With the security plugin off — the common single-node case — authinfo is
 // unavailable and the chain falls to config/OS silently.
 func (c *Client) resolveAuthor(ctx context.Context) AuthorInfo {
-	c.authorOnce.Do(func() {
-		info := AuthorInfo{
-			Model:   c.cfg.Model,
-			Session: c.cfg.Session,
-			Host:    c.cfg.Host,
+	c.authorMu.Lock()
+	defer c.authorMu.Unlock()
+	now := time.Now()
+	if c.authorResolved &&
+		(c.author.AuthorSource == AuthorSourceSecurity || now.Before(c.authorRetryAt)) {
+		return c.author
+	}
+	info := AuthorInfo{
+		Model:   c.cfg.Model,
+		Session: c.cfg.Session,
+		Host:    c.cfg.Host,
+	}
+	if info.Host == "" {
+		if h, err := os.Hostname(); err == nil {
+			info.Host = sanitizeLabel(h)
 		}
-		if info.Host == "" {
-			if h, err := os.Hostname(); err == nil {
-				info.Host = h
-			}
-		}
-		if u := c.securityUser(ctx); u != "" {
-			info.Author, info.AuthorSource = u, AuthorSourceSecurity
-		} else if c.cfg.Author != "" {
-			info.Author, info.AuthorSource = c.cfg.Author, AuthorSourceConfig
-		} else if u, err := user.Current(); err == nil && u.Username != "" {
-			info.Author, info.AuthorSource = u.Username, AuthorSourceOS
-		} else {
+	}
+	if u := c.securityUser(ctx); u != "" {
+		info.Author, info.AuthorSource = u, AuthorSourceSecurity
+	} else if c.cfg.Author != "" {
+		info.Author, info.AuthorSource = c.cfg.Author, AuthorSourceConfig
+	} else if u, err := user.Current(); err == nil && u.Username != "" {
+		info.Author, info.AuthorSource = sanitizeLabel(u.Username), AuthorSourceOS
+		if info.Author == "" {
 			info.AuthorSource = AuthorSourceNone
 		}
-		c.author = info
-	})
+	} else {
+		info.AuthorSource = AuthorSourceNone
+	}
+	c.author = info
+	c.authorResolved = true
+	if info.AuthorSource != AuthorSourceSecurity {
+		c.authorRetryAt = now.Add(authorRetryBackoff)
+	}
 	return c.author
 }
 
@@ -106,24 +128,22 @@ func (c *Client) securityUser(ctx context.Context) string {
 	return sanitizeLabel(body.UserName)
 }
 
-// labelMaxRunes caps every authorship label. They land in stored documents
-// and every later read, so a runaway label must not happen. The config
-// edge enforces the same bound on config-supplied labels.
-const labelMaxRunes = 200
-
 // sanitizeLabel bounds a label that came from outside (server-provided
-// usernames): control bytes stripped (they would forge terminal output in
-// listings), over-long labels dropped whole (a truncated name reads as a
-// real name; a rejected one reads as absent).
+// usernames, OS usernames, hostnames): non-printable runes stripped — C0/C1
+// control bytes, bidi overrides and zero-width format runes would forge
+// terminal output in listings (they land in get/journal/status output),
+// over-long labels dropped whole (a truncated name reads as a real name; a
+// rejected one reads as absent). The config edge enforces the same length
+// bound on config-supplied labels.
 func sanitizeLabel(v string) string {
 	s := strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
+		if !unicode.IsPrint(r) {
 			return -1
 		}
 		return r
 	}, strings.TrimSpace(v))
 	s = strings.TrimSpace(s)
-	if utf8.RuneCountInString(s) > labelMaxRunes {
+	if utf8.RuneCountInString(s) > config.LabelMaxRunes {
 		return ""
 	}
 	return s
