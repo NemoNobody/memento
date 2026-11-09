@@ -178,21 +178,28 @@ func statusIs(err error, code int) bool {
 // AppendJournal appends one accepted entry (op_type=create: appends never
 // overwrite each other) and returns the entry id.
 func (c *Client) AppendJournal(ctx context.Context, e *model.JournalEntry) (string, error) {
-	return c.appendJournalID(ctx, e, "")
+	return c.appendJournalID(ctx, e, "", "")
 }
 
 // appendJournalID appends one entry, optionally under a caller-chosen doc
 // id. A chosen id with op_type=create makes the append idempotent: a retry
 // of the same logical entry collides (409) instead of duplicating — the
-// migration path uses this to survive partial-failure reruns.
-func (c *Client) appendJournalID(ctx context.Context, e *model.JournalEntry, id string) (string, error) {
+// migration path uses this to survive partial-failure reruns. indexName
+// overrides the target index: the migration derives it from the entry's
+// stored observation time (stable), not the display timestamp (the
+// rerun's clock), so a rerun crossing a period boundary lands on the SAME
+// doc id in the SAME index and the collision holds.
+func (c *Client) appendJournalID(ctx context.Context, e *model.JournalEntry, id string, indexName string) (string, error) {
 	if !model.ValidOp(e.Op) {
 		return "", fmt.Errorf("journal: unknown op %q", e.Op)
 	}
 	if err := c.ensureJournalInfra(ctx); err != nil {
 		return "", err
 	}
-	index := journalIndexName(c.cfg.IndexName, c.cfg.HistoryIndexPeriod, e.CreatedAt)
+	index := indexName
+	if index == "" {
+		index = journalIndexName(c.cfg.IndexName, c.cfg.HistoryIndexPeriod, e.CreatedAt)
+	}
 	if err := c.ensureJournalIndexPipeline(ctx, index); err != nil {
 		return "", err
 	}
@@ -486,13 +493,14 @@ func (c *Client) PruneJournal(ctx context.Context, key string, keep int) (int, e
 // points at it, and the array is removed from _source. It returns the
 // number of journal entries appended.
 //
-// The appends use deterministic doc ids (journalEntryID): a rerun after a
-// partial failure (some entries appended, the link update failed) collides
-// with the entries the previous run wrote and treats the collision as
-// success, so reruns never duplicate. The timestamp fed into the id is the
-// entry's stored observation time — never the rerun's clock — so the id
-// reproduces exactly across reruns; facts with no timestamps at all hash a
-// zero-time marker, which is equally stable. The link script only sets
+// The appends use deterministic doc ids (journalEntryID) AND target the
+// index derived from the same stored time: a rerun after a partial failure
+// (some entries appended, the link update failed) collides with the
+// entries the previous run wrote and treats the collision as success, so
+// reruns never duplicate — not even when the rerun crosses a period
+// boundary and the display timestamp (a now-fallback) moves. The ids hash
+// the entry's stored observation time (a zero-time marker when the fact
+// has none), never the rerun's clock. The link script only sets
 // current_ref when it is still empty: a concurrent Add that already linked
 // the fact carries a fresher ref (the migration's snapshot predates it),
 // and overwriting it would point the new value at the old journal entry.
@@ -521,7 +529,11 @@ func (c *Client) MigrateFact(ctx context.Context, f *model.Fact, now time.Time) 
 		}
 		e := model.NewJournalEntry(f.Key, f.FactID, f.Project, f.Category, model.OpWrite, h.Value, "", h.Source, ts)
 		info.applyTo(e)
-		if _, err := c.appendJournalID(ctx, e, journalEntryID(f.Key, model.OpWrite, h.Value, "", h.Source, idTs)); err != nil {
+		// The target index comes from idTs (stable), not ts (a rerun's
+		// now-fallback): the collision must find the entry the previous run
+		// wrote, and doc ids are per-index.
+		histIdx := journalIndexName(c.cfg.IndexName, c.cfg.HistoryIndexPeriod, idTs)
+		if _, err := c.appendJournalID(ctx, e, journalEntryID(f.Key, model.OpWrite, h.Value, "", h.Source, idTs), histIdx); err != nil {
 			return appended, fmt.Errorf("migrate %q: history entry: %w", f.Key, err)
 		}
 		appended++
@@ -540,7 +552,8 @@ func (c *Client) MigrateFact(ctx context.Context, f *model.Fact, now time.Time) 
 	cur := model.NewJournalEntry(f.Key, f.FactID, f.Project, f.Category, model.OpWrite, f.Value, f.Notes, f.Source, ts)
 	info.applyTo(cur)
 	ref := journalEntryID(f.Key, model.OpWrite, f.Value, f.Notes, f.Source, idTs)
-	if _, err := c.appendJournalID(ctx, cur, ref); err != nil {
+	curIdx := journalIndexName(c.cfg.IndexName, c.cfg.HistoryIndexPeriod, idTs)
+	if _, err := c.appendJournalID(ctx, cur, ref, curIdx); err != nil {
 		return appended, fmt.Errorf("migrate %q: current entry: %w", f.Key, err)
 	}
 	appended++

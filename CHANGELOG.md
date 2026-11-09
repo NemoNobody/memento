@@ -39,7 +39,9 @@ Authorship and summary:
   `memento status` reports the effective author and its chain.
 - Docs: least-privilege store user guide for clusters with the security
   plugin (role/user/role-mapping recipes; the app role cannot delete the
-  facts index), linked from SECURITY.md.
+  facts index; `indices:admin/get` + per-pattern create/settings/update
+  actions included, with an upgrade note for roles provisioned before
+  this release), linked from SECURITY.md.
 
 Fixed:
 - Journal infrastructure: a failed first install (403, network blip) is

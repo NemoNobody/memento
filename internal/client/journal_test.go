@@ -533,8 +533,10 @@ func TestMigrateFactRerunCollidesOnDeterministicIDs(t *testing.T) {
 
 // TestMigrateFactZeroTimestampRerunCollides: legacy facts with NO
 // timestamps at all (observed_at/updated_at both zero) must stay rerun-safe
-// too: the id hashes a zero-time marker, not the rerun's clock, so the
-// second run collides with the first even when the runs are days apart.
+// too: the id hashes a zero-time marker and the target index is derived
+// from the SAME stable time — not the rerun's clock — so the second run
+// collides with the first in the same doc of the same index even when the
+// runs land in different periods.
 func TestMigrateFactZeroTimestampRerunCollides(t *testing.T) {
 	var mu sync.Mutex
 	seen := map[string]bool{}
@@ -568,17 +570,18 @@ func TestMigrateFactZeroTimestampRerunCollides(t *testing.T) {
 		f.History = []model.HistoryEntry{{Value: "v1", Source: "a"}} // no timestamp
 		return f
 	}
-	if _, err := c.MigrateFact(context.Background(), mk(), time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC)); err == nil {
+	if _, err := c.MigrateFact(context.Background(), mk(), time.Date(2026, 11, 30, 23, 0, 0, 0, time.UTC)); err == nil {
 		t.Fatal("first run must report the link failure")
 	}
-	// A rerun days later: the ids must still reproduce.
-	if _, err := c.MigrateFact(context.Background(), mk(), time.Date(2026, 11, 14, 0, 0, 0, 0, time.UTC)); err != nil {
+	// A rerun after the month flipped: the display ts (now-fallback) moved
+	// to a new period, the stable id and index must not have.
+	if _, err := c.MigrateFact(context.Background(), mk(), time.Date(2026, 12, 14, 0, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatalf("rerun must succeed on collisions: %v", err)
 	}
 	mu.Lock()
 	defer mu.Unlock()
 	if len(seen) != 2 {
-		t.Errorf("journal docs = %d, want 2: zero-timestamp rerun must not duplicate", len(seen))
+		t.Errorf("journal docs = %d, want 2: zero-timestamp rerun across a period boundary must not duplicate", len(seen))
 	}
 }
 
