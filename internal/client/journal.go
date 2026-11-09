@@ -30,17 +30,18 @@ import (
 
 // journalIndexName derives the journal index for a period and a time. The
 // date is part of the name (an undated index is one infinitely growing
-// index, which defeats the point). Names: 2026-W02 (ISO week), 2026-Q1,
-// 2026.11, 2026.11.09, 2026.
+// index, which defeats the point). Names are all-lowercase (an OpenSearch
+// index name must be): 2026-w02 (ISO week), 2026-q1, 2026.11, 2026.11.09,
+// 2026.
 func journalIndexName(prefix, period string, t time.Time) string {
 	t = t.UTC()
 	var date string
 	switch period {
 	case "week":
 		y, w := t.UTC().ISOWeek()
-		date = fmt.Sprintf("%d-W%02d", y, w)
+		date = fmt.Sprintf("%d-w%02d", y, w)
 	case "quarter":
-		date = fmt.Sprintf("%d-Q%d", t.Year(), (int(t.Month())-1)/3+1)
+		date = fmt.Sprintf("%d-q%d", t.Year(), (int(t.Month())-1)/3+1)
 	case "month":
 		date = t.UTC().Format("2006.01")
 	case "day":

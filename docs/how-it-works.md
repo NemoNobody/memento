@@ -139,8 +139,8 @@ the fact doc:
   never overwrite each other, there is no CAS.
 - Entries live in `<index>-history-<period-date>`: the period granularity is
   `history_index_period` (config; env `MEMENTO_HISTORY_PERIOD`; default
-  `month` — `2026.11`; also `day`, `week` (`2026-W46`), `quarter`
-  (`2026-Q4`), `year`). Dated indices keep old periods small, inspectable,
+  `month` — `2026.11`; also `day`, `week` (`2026-w46`), `quarter`
+  (`2026-q4`), `year`). Dated indices keep old periods small, inspectable,
   and deletable (the admin pruning path).
 - The journal infrastructure (ingest pipeline `<index>-journal-ts` stamping
   entries with the **server clock** — writer clocks skew on a shared store;

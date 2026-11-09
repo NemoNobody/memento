@@ -53,14 +53,14 @@ func TestJournalIndexNamePeriods(t *testing.T) {
 		want   string
 	}{
 		{"day", day, "memento-history-2026.11.09"},
-		{"week", day, "memento-history-2026-W46"},
-		{"week", isoWeekFlip, "memento-history-2026-W53"},
+		{"week", day, "memento-history-2026-w46"},
+		{"week", isoWeekFlip, "memento-history-2026-w53"},
 		{"month", day, "memento-history-2026.11"},
-		{"quarter", day, "memento-history-2026-Q4"},
-		{"quarter", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), "memento-history-2026-Q1"},
+		{"quarter", day, "memento-history-2026-q4"},
+		{"quarter", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), "memento-history-2026-q1"},
 		// quarter/year must partition on UTC, not the writer's zone: 00:30
 		// at UTC+3 on Oct 1 is Sep 30 21:30 UTC — the previous quarter.
-		{"quarter", time.Date(2026, 10, 1, 0, 30, 0, 0, time.FixedZone("UTC+3", 3*3600)), "memento-history-2026-Q3"},
+		{"quarter", time.Date(2026, 10, 1, 0, 30, 0, 0, time.FixedZone("UTC+3", 3*3600)), "memento-history-2026-q3"},
 		{"year", day, "memento-history-2026"},
 		{"bogus", day, "memento-history-2026.11"}, // config validates; raw calls default to month
 	}
