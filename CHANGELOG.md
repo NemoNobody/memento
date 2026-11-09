@@ -23,6 +23,21 @@ journal of dated indices (`<index>-history-<period>`, monthly by default;
   journal indices, read counts are lower bounds.
 - Backups: snapshots must include `memento-history-*` (docs/backup.md).
 
+Authorship and summary:
+- Every write is stamped with self-reported audit labels: `author` (resolved
+  from the store's security plugin, else config `author`, else the OS user),
+  `author_source` (`security`/`config`/`os`/`none`), `model`, `host`,
+  `session`. Birth labels are write-once; later writes move `updated_by`.
+  Journal entries carry the writer who appended them.
+- Long values stay skimmable: a value over `summary_min_len` (default 2000)
+  requires a `summary` (CLI `--summary`, MCP `summary`) capped at
+  `summary_max_len` (default 400). The rule covers accepted values; notes
+  touches of old long facts are never rejected.
+- Config keys `author`/`model`/`host`/`session`/`summary_min_len`/
+  `summary_max_len`; env `MEMENTO_AUTHOR`/`MEMENTO_MODEL`/`MEMENTO_HOST`/
+  `MEMENTO_SESSION`/`MEMENTO_SUMMARY_MIN_LEN`/`MEMENTO_SUMMARY_MAX_LEN`.
+  `memento status` reports the effective author and its chain.
+
 ## v0.6.0 — 2026-11-08
 
 Internal pre-release. A six-round review cascade (Strata, DeepSeek Flash,

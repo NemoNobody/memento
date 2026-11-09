@@ -802,3 +802,122 @@ func TestKeysGuards(t *testing.T) {
 		t.Errorf("sort = %v, want key asc", body.Sort)
 	}
 }
+
+// TestAddLongValueRequiresSummary pins the table-of-contents contract: a
+// value over summary_min_len must ship a summary, so store listings stay
+// skimmable. The check runs in the client write path (both CLI and MCP).
+func TestAddLongValueRequiresSummary(t *testing.T) {
+	c, _ := newFakeClientCfg(t, func(cfg *config.Config) { cfg.SummaryMinLen = 10 },
+		func(r recordedRequest) (int, string) {
+			switch {
+			case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
+				return http.StatusNotFound, `{"status":404,"error":"document_missing_exception"}`
+			}
+			return http.StatusInternalServerError, `{"status":500,"error":"unexpected"}`
+		})
+
+	long := strings.Repeat("v", 20)
+	if _, err := c.Add(context.Background(), model.NewFact("k", long, "config", "p", "test:contract", "")); err == nil {
+		t.Fatal("a long value without a summary was accepted")
+	} else if !strings.Contains(err.Error(), "summary_min_len") {
+		t.Errorf("error must name summary_min_len: %v", err)
+	}
+}
+
+func TestAddLongValueWithSummaryIsStored(t *testing.T) {
+	var putBody string
+	c, _ := newFakeClientCfg(t, func(cfg *config.Config) { cfg.SummaryMinLen = 10 },
+		func(r recordedRequest) (int, string) {
+			if code, body := journalRoutesOK(r); code != http.StatusInternalServerError {
+				return code, body
+			}
+			switch {
+			case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
+				return http.StatusNotFound, `{"status":404,"error":"document_missing_exception"}`
+			case r.Method == http.MethodPut && r.Path == "/memento/_doc/k":
+				putBody = r.Body
+				return http.StatusCreated, `{"_index":"memento","_id":"k","result":"created"}`
+			case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+				return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+			}
+			return http.StatusInternalServerError, `{"status":500,"error":"unexpected"}`
+		})
+
+	long := strings.Repeat("v", 20)
+	f := model.NewFact("k", long, "config", "p", "test:contract", "")
+	f.Summary = "the long value, in short"
+	if _, err := c.Add(context.Background(), f); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if !strings.Contains(putBody, `"summary":"the long value, in short"`) {
+		t.Errorf("create body must carry the summary: %s", putBody)
+	}
+}
+
+func TestAddSummaryOverCapRejected(t *testing.T) {
+	c, _ := newFakeClientCfg(t, func(cfg *config.Config) {
+		cfg.SummaryMinLen = 10
+		cfg.SummaryMaxLen = 15
+	}, func(r recordedRequest) (int, string) {
+		return http.StatusInternalServerError, `{"status":500,"error":"unexpected"}`
+	})
+
+	long := strings.Repeat("v", 20)
+	f := model.NewFact("k", long, "config", "p", "test:contract", "")
+	f.Summary = strings.Repeat("s", 20)
+	if _, err := c.Add(context.Background(), f); err == nil {
+		t.Fatal("an over-cap summary was accepted")
+	} else if !strings.Contains(err.Error(), "summary_max_len") {
+		t.Errorf("error must name summary_max_len: %v", err)
+	}
+}
+
+// A same-value notes touch must not fail over a summary the pre-summary
+// fact never had: the requirement lives on accepted values only.
+func TestAddSameValueSkipsSummaryCheck(t *testing.T) {
+	c, fake := newFakeClientCfg(t, func(cfg *config.Config) { cfg.SummaryMinLen = 10 },
+		func(r recordedRequest) (int, string) {
+			switch {
+			case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
+				return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
+					"key":"k","value":"` + strings.Repeat("v", 20) + `",
+					"category":"config","status":"verified"}}`
+			case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+				return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+			}
+			return http.StatusInternalServerError, `{"status":500,"error":"unexpected"}`
+		})
+
+	long := strings.Repeat("v", 20)
+	if _, err := c.Add(context.Background(), model.NewFact("k", long, "config", "p", "test:contract", "note")); err != nil {
+		t.Fatalf("notes-only update on a long value without summary: %v", err)
+	}
+	if len(fake.requestsFor(http.MethodPost, "/memento/_update/k")) != 1 {
+		t.Error("expected the notes-only doc update")
+	}
+}
+
+// Correction of a long value must carry a summary as well: the check runs
+// on every accepted value, not only on creation.
+func TestAddCorrectionOfLongValueRequiresSummary(t *testing.T) {
+	c, fake := newFakeClientCfg(t, func(cfg *config.Config) { cfg.SummaryMinLen = 10 },
+		func(r recordedRequest) (int, string) {
+			switch {
+			case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
+				return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
+					"key":"k","value":"` + strings.Repeat("o", 12) + `",
+					"category":"config","status":"verified"}}`
+			}
+			return http.StatusInternalServerError, `{"status":500,"error":"unexpected"}`
+		})
+
+	long := strings.Repeat("v", 20)
+	if _, err := c.Add(context.Background(), model.NewFact("k", long, "config", "p", "test:contract", "")); err == nil {
+		t.Fatal("a long correcting value without a summary was accepted")
+	}
+	// The rejection must happen before the journal append: a value that is
+	// never accepted must never enter the log.
+	if fake.sawAnyPrefix("/memento-history-") {
+		t.Error("rejected value must not be journaled")
+	}
+}

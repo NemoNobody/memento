@@ -29,6 +29,23 @@ type Fact struct {
 	Notes      string         `json:"notes,omitempty" yaml:"notes,omitempty"`
 	History    []HistoryEntry `json:"history,omitempty" yaml:"history,omitempty"`
 
+	// Summary is a short (table-of-contents) rendering of Value. It is
+	// required once a value passes config.SummaryMinLen, so listings stay
+	// skimmable; the client write path enforces the length bounds.
+	Summary string `json:"summary,omitempty" yaml:"summary,omitempty"`
+
+	// Authorship labels: who/what recorded the fact, on which host, in which
+	// agent session. SELF-REPORTED by design — audit metadata, not an
+	// authentication factor (the caller supplies them). Author/AuthorSource/
+	// Model/Host/Session are written once at creation; every later write
+	// moves UpdatedBy (the last toucher).
+	Author       string `json:"author,omitempty" yaml:"author,omitempty"`
+	AuthorSource string `json:"author_source,omitempty" yaml:"author_source,omitempty"` // security | config | os | none
+	Model        string `json:"model,omitempty" yaml:"model,omitempty"`
+	Host         string `json:"host,omitempty" yaml:"host,omitempty"`
+	Session      string `json:"session,omitempty" yaml:"session,omitempty"`
+	UpdatedBy    string `json:"updated_by,omitempty" yaml:"updated_by,omitempty"`
+
 	// CurrentRef is the journal entry id of the current value: the invariant
 	// "the journal contains the current value" as data. Facts created before
 	// the journal (and before the migrate-history run) have it empty.

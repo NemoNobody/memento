@@ -77,6 +77,12 @@ func clearEnv(t *testing.T) {
 		"MEMENTO_INDEX",
 		"MEMENTO_HISTORY_LIMIT",
 		"MEMENTO_HISTORY_PERIOD",
+		"MEMENTO_SUMMARY_MIN_LEN",
+		"MEMENTO_SUMMARY_MAX_LEN",
+		"MEMENTO_AUTHOR",
+		"MEMENTO_MODEL",
+		"MEMENTO_HOST",
+		"MEMENTO_SESSION",
 		"MEMENTO_SECRET_GUARD",
 		"MEMENTO_ALLOW_PLAINTEXT",
 		"MEMENTO_DOCS_INDEX",
@@ -443,6 +449,113 @@ func TestLoadConfig_HistoryIndexPeriodBadValuesAreErrors(t *testing.T) {
 	t.Setenv("MEMENTO_HISTORY_PERIOD", "biweekly")
 	if _, err := LoadConfig(); err == nil {
 		t.Error("LoadConfig() = nil error for MEMENTO_HISTORY_PERIOD=biweekly, want error")
+	}
+}
+
+// Author labels ship in every fact, so the config edge is where control
+// bytes and runaway lengths must die: they would forge terminal output and
+// bloat every later read.
+func TestLoadConfig_AuthorLabels(t *testing.T) {
+	dir := t.TempDir()
+	restore := chdir(t, dir)
+	defer restore()
+	clearEnv(t)
+	fc := filepath.Join(dir, "memento.conf")
+	if err := os.WriteFile(fc, []byte(`{"author": " alice ", "model": "strata", "host": "tower", "session": "s-42"}`), 0644); err != nil {
+		t.Fatalf("write memento.conf: %v", err)
+	}
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.Author != "alice" || cfg.Model != "strata" || cfg.Host != "tower" || cfg.Session != "s-42" {
+		t.Errorf("labels = %q/%q/%q/%q, want alice/strata/tower/s-42", cfg.Author, cfg.Model, cfg.Host, cfg.Session)
+	}
+
+	t.Setenv("MEMENTO_AUTHOR", "bob")
+	cfg, err = LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.Author != "bob" {
+		t.Errorf("Author = %q, want bob (env must override the file)", cfg.Author)
+	}
+}
+
+func TestLoadConfig_AuthorLabelsBadAreErrors(t *testing.T) {
+	dir := t.TempDir()
+	restore := chdir(t, dir)
+	defer restore()
+	clearEnv(t)
+	fc := filepath.Join(dir, "memento.conf")
+
+	long := strings.Repeat("x", 201)
+	if err := os.WriteFile(fc, []byte(`{"author": "`+long+`"}`), 0644); err != nil {
+		t.Fatalf("write memento.conf: %v", err)
+	}
+	if _, err := LoadConfig(); err == nil {
+		t.Error("LoadConfig() = nil error for a 201-rune author, want error")
+	}
+
+	if err := os.WriteFile(fc, []byte(`{}`), 0644); err != nil {
+		t.Fatalf("write memento.conf: %v", err)
+	}
+	t.Setenv("MEMENTO_MODEL", long)
+	if _, err := LoadConfig(); err == nil {
+		t.Error("LoadConfig() = nil error for a 201-rune MEMENTO_MODEL, want error")
+	}
+}
+
+func TestLoadConfig_SummaryLimits(t *testing.T) {
+	dir := t.TempDir()
+	restore := chdir(t, dir)
+	defer restore()
+	clearEnv(t)
+	fc := filepath.Join(dir, "memento.conf")
+
+	// Defaults exist: a fresh config has the table-of-contents contract.
+	if err := os.WriteFile(fc, []byte(`{}`), 0644); err != nil {
+		t.Fatalf("write memento.conf: %v", err)
+	}
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.SummaryMinLen != 2000 || cfg.SummaryMaxLen != 400 {
+		t.Errorf("summary defaults = %d/%d, want 2000/400", cfg.SummaryMinLen, cfg.SummaryMaxLen)
+	}
+
+	if err := os.WriteFile(fc, []byte(`{"summary_min_len": 500, "summary_max_len": 100}`), 0644); err != nil {
+		t.Fatalf("write memento.conf: %v", err)
+	}
+	cfg, err = LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.SummaryMinLen != 500 || cfg.SummaryMaxLen != 100 {
+		t.Errorf("summary limits = %d/%d, want 500/100", cfg.SummaryMinLen, cfg.SummaryMaxLen)
+	}
+
+	t.Setenv("MEMENTO_SUMMARY_MIN_LEN", "0")
+	cfg, err = LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.SummaryMinLen != 0 {
+		t.Errorf("SummaryMinLen = %d, want 0 (env override: requirement off)", cfg.SummaryMinLen)
+	}
+
+	t.Setenv("MEMENTO_SUMMARY_MAX_LEN", "not-a-number")
+	if _, err := LoadConfig(); err == nil {
+		t.Error("LoadConfig() = nil error for MEMENTO_SUMMARY_MAX_LEN=not-a-number, want error")
+	}
+
+	if err := os.WriteFile(fc, []byte(`{"summary_min_len": -1}`), 0644); err != nil {
+		t.Fatalf("write memento.conf: %v", err)
+	}
+	t.Setenv("MEMENTO_SUMMARY_MAX_LEN", "")
+	if _, err := LoadConfig(); err == nil {
+		t.Error("LoadConfig() = nil error for summary_min_len=-1, want error")
 	}
 }
 

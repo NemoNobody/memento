@@ -116,6 +116,17 @@ chmod 600 ~/.memento.conf
   forever): disk usage grows with the write rate, not with fact count.
   Dated indices keep old periods cheap to inspect, delete, or snapshot;
   `memento prune` is a manual admin tool for one key.
+- Every write is stamped with authorship labels (`author`, `author_source`,
+  `model`, `host`, `session`; later writes move `updated_by`). The label comes
+  from the store's security plugin (`/_security/authinfo`) when it is
+  available, otherwise from the config keys `author`/`model`/`host`/`session`
+  (env `MEMENTO_AUTHOR`/`MEMENTO_MODEL`/`MEMENTO_HOST`/`MEMENTO_SESSION`),
+  otherwise the OS user. This is self-reported audit metadata — see
+  [docs/how-it-works.md](how-it-works.md).
+- Long facts stay skimmable: a value over `summary_min_len` characters
+  (default 2000) must ship a `summary` (CLI `--summary`, MCP `summary`), kept
+  under `summary_max_len` (default 400). Set `summary_min_len: 0` to disable
+  the requirement, `summary_max_len: 0` to leave the summary uncapped.
 - Upgrading from a pre-journal release: run `memento migrate-history` (prints
   the plan; `--yes` writes) to move the old in-doc history arrays into the
   journal. Unmigrated facts keep working; their history just stays in-doc.
@@ -126,8 +137,10 @@ Environment variables override the file (the complete list; `memento status`
 lists the active ones by name, never by value):
 `OPENSEARCH_URL`, `OPENSEARCH_USER`, `OPENSEARCH_PASSWORD`,
 `OPENSEARCH_INSECURE_SKIP_VERIFY`, `MEMENTO_CONF`, `MEMENTO_INDEX`,
-`MEMENTO_HISTORY_PERIOD`, `MEMENTO_HISTORY_LIMIT`, `MEMENTO_SECRET_GUARD`,
+`MEMENTO_HISTORY_PERIOD`, `MEMENTO_HISTORY_LIMIT`, `MEMENTO_SUMMARY_MIN_LEN`,
+`MEMENTO_SUMMARY_MAX_LEN`, `MEMENTO_SECRET_GUARD`,
 `MEMENTO_ALLOW_PLAINTEXT`,
+`MEMENTO_AUTHOR`, `MEMENTO_MODEL`, `MEMENTO_HOST`, `MEMENTO_SESSION`,
 `MEMENTO_DOCS_INDEX`, `MEMENTO_DOCS_TTL_DAYS`, `MEMENTO_FETCH_TIMEOUT`,
 `MEMENTO_FETCH_MAX_BYTES`, `MEMENTO_FETCH_HOSTS`, `MEMENTO_FETCH_USER_AGENT`,
 `MEMENTO_FETCH_PROXY_URL`, `MEMENTO_FETCH_PROXY_FALLBACK`,
@@ -149,6 +162,7 @@ index: memento
 history_index_period: month
 history_limit: 20
 secret_guard: reject
+author: admin (security)
 password: keyring
 cluster: opensearch (OpenSearch 3.8.0)
 storage: cluster=yellow index=yellow unassigned_shards=1 data_nodes=1
@@ -158,7 +172,9 @@ status: OK
 
 `password:` shows where the password resolves from (`env`, `keyring`, `file`,
 `none`); the value is never printed. `memento creds status` shows the same
-plus the keyring state.
+plus the keyring state. `author:` is the label stamped on new writes and
+which chain link produced it (`security` / `config` / `os`); it is absent
+when nothing resolves.
 
 If OpenSearch is unreachable, `status` prints `NOT AVAILABLE` with the reason and
 a hint, and exits non-zero. If any environment variable is overriding the file,

@@ -91,8 +91,8 @@ latter only when `allow_plaintext` is on).
 |---|---|---|
 | `memento_status` | Is the store reachable? What is the effective config and storage state? | **Never fails** — `ok=false` plus a hint instead, so the agent can explain the problem; includes `password_from` (`env`/`keyring`/`file`/`none`, never the value) |
 | `memento_search` | Full-text search over fact values and notes | Trusted facts only by default; `status: "any"` includes obsolete ones; history off unless `include_history: true` |
-| `memento_get` | Exact fact by key | `found: false` when absent — not an error; history off unless `include_history: true` |
-| `memento_add` | Store a verified fact | Shape is validated before the guard and the store: non-empty `key`/`value`, and `category` one of `location`/`config`/`endpoint`/`behavior`/`context_map`, stored lowercase (an unknown category never ages — silent rot). Corrects by key: the accepted value is appended to the journal and the fact points at the entry; the same value updates notes/source only and leaves the journal untouched. `notes` are replaced only by a non-empty new note (an omitted `notes` leaves the stored qualifiers alone — they never enter history, so erasing them is irreversible); `secret_guard` rejects credential-like text before any store contact |
+| `memento_get` | Exact fact by key | `found: false` when absent — not an error; history off unless `include_history: true`; carries `summary`, `author`/`author_source`, `updated_by` when present |
+| `memento_add` | Store a verified fact | Shape is validated before the guard and the store: non-empty `key`/`value`, and `category` one of `location`/`config`/`endpoint`/`behavior`/`context_map`, stored lowercase (an unknown category never ages — silent rot). Corrects by key: the accepted value is appended to the journal and the fact points at the entry; the same value updates notes/source only and leaves the journal untouched. `notes` are replaced only by a non-empty new note (an omitted `notes` leaves the stored qualifiers alone — they never enter history, so erasing them is irreversible). A value over `summary_min_len` requires `summary` (under `summary_max_len`) — the store's table of contents. Writes are stamped with authorship labels (`author`/`author_source`/`model`/`host`/`session` — self-reported audit metadata, birth labels write-once; later writes move `updated_by`). `secret_guard` rejects credential-like text before any store contact |
 | `memento_list` | Facts of a project | Same trust default as search; `prefix` keeps only keys starting with it (trailing `*` allowed); history off unless `include_history: true` |
 | `memento_keys` | Find facts by key across all projects | `prefix` (key start) and/or `match` (key substring; `*`, `?` wildcards); at least one required; sorted by key; `project` is an optional filter; key matching is case-sensitive (keys conventionally lowercase) |
 | `memento_journal` | Read the journal for a key: the append-only history of accepted values, newest first (`limit`, default 20) | `op: write` is an accepted value, `op: rediscovery` is reserved for same-value re-confirmation by a different author; counts after an admin deleted old journal indices are lower bounds. Prefer `memento_history_info` first, the full journal only when the history matters |
@@ -133,6 +133,11 @@ unknown categories, so a typo cannot create facts that rot in the dark).
 `stale: true` means re-verify against the source before trusting the
 fact — it is a signal, not a verdict.
 
+A value over `summary_min_len` characters must ship a `summary` (capped at
+`summary_max_len`): a skimmable table of contents, so listings do not force
+full values into the context. The rule applies to accepted values (new facts
+and corrections); a notes-only touch of an old long fact is not rejected.
+
 The store tools deliberately **fail** when OpenSearch is unreachable, while
 `memento_status` reports instead of failing. An empty result must never be mistaken
 for "no such fact": that is what would make an agent re-verify everything it
@@ -146,7 +151,8 @@ An importable rule for agents — when to consult and update memory — is in
 1. Command Palette → `MCP: List Servers` — `memento` should be listed and running.
    If it is missing, reload the window.
 2. In chat, ask the agent to call `memento_status`. Expect `ok: true`, the cluster
-   name and version, the config file actually used, and storage state.
+   name and version, the config file actually used, storage state, and the
+   `author` label new writes will carry (with its chain: security/config/os).
 3. Store and read back a fact:
    - "Remember that the API port for the demo project is 8080 — use memento."
    - then, in a **new chat session**: "What is the API port for the demo project?"

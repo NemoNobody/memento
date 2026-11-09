@@ -399,6 +399,10 @@ func (c *Client) MigrateFact(ctx context.Context, f *model.Fact, now time.Time) 
 	if f.CurrentRef != "" {
 		return 0, nil // already migrated (journal-first facts have a ref)
 	}
+	// The migration runner authors the appended entries: the original writers
+	// predate the journal and left no per-entry labels, and an entry must
+	// name the hand that appended it.
+	info := c.resolveAuthor(ctx)
 	appended := 0
 	for _, h := range f.History {
 		ts := h.ObservedAt
@@ -409,6 +413,7 @@ func (c *Client) MigrateFact(ctx context.Context, f *model.Fact, now time.Time) 
 			ts = now
 		}
 		e := model.NewJournalEntry(f.Key, f.FactID, f.Project, f.Category, model.OpWrite, h.Value, "", h.Source, ts)
+		info.applyTo(e)
 		if _, err := c.AppendJournal(ctx, e); err != nil {
 			return appended, fmt.Errorf("migrate %q: history entry: %w", f.Key, err)
 		}
@@ -422,6 +427,7 @@ func (c *Client) MigrateFact(ctx context.Context, f *model.Fact, now time.Time) 
 		ts = now
 	}
 	cur := model.NewJournalEntry(f.Key, f.FactID, f.Project, f.Category, model.OpWrite, f.Value, f.Notes, f.Source, ts)
+	info.applyTo(cur)
 	ref, err := c.AppendJournal(ctx, cur)
 	if err != nil {
 		return appended, fmt.Errorf("migrate %q: current entry: %w", f.Key, err)

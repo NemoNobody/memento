@@ -8,8 +8,8 @@ import (
 // Journal operations. The journal is a log of accepted values: every write
 // that changed (or established) a fact's value appends op=write. op=rediscovery
 // is reserved for the same value re-confirmed by a different author (the
-// author fields land with item 24; the operation name is defined now so the
-// journal vocabulary is stable from the first entry).
+// author fields are defined on JournalEntry; the operation name is reserved
+// now so the journal vocabulary is stable from the first entry).
 const (
 	OpWrite       = "write"
 	OpRediscovery = "rediscovery"
@@ -42,6 +42,15 @@ type JournalEntry struct {
 	Notes     string    `json:"notes,omitempty"`
 	Source    string    `json:"source,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
+
+	// Authorship of this entry: who appended it (self-reported labels, see
+	// model.Fact). Each entry names its own writer — the journal is a log,
+	// and "who wrote this version" is a per-entry fact.
+	Author       string `json:"author,omitempty"`
+	AuthorSource string `json:"author_source,omitempty"`
+	Model        string `json:"model,omitempty"`
+	Host         string `json:"host,omitempty"`
+	Session      string `json:"session,omitempty"`
 }
 
 // NewJournalEntry builds an entry for an accepted value at time now (UTC).

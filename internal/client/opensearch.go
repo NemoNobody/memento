@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/NemoNobody/memento/internal/config"
 	"github.com/NemoNobody/memento/internal/model"
@@ -33,6 +34,11 @@ type Client struct {
 	// journalOnce guards journal infra installation (pipeline + template):
 	// one idempotent check per process, paid on the first journal append.
 	journalOnce sync.Once
+
+	// authorOnce resolves the writer labels (author chain, host, model,
+	// session) once per process: the security probe runs at most once.
+	authorOnce sync.Once
+	author     AuthorInfo
 }
 
 // NewClient creates a new OpenSearch client.
@@ -153,11 +159,22 @@ func buildIndexBody() map[string]interface{} {
 				"observed_at": map[string]interface{}{"type": "date"},
 				"source":      map[string]interface{}{"type": "keyword"},
 				"notes":       map[string]interface{}{"type": "text"},
+				// Summary is the table-of-contents rendering of value: searchable
+				// text, so listings and BM25 can work from it.
+				"summary": map[string]interface{}{"type": "text"},
 				// Stored, never indexed: legacy history arrays predate the journal
 				// and are read with the fact, not searched.
 				"history": map[string]interface{}{"type": "object", "enabled": false},
 				// Journal entry id of the current value (see model.Fact.CurrentRef).
 				"current_ref": map[string]interface{}{"type": "keyword"},
+				// Authorship labels (self-reported; see model.Fact): exact-match
+				// fields for "who wrote what" queries, never full-text.
+				"author":        map[string]interface{}{"type": "keyword"},
+				"author_source": map[string]interface{}{"type": "keyword"},
+				"model":         map[string]interface{}{"type": "keyword"},
+				"host":          map[string]interface{}{"type": "keyword"},
+				"session":       map[string]interface{}{"type": "keyword"},
+				"updated_by":    map[string]interface{}{"type": "keyword"},
 			},
 		},
 	}
@@ -202,6 +219,8 @@ func (c *Client) EnsureIndex(ctx context.Context) error {
 // was appended for it (the journal append happens BEFORE this script: the
 // journal is the log, the main doc is the projection, and an orphan journal
 // entry from a failed main write is a harmless truth, never a lost value).
+// updated_by moves to the last toucher; the birth author labels are
+// write-once and deliberately absent from this script.
 //
 // The in-doc history array is no longer maintained: the journal index is the
 // history. Facts created before the journal keep their array until
@@ -213,7 +232,9 @@ ctx._source.observed_at = params.observed_at;
 ctx._source.source = params.source;
 if (params.notes != null && params.notes != '') { ctx._source.notes = params.notes; }
 ctx._source.status = 'verified';
+ctx._source.summary = params.summary;
 ctx._source.current_ref = params.current_ref;
+ctx._source.updated_by = params.updated_by;
 ctx._source.updated_at = params.updated_at;
 `
 
@@ -240,8 +261,21 @@ ctx._source.updated_at = params.updated_at;
 // It reports whether the fact was newly created. Writes wait for a refresh,
 // so the fact is immediately visible to subsequent Search/List calls.
 func (c *Client) Add(ctx context.Context, f *model.Fact) (created bool, err error) {
+	if err := c.checkSummaryCap(f); err != nil {
+		return false, err
+	}
 	existing, err := c.Get(ctx, f.Key)
 	if errors.Is(err, ErrNotFound) {
+		// Summary bounds are enforced on accepted values only (create and
+		// correction): a same-value notes touch must not fail over a summary
+		// the pre-summary fact never had.
+		if err := c.checkSummaryRequired(f); err != nil {
+			return false, err
+		}
+		// Birth labels are stamped once (write-once): who/what/where created
+		// the fact. Later writes move only updated_by.
+		c.resolveAuthor(ctx).stampFact(f)
+		f.UpdatedBy = f.Author
 		created, err = c.createFact(ctx, f)
 		if err != nil {
 			return false, err
@@ -277,6 +311,7 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (created bool, err erro
 			"source":     f.Source,
 			"category":   f.Category,
 			"status":     "verified",
+			"updated_by": c.resolveAuthor(ctx).Author,
 			"updated_at": now,
 		}
 		if f.Notes != "" {
@@ -297,6 +332,10 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (created bool, err erro
 		return false, nil
 	}
 
+	if err := c.checkSummaryRequired(f); err != nil {
+		return false, err
+	}
+
 	ref, err := c.journalAppend(ctx, f, f.ObservedAt)
 	if err != nil {
 		return false, err
@@ -312,8 +351,10 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (created bool, err erro
 				"observed_at": f.ObservedAt.UTC().Format(time.RFC3339),
 				"source":      f.Source,
 				"notes":       f.Notes,
+				"summary":     f.Summary,
 				"updated_at":  now,
 				"current_ref": ref,
+				"updated_by":  c.resolveAuthor(ctx).Author,
 			},
 		},
 	})
@@ -332,11 +373,14 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (created bool, err erro
 // journalAppend appends the journal entry for an accepted fact value and
 // returns the entry id. The caller links the fact to it: the correction
 // script carries current_ref, the create path links in a follow-up update.
+// The entry carries its own author labels: "who wrote this version" is a
+// per-entry fact of the log.
 func (c *Client) journalAppend(ctx context.Context, f *model.Fact, ts time.Time) (string, error) {
 	if ts.IsZero() {
 		ts = time.Now().UTC()
 	}
 	e := model.NewJournalEntry(f.Key, f.FactID, f.Project, f.Category, model.OpWrite, f.Value, f.Notes, f.Source, ts)
+	c.resolveAuthor(ctx).applyTo(e)
 	return c.AppendJournal(ctx, e)
 }
 
@@ -354,6 +398,33 @@ func (c *Client) linkCurrentRef(ctx context.Context, key, ref string) error {
 		Params:     opensearchapi.UpdateParams{Refresh: "wait_for"},
 	}); err != nil {
 		return wrapWriteError("link current_ref", err)
+	}
+	return nil
+}
+
+// checkSummaryCap rejects an over-long summary in any write: a provided
+// summary that is longer than the cap stops being a summary. The cap lives
+// on the shape, not on the accepted value, so it runs before the store
+// read.
+func (c *Client) checkSummaryCap(f *model.Fact) error {
+	if c.cfg.SummaryMaxLen > 0 {
+		if n := utf8.RuneCountInString(f.Summary); n > c.cfg.SummaryMaxLen {
+			return fmt.Errorf("add fact: summary is %d characters, over summary_max_len=%d: keep it a table of contents, not a second value", n, c.cfg.SummaryMaxLen)
+		}
+	}
+	return nil
+}
+
+// checkSummaryRequired enforces the table-of-contents contract on an
+// accepted value (create and correction paths): a value over summary_min_len
+// must ship a summary, so store listings stay skimmable. Lengths count
+// runes: the store is text-first and byte counts would punish non-Latin
+// scripts.
+func (c *Client) checkSummaryRequired(f *model.Fact) error {
+	if c.cfg.SummaryMinLen > 0 && f.Summary == "" {
+		if n := utf8.RuneCountInString(f.Value); n > c.cfg.SummaryMinLen {
+			return fmt.Errorf("add fact: value is %d characters, over summary_min_len=%d: a summary is required (CLI --summary, MCP summary) — it keeps store listings skimmable", n, c.cfg.SummaryMinLen)
+		}
 	}
 	return nil
 }

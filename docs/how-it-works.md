@@ -20,6 +20,13 @@ document keyed by its `key` (the key is the document ID).
 | `observed_at` | date | when the current value was seen (moves only on value change) |
 | `source` | keyword | `tool:read_file \| experiment \| user:confirmed \| doc:*` |
 | `notes` | text | free-text qualifiers (omitted when empty; obsolete reasons appended here) |
+| `summary` | text | short table-of-contents rendering of the value; required when the value is over `summary_min_len` (see below) |
+| `author` | keyword | who recorded the fact (self-reported label, write-once) |
+| `author_source` | keyword | which chain link named the author: `security` / `config` / `os` / `none` |
+| `model` | keyword | model label of the writer at creation (write-once, self-reported) |
+| `host` | keyword | host label of the writer at creation (write-once, self-reported) |
+| `session` | keyword | agent session label at creation (write-once, self-reported) |
+| `updated_by` | keyword | self-reported label of the last writer (moves on every write) |
 | `current_ref` | keyword | id of the journal entry that carries the current value |
 | `history` | object (`enabled: false`) | **legacy** pre-journal array `[{value, observed_at, source}]` — stored, never indexed; `memento migrate-history` moves it into the journal and removes the field |
 
@@ -38,14 +45,15 @@ document keyed by its `key` (the key is the document ID).
 ### add
 
 ```
-memento add <key> <value> <category> [--project <p>] [--source <s>] [--notes <n>]
+memento add <key> <value> <category> [--project <p>] [--source <s>] [--notes <n>] [--summary <s>]
 ```
 
 Adds a fact. If the key exists: a different value corrects it (the accepted
 value is appended to the journal, then the main doc is updated to point at the
 entry); the same value updates `notes`/`source` only (no journal entry,
-`observed_at` stays). `--notes` carries qualifiers ("checked dev config
-only") to later sessions.
+`observed_at` stays). `--notes` carries qualifiers ("checked the dev config
+only") to later sessions. A value over `summary_min_len` requires `--summary`
+(the store's table of contents, see below).
 
 ### get
 
@@ -194,6 +202,52 @@ Rules:
 - Nothing in `add`/`obsolete` moves `observed_at` except a real value change, so
   a stale fact cannot be silently "re-freshed" by a notes touch.
 
+## Summary (table of contents)
+
+A long fact is useless in a listing: pulling every full value to find one is
+exactly the context cost the store exists to avoid. So an accepted value over
+`summary_min_len` runes (default 2000) must ship a `summary` — a short
+table-of-contents rendering — and the summary itself is capped at
+`summary_max_len` runes (default 400; ~100 tokens, about a 10x compression).
+Both knobs are config keys (env `MEMENTO_SUMMARY_MIN_LEN` /
+`MEMENTO_SUMMARY_MAX_LEN`); `0` disables the respective check.
+
+The rule applies to the accepted value: create and correction. A notes-only
+touch of a long fact that predates the rule is not rejected (the value is
+unchanged), and a rejected correction never reaches the journal. The summary
+is searchable text (`text`, BM25): `memento_search` can match it, which turns
+the store into a skimmable index — find by summary, read the full value by
+key.
+
+## Authorship
+
+Every write is stamped with self-reported labels: `author` (plus
+`author_source` naming the chain link), `model`, `host`, `session`. The birth
+labels are write-once; later writes move only `updated_by`, and every journal
+entry carries the labels of the writer who appended it.
+
+The author resolves once per process, down this chain:
+
+1. `security` — the store's security plugin: `GET /_security/authinfo` (the
+   name the *server* authenticated, so it cannot be forged by the client).
+   Any non-success (security off, 403, timeout) silently degrades to the next
+   link; a stalled plugin never slows writes (5s probe deadline).
+2. `config` — the `author` config key / `MEMENTO_AUTHOR`.
+3. `os` — the OS username of the process.
+4. `none` — nothing resolved; writes carry no author labels.
+
+`model`/`host`/`session` come from config keys / env (`MEMENTO_MODEL`,
+`MEMENTO_HOST`, `MEMENTO_SESSION`); they are never guessed.
+
+**Threat model:** these labels are audit metadata, not authentication. A
+client can set any `author` it likes (config), and the `security` label is
+only as strong as the cluster's per-user credentials. The purpose is
+accountability in a cooperative shared store: who recorded what, when, which
+model produced it — for review, drift analysis, and noticing that one source
+is consistently wrong. On a hostile shared store, author labels inform a
+human; they do not stop the hostile client (that is the store's security
+plugin's job: per-user accounts and index permissions).
+
 ## Secret guard
 
 The index is plaintext: a secret written once is exposed in every later read
@@ -241,9 +295,11 @@ Env vars override the file: `OPENSEARCH_URL`, `OPENSEARCH_USER`,
 `OPENSEARCH_PASSWORD`, `OPENSEARCH_INSECURE_SKIP_VERIFY`, `MEMENTO_CONF`,
 `MEMENTO_INDEX`, `MEMENTO_HISTORY_PERIOD`, `MEMENTO_HISTORY_LIMIT`,
 `MEMENTO_SECRET_GUARD`,
-`MEMENTO_ALLOW_PLAINTEXT`, plus the `MEMENTO_FETCH_*` / `MEMENTO_DOCS_*` /
-`MEMENTO_LOCAL_REPO_ROOTS` / `MEMENTO_REPO_SCAN_DEPTH` fetch options (the
-full list lives in README and docs/setup.md).
+`MEMENTO_ALLOW_PLAINTEXT`, `MEMENTO_SUMMARY_MIN_LEN`,
+`MEMENTO_SUMMARY_MAX_LEN`, `MEMENTO_AUTHOR`, `MEMENTO_MODEL`,
+`MEMENTO_HOST`, `MEMENTO_SESSION`, plus the `MEMENTO_FETCH_*` /
+`MEMENTO_DOCS_*` / `MEMENTO_LOCAL_REPO_ROOTS` / `MEMENTO_REPO_SCAN_DEPTH`
+fetch options (the full list lives in README and docs/setup.md).
 
 OpenSearch also offers API keys, mTLS, and enterprise SSO (Kerberos / LDAP /
 JWT), but `memento` speaks **Basic auth only** — user and password in the

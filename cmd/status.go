@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"os/user"
 	"strconv"
 	"strings"
 
@@ -23,6 +24,13 @@ var statusEnvVars = []string{
 	"OPENSEARCH_INSECURE_SKIP_VERIFY",
 	"MEMENTO_INDEX",
 	"MEMENTO_HISTORY_LIMIT",
+	"MEMENTO_HISTORY_PERIOD",
+	"MEMENTO_SUMMARY_MIN_LEN",
+	"MEMENTO_SUMMARY_MAX_LEN",
+	"MEMENTO_AUTHOR",
+	"MEMENTO_MODEL",
+	"MEMENTO_HOST",
+	"MEMENTO_SESSION",
 	"MEMENTO_SECRET_GUARD",
 	"MEMENTO_ALLOW_PLAINTEXT",
 	"MEMENTO_CONF",
@@ -61,6 +69,8 @@ type statusReport struct {
 	HistoryIndexPeriod string               `json:"history_index_period" jsonschema:"date granularity of the journal indices: day | week | month | quarter | year"`
 	HistoryLimit       int                  `json:"history_limit" jsonschema:"default keep for 'prune' (the journal itself is write-forever); 0 demands an explicit keep"`
 	SecretGuard        string               `json:"secret_guard,omitempty" jsonschema:"secret guard level in effect on writes: reject | ask | allow"`
+	Author             string               `json:"author,omitempty" jsonschema:"effective author label stamped on new facts (self-reported: security | config | os chain); empty when nothing resolves"`
+	AuthorSource       string               `json:"author_source,omitempty" jsonschema:"which chain link named the author: security | config | os | none"`
 	PasswordFrom       string               `json:"password_from,omitempty" jsonschema:"where the OpenSearch password resolves from: env | keyring | file | none; the value is never shown"`
 	PermWarning        string               `json:"perm_warning,omitempty" jsonschema:"plaintext password in a group/world-readable config file: the user should chmod 600 it"`
 	KeyringError       string               `json:"keyring_error,omitempty" jsonschema:"keyring provider failure (not 'entry not found'): a bus/wallet outage, not a missing entry"`
@@ -142,6 +152,12 @@ func collectStatus(ctx context.Context, confPath string, noCWD bool) statusRepor
 	rep.PasswordFrom = cfg.PasswordSource
 	rep.KeyringError = cfg.KeyringError
 	rep.PermWarning = permWarning(cfg, rep.ConfigFile)
+	rep.Author, rep.AuthorSource = cfg.Author, "config"
+	if cfg.Author == "" {
+		if u, err := user.Current(); err == nil && u.Username != "" {
+			rep.Author, rep.AuthorSource = u.Username, "os"
+		}
+	}
 
 	if cfg.OpenSearchPassword == "" {
 		// The config is fine, the credential is missing: say where it should
@@ -187,6 +203,10 @@ func collectStatus(ctx context.Context, confPath string, noCWD bool) statusRepor
 	rep.Version = info.Version.Number
 	rep.Storage = c.StorageState(ctx)
 	rep.StorageNote = storageNote(rep.Storage)
+	// With a live client the security probe can resolve the store user: the
+	// effective author is the client's chain answer, not the config guess.
+	labels := c.AuthorLabels(ctx)
+	rep.Author, rep.AuthorSource = labels.Author, labels.AuthorSource
 	return rep
 }
 
@@ -278,6 +298,13 @@ func printStatus(w io.Writer, rep statusReport) error {
 	b.WriteString(strconv.Itoa(rep.HistoryLimit))
 	b.WriteString("\nsecret_guard: ")
 	b.WriteString(rep.SecretGuard)
+	if rep.Author != "" {
+		b.WriteString("\nauthor: ")
+		b.WriteString(rep.Author)
+		b.WriteString(" (")
+		b.WriteString(rep.AuthorSource)
+		b.WriteString(")")
+	}
 	b.WriteString("\npassword: ")
 	b.WriteString(rep.PasswordFrom)
 	if rep.KeyringError != "" {

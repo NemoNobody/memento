@@ -64,6 +64,20 @@ func printFact(w io.Writer, f *model.Fact, now time.Time, history bool) error {
 	b.WriteString("source: ")
 	b.WriteString(strconv.Quote(f.Source))
 	b.WriteString("\n")
+	// Authorship is self-reported (audit metadata, not authentication): show
+	// who wrote the fact and which chain link named them.
+	if f.Author != "" {
+		b.WriteString("author: ")
+		b.WriteString(strconv.Quote(f.Author))
+		b.WriteString(" (")
+		b.WriteString(f.AuthorSource)
+		b.WriteString(")\n")
+	}
+	if f.UpdatedBy != "" && f.UpdatedBy != f.Author {
+		b.WriteString("updated_by: ")
+		b.WriteString(strconv.Quote(f.UpdatedBy))
+		b.WriteString("\n")
+	}
 	if f.Notes != "" {
 		b.WriteString("notes: ")
 		b.WriteString(f.Notes)

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/NemoNobody/memento/internal/keyring"
 )
@@ -122,6 +123,24 @@ type Config struct {
 	// carrying a credential is the legacy shape, opt in explicitly.
 	AllowPlaintext bool `json:"allow_plaintext"`
 
+	// Author labels who wrote a fact: author, the model that recorded it, the
+	// host it was recorded on, the agent session. SELF-REPORTED by design —
+	// audit metadata for a shared store, not an authentication factor: the
+	// caller supplies the labels, so they are only as trustworthy as the
+	// caller. The author chain is store-authenticated user → `author` → OS
+	// user, and author_source records which one won.
+	Author  string `json:"author"`
+	Model   string `json:"model"`
+	Host    string `json:"host"`
+	Session string `json:"session"`
+
+	// SummaryMinLen is the value length (in runes) above which a summary is
+	// required: a long fact without a summary is unreadable in a listing, and
+	// the store's table of contents is the summary. 0 disables the
+	// requirement. SummaryMaxLen caps the summary itself; 0 means no cap.
+	SummaryMinLen int `json:"summary_min_len"`
+	SummaryMaxLen int `json:"summary_max_len"`
+
 	// PasswordSource says where OpenSearchPassword came from: env|keyring|
 	// file|none. Runtime-only and never serialized: status lines explain how
 	// credentials resolve without echoing anything secret.
@@ -167,6 +186,11 @@ func DefaultConfig() *Config {
 		DocsTTLDays:         90,
 		FetchUserAgent:      "memento/fetch (+OpenSearch docs cache)",
 		LocalRepoScanDepth:  2,
+		// A ~500-token fact is where a listing stops being skimmable; a
+		// ~100-token summary is the table-of-contents budget (about 10x
+		// compression).
+		SummaryMinLen: 2000,
+		SummaryMaxLen: 400,
 	}
 }
 
@@ -262,6 +286,48 @@ func loadConfig(explicitPath string, finder func() string) (*Config, error) {
 			return nil, fmt.Errorf("MEMENTO_ALLOW_PLAINTEXT: %w", err)
 		}
 		cfg.AllowPlaintext = b
+	}
+	if v := os.Getenv("MEMENTO_AUTHOR"); v != "" {
+		a, err := normalizeLabel(v)
+		if err != nil {
+			return nil, fmt.Errorf("MEMENTO_AUTHOR: %w", err)
+		}
+		cfg.Author = a
+	}
+	if v := os.Getenv("MEMENTO_MODEL"); v != "" {
+		m, err := normalizeLabel(v)
+		if err != nil {
+			return nil, fmt.Errorf("MEMENTO_MODEL: %w", err)
+		}
+		cfg.Model = m
+	}
+	if v := os.Getenv("MEMENTO_HOST"); v != "" {
+		h, err := normalizeLabel(v)
+		if err != nil {
+			return nil, fmt.Errorf("MEMENTO_HOST: %w", err)
+		}
+		cfg.Host = h
+	}
+	if v := os.Getenv("MEMENTO_SESSION"); v != "" {
+		s, err := normalizeLabel(v)
+		if err != nil {
+			return nil, fmt.Errorf("MEMENTO_SESSION: %w", err)
+		}
+		cfg.Session = s
+	}
+	if v := os.Getenv("MEMENTO_SUMMARY_MIN_LEN"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return nil, fmt.Errorf("MEMENTO_SUMMARY_MIN_LEN: %w", err)
+		}
+		cfg.SummaryMinLen = n
+	}
+	if v := os.Getenv("MEMENTO_SUMMARY_MAX_LEN"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return nil, fmt.Errorf("MEMENTO_SUMMARY_MAX_LEN: %w", err)
+		}
+		cfg.SummaryMaxLen = n
 	}
 	if v := os.Getenv("MEMENTO_DOCS_INDEX"); v != "" {
 		cfg.DocsIndexName = v
@@ -421,6 +487,12 @@ type fileConfig struct {
 	LocalRepoRoots      []string `json:"local_repo_roots"`
 	LocalRepoScanDepth  *int     `json:"local_repo_scan_depth"`
 	AllowPlaintext      *bool    `json:"allow_plaintext"`
+	Author              *string  `json:"author"`
+	Model               *string  `json:"model"`
+	Host                *string  `json:"host"`
+	Session             *string  `json:"session"`
+	SummaryMinLen       *int     `json:"summary_min_len"`
+	SummaryMaxLen       *int     `json:"summary_max_len"`
 }
 
 // splitHosts parses a comma-separated host list, dropping empty entries.
@@ -533,6 +605,37 @@ func loadFile(cfg *Config, path string) error {
 	if c.AllowPlaintext != nil {
 		cfg.AllowPlaintext = *c.AllowPlaintext
 	}
+	for _, l := range []struct {
+		name string
+		in   *string
+		out  *string
+	}{
+		{"author", c.Author, &cfg.Author},
+		{"model", c.Model, &cfg.Model},
+		{"host", c.Host, &cfg.Host},
+		{"session", c.Session, &cfg.Session},
+	} {
+		if l.in == nil {
+			continue
+		}
+		v, err := normalizeLabel(*l.in)
+		if err != nil {
+			return fmt.Errorf("config %s: %s: %w", path, l.name, err)
+		}
+		*l.out = v
+	}
+	if c.SummaryMinLen != nil {
+		if *c.SummaryMinLen < 0 {
+			return fmt.Errorf("config %s: summary_min_len: must be >= 0", path)
+		}
+		cfg.SummaryMinLen = *c.SummaryMinLen
+	}
+	if c.SummaryMaxLen != nil {
+		if *c.SummaryMaxLen < 0 {
+			return fmt.Errorf("config %s: summary_max_len: must be >= 0", path)
+		}
+		cfg.SummaryMaxLen = *c.SummaryMaxLen
+	}
 	return nil
 }
 
@@ -557,6 +660,29 @@ func normalizeGuard(v string) (string, error) {
 		return g, nil
 	}
 	return "", fmt.Errorf("must be one of reject|ask|allow, got %q", v)
+}
+
+// labelMaxRunes caps every authorship label. They land in stored documents
+// and in listings: a runaway label bloats every later read, so the config
+// edge is where the bound lives.
+const labelMaxRunes = 200
+
+// normalizeLabel canonicalizes an authorship label (author, model, host,
+// session): trim, drop control bytes (they would forge terminal output in
+// listings), and cap the length. The chain fallbacks live in the client;
+// the config only guarantees the stored shape is sane.
+func normalizeLabel(v string) (string, error) {
+	s := strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, strings.TrimSpace(v))
+	s = strings.TrimSpace(s)
+	if utf8.RuneCountInString(s) > labelMaxRunes {
+		return "", fmt.Errorf("label longer than %d characters", labelMaxRunes)
+	}
+	return s, nil
 }
 
 // FindConfigPath returns the path of the config file to use, or "" when none

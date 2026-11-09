@@ -109,9 +109,12 @@ func runMCPServer(confPath string) error {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "memento_add",
 		Description: "Store a verified fact: file locations, config and endpoint " +
-			"values, behavior. Re-use the same key to correct a fact — the old " +
-			"value moves to history. Re-adding the same value updates notes only, " +
-			"without adding a history entry. Never store secrets (passwords, " +
+			"values, behavior. Re-use the same key to correct a fact — the " +
+			"accepted value is appended to the history journal and the fact " +
+			"points at it. Re-adding the same value updates notes only, " +
+			"without a journal entry. Values longer than summary_min_len " +
+			"require a summary (kept under summary_max_len): it is the " +
+			"store's table of contents. Never store secrets (passwords, " +
 			"tokens, keys): the store is plaintext and a secret_guard rejects " +
 			"credential-like text on writes.",
 	}, s.add)
@@ -234,19 +237,23 @@ type historyView struct {
 // factView is the MCP-facing shape of a fact: a stable contract for clients
 // (RFC3339 timestamps, no internal fields) rather than the internal model.
 type factView struct {
-	Key        string        `json:"key" jsonschema:"stable fact key, e.g. proj:foo:loc:bar.py"`
-	Value      string        `json:"value" jsonschema:"the fact itself"`
-	Category   string        `json:"category" jsonschema:"location | config | endpoint | behavior | context_map"`
-	Project    string        `json:"project" jsonschema:"project name, or 'global'"`
-	Status     string        `json:"status" jsonschema:"verified | obsolete"`
-	Source     string        `json:"source" jsonschema:"where it came from, e.g. tool:read_file, doc:README, user:confirmed"`
-	Notes      string        `json:"notes,omitempty" jsonschema:"qualifiers: what was checked, how far, caveats"`
-	ObservedAt string        `json:"observed_at" jsonschema:"RFC3339 when the current value was observed"`
-	AgeDays    int           `json:"age_days" jsonschema:"whole days since the observation; -1 when observed_at is unknown"`
-	Stale      bool          `json:"stale" jsonschema:"true when age passes the category TTL (config/endpoint 14d, location/behavior 30d, context_map never) — re-verify against the source before trusting"`
-	History    []historyView `json:"history,omitempty" jsonschema:"previous observations, oldest first; present only when include_history=true"`
-	CreatedAt  string        `json:"created_at" jsonschema:"RFC3339 creation time"`
-	UpdatedAt  string        `json:"updated_at" jsonschema:"RFC3339 last update time"`
+	Key          string        `json:"key" jsonschema:"stable fact key, e.g. proj:foo:loc:bar.py"`
+	Value        string        `json:"value" jsonschema:"the fact itself"`
+	Category     string        `json:"category" jsonschema:"location | config | endpoint | behavior | context_map"`
+	Project      string        `json:"project" jsonschema:"project name, or 'global'"`
+	Status       string        `json:"status" jsonschema:"verified | obsolete"`
+	Source       string        `json:"source" jsonschema:"where it came from, e.g. tool:read_file, doc:README, user:confirmed"`
+	Summary      string        `json:"summary,omitempty" jsonschema:"short table-of-contents rendering of the value; required for values over summary_min_len"`
+	Author       string        `json:"author,omitempty" jsonschema:"who recorded the fact (self-reported label, not authentication); the author_source field names the chain that produced it"`
+	AuthorSource string        `json:"author_source,omitempty" jsonschema:"security | config | os | none — which chain link named the author"`
+	UpdatedBy    string        `json:"updated_by,omitempty" jsonschema:"self-reported label of the last writer; the birth author fields are write-once"`
+	Notes        string        `json:"notes,omitempty" jsonschema:"qualifiers: what was checked, how far, caveats"`
+	ObservedAt   string        `json:"observed_at" jsonschema:"RFC3339 when the current value was observed"`
+	AgeDays      int           `json:"age_days" jsonschema:"whole days since the observation; -1 when observed_at is unknown"`
+	Stale        bool          `json:"stale" jsonschema:"true when age passes the category TTL (config/endpoint 14d, location/behavior 30d, context_map never) — re-verify against the source before trusting"`
+	History      []historyView `json:"history,omitempty" jsonschema:"previous observations, oldest first; present only when include_history=true"`
+	CreatedAt    string        `json:"created_at" jsonschema:"RFC3339 creation time"`
+	UpdatedAt    string        `json:"updated_at" jsonschema:"RFC3339 last update time"`
 }
 
 // rfc3339OrEmpty formats t for the MCP contract, or returns "" when t is the
@@ -265,18 +272,22 @@ func rfc3339OrEmpty(t time.Time) string {
 // (observed_at), the signal (stale/age_days) tells the agent to re-verify.
 func newFactView(f model.Fact, includeHistory bool) factView {
 	v := factView{
-		Key:        f.Key,
-		Value:      f.Value,
-		Category:   f.Category,
-		Project:    f.Project,
-		Status:     f.Status,
-		Source:     f.Source,
-		Notes:      f.Notes,
-		ObservedAt: rfc3339OrEmpty(f.ObservedAt),
-		AgeDays:    f.AgeDays(time.Now().UTC()),
-		Stale:      f.Stale(time.Now().UTC()),
-		CreatedAt:  rfc3339OrEmpty(f.CreatedAt),
-		UpdatedAt:  rfc3339OrEmpty(f.UpdatedAt),
+		Key:          f.Key,
+		Value:        f.Value,
+		Category:     f.Category,
+		Project:      f.Project,
+		Status:       f.Status,
+		Source:       f.Source,
+		Summary:      f.Summary,
+		Author:       f.Author,
+		AuthorSource: f.AuthorSource,
+		UpdatedBy:    f.UpdatedBy,
+		Notes:        f.Notes,
+		ObservedAt:   rfc3339OrEmpty(f.ObservedAt),
+		AgeDays:      f.AgeDays(time.Now().UTC()),
+		Stale:        f.Stale(time.Now().UTC()),
+		CreatedAt:    rfc3339OrEmpty(f.CreatedAt),
+		UpdatedAt:    rfc3339OrEmpty(f.UpdatedAt),
 	}
 	if includeHistory {
 		history := make([]historyView, 0, len(f.History))
@@ -460,6 +471,7 @@ type addInput struct {
 	Project  string `json:"project,omitempty" jsonschema:"project name; defaults to 'global'"`
 	Source   string `json:"source,omitempty" jsonschema:"where the fact came from (tool:read_file, doc:README, user:confirmed); defaults to tool:mcp"`
 	Notes    string `json:"notes,omitempty" jsonschema:"qualifiers: what was checked, how far, caveats — carried to later sessions"`
+	Summary  string `json:"summary,omitempty" jsonschema:"short table-of-contents rendering of the value (under summary_max_len chars); required when the value is longer than summary_min_len; ignored on same-value re-adds"`
 
 	// ConfirmSecret bypasses a guard hit at secret_guard=ask. It is the agent's
 	// barrier: show the masked finding to the user first, set this only after
@@ -506,6 +518,7 @@ func (s *mcpServer) add(ctx context.Context, req *mcp.CallToolRequest, in addInp
 		guardField{"key", in.Key},
 		guardField{"value", in.Value},
 		guardField{"notes", in.Notes},
+		guardField{"summary", in.Summary},
 		guardField{"source", in.Source}); err != nil {
 		return nil, addOutput{}, err
 	}
@@ -514,6 +527,7 @@ func (s *mcpServer) add(ctx context.Context, req *mcp.CallToolRequest, in addInp
 		return nil, addOutput{}, storeError("memento_add", err)
 	}
 	f := model.NewFact(in.Key, in.Value, in.Category, in.Project, in.Source, in.Notes)
+	f.Summary = in.Summary
 	created, err := c.Add(ctx, f)
 	if err != nil {
 		return nil, addOutput{}, storeError("memento_add", err)

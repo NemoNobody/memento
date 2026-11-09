@@ -20,6 +20,13 @@ Each fact carries evidence, not verdicts:
   overwriting the fact; entries are never rewritten and the journal is not
   pruned by default (write-forever), so history shows how old it is;
 - **notes**: free-text qualifiers, e.g. "checked the dev config only";
+- **authorship**: every write is stamped with who recorded it (the store's
+  `security` user when the cluster has one, else config/OS user — a
+  self-reported audit label, not authentication) and which model/host/session
+  produced it; the birth labels are write-once, corrections move `updated_by`;
+- **summary**: a value over `summary_min_len` must ship a short table-of-
+  contents rendering (kept under `summary_max_len`), so store listings stay
+  skimmable without pulling full values into context;
 - **secret guard**: writes scan for credential-like text (the index is
   plaintext) — `reject` by default, `ask` needs an explicit confirmation,
   `allow` opts out;
@@ -31,6 +38,14 @@ Each fact carries evidence, not verdicts:
 Two statuses: `verified` (the subject exists) and `obsolete` (the subject is
 gone — file deleted, endpoint removed). The store holds the evidence; the agent
 judges trust and staleness in context.
+
+Authorship is audit metadata, not access control: a write records the store's
+security user when the cluster exposes one, otherwise the configured
+(`author`) or OS user, plus `model`/`host`/`session` labels. These birth labels
+are write-once; every later write moves `updated_by`. The journal carries the
+same per-entry, so a shared store shows who saw what when. Labels are
+self-reported — a client can set any `author`; the field supports review and
+attribution, not trust.
 
 ## Quick start
 
@@ -63,6 +78,8 @@ and fill in your OpenSearch connection.
   "index_name": "memento",
   "history_index_period": "month",
   "history_limit": 20,
+  "summary_min_len": 2000,
+  "summary_max_len": 400,
   "secret_guard": "reject",
   "allow_plaintext": false,
   "docs_index_name": "memento-docs",
@@ -79,7 +96,9 @@ set `insecure_skip_verify: true` — dev only; verification is on by default.
 The index is created automatically on first use. Env vars override the file:
 `OPENSEARCH_URL`, `OPENSEARCH_USER`, `OPENSEARCH_PASSWORD`,
 `OPENSEARCH_INSECURE_SKIP_VERIFY`, `MEMENTO_INDEX`, `MEMENTO_HISTORY_PERIOD`,
-`MEMENTO_HISTORY_LIMIT`, `MEMENTO_SECRET_GUARD`, `MEMENTO_ALLOW_PLAINTEXT`;
+`MEMENTO_HISTORY_LIMIT`, `MEMENTO_SUMMARY_MIN_LEN`, `MEMENTO_SUMMARY_MAX_LEN`,
+`MEMENTO_SECRET_GUARD`, `MEMENTO_ALLOW_PLAINTEXT`,
+`MEMENTO_AUTHOR`, `MEMENTO_MODEL`, `MEMENTO_HOST`, `MEMENTO_SESSION`;
 `MEMENTO_CONF` points at an explicit config file. Fetch
 options (`memento fetch`): `MEMENTO_DOCS_INDEX`, `MEMENTO_DOCS_TTL_DAYS`,
 `MEMENTO_FETCH_TIMEOUT`, `MEMENTO_FETCH_MAX_BYTES`, `MEMENTO_FETCH_HOSTS`,
@@ -118,7 +137,7 @@ memento docs "example"
 
 | Command | Description |
 |---------|-------------|
-| `memento add <key> <value> <category> [--project <p>] [--source <s>] [--notes <n>] [--allow-secret]` | Add or correct a fact (the accepted value is appended to the journal) |
+| `memento add <key> <value> <category> [--project <p>] [--source <s>] [--notes <n>] [--summary <s>] [--allow-secret]` | Add or correct a fact (the accepted value is appended to the journal; values over `summary_min_len` require `--summary`) |
 | `memento get <key> [--history]` | Get a fact by key (history is off by default; `--history` prints the journal chain) |
 | `memento search <query> [--project <p>] [--category <c>] [--status <s>] [--limit N]` | Full-text search over values and notes (`--status any` disables the status filter; `--limit 0` = up to 1000) |
 | `memento keys [prefix] [--match <s>] [--project <p>] [--status <s>]` | Find facts by key: prefix and/or substring (`*`, `?` wildcards in `--match`), across projects |

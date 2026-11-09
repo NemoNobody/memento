@@ -17,6 +17,7 @@ Paste this into your always-on rules:
 - Before re-verifying something → `memento_search <query>` / `memento_get <key>`; after verifying something new → `memento_add`.
 - Value changed → correct via the same key; the accepted value is appended to the history journal. A key names a stable subject — predictable English, not a value (`proj:api:port`, not `proj:api:v1`).
 - Qualifiers and doubts → `notes` ("checked the dev config only"). Subject gone → `memento_obsolete <key> [reason]`.
+- Long value (over `summary_min_len`) → `memento_add` requires a `summary`: a short table-of-contents rendering (under `summary_max_len`) — search/find by summary, read the full value by key.
 - Reads return the current value only (`stale`/`age_days` included); history costs context — use `memento_history_info` (cheap counts) and `memento_journal` (the entries) only when the history matters. `stale: true` → re-verify against the source before trusting.
 - `memento_prune` is destructive and manual (the journal is write-forever by design): without `confirm: true` it only returns the plan; show the plan to the user and confirm only after their approval.
 - **Never store secrets** (passwords, tokens, keys) — the store is plaintext;
@@ -39,7 +40,7 @@ staleness in context. The store never decides.
 | `memento_list <project>` | all facts of a project — session start |
 | `memento_search <query>` | search in `value` and `notes` (not in keys) |
 | `memento_get <key>` | exact key (`found=false` when absent) |
-| `memento_add <key> <value> [category] [project] [source] [notes]` | upsert (categories: location, config, endpoint, behavior, context_map — unknown ones are rejected) |
+| `memento_add <key> <value> [category] [project] [source] [notes]` | upsert (categories: location, config, endpoint, behavior, context_map — unknown ones are rejected); long values require a `summary` (see below) |
 | `memento_history_info <key>` | cheap history overview: writes, rediscoveries, first/last — no entry bodies |
 | `memento_journal <key> [limit]` | the journal: every accepted value, newest first (read it only when the history matters) |
 | `memento_prune <key> [keep]` | drop old journal entries (destructive: plan first, `confirm=true` only after the user approves) |
@@ -94,6 +95,17 @@ If a value matters, verify against the code; `doc:*` is only "where to look".
 `notes` holds qualifiers that are not facts: "checked the dev config only",
 "conflicts with key X".
 
+### summary — the store's table of contents
+
+A value over `summary_min_len` (default 2000) must ship a `summary`: a short
+rendering of what the value contains (under `summary_max_len`, default ~400
+chars ≈ 100 tokens). The agent writes it at add time; searches match it, so a
+listing can be skimmed without pulling full values into context — find by
+summary, read the full value by key only when it matters.
+
+`notes` holds qualifiers that are not facts: "checked the dev config only",
+"conflicts with key X".
+
 **Precision costs resources.** If you only checked part of it, record *how far*
 you got — otherwise the next session will either trust an under-verified fact or
 re-verify everything from scratch. A doubt is a note, not a status.
@@ -126,6 +138,10 @@ plan comes back without `confirm: true`; write only after the user approves.
   store passwords, tokens, keys, or customer data. This rule is on you, not
   on the store.
 - Do not echo secrets in the conversation.
+- Writes are stamped with self-reported authorship labels (`author`/`model`/
+  `host`/`session`; later writes move `updated_by`). Audit metadata, not
+  authentication — never put secrets into label values (a hostname you
+  consider sensitive should not go into `host`).
 
 ### Degradation (store unreachable)
 

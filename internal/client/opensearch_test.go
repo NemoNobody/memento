@@ -203,18 +203,25 @@ func TestBuildIndexBody_Mappings(t *testing.T) {
 	props := got["mappings"].(map[string]interface{})["properties"].(map[string]interface{})
 
 	expectedTypes := map[string]string{
-		"fact_id":     "keyword",
-		"key":         "keyword",
-		"value":       "text",
-		"category":    "keyword",
-		"project":     "keyword",
-		"status":      "keyword",
-		"created_at":  "date",
-		"updated_at":  "date",
-		"observed_at": "date",
-		"source":      "keyword",
-		"notes":       "text",
-		"current_ref": "keyword",
+		"fact_id":       "keyword",
+		"key":           "keyword",
+		"value":         "text",
+		"category":      "keyword",
+		"project":       "keyword",
+		"status":        "keyword",
+		"created_at":    "date",
+		"updated_at":    "date",
+		"observed_at":   "date",
+		"source":        "keyword",
+		"notes":         "text",
+		"summary":       "text",
+		"current_ref":   "keyword",
+		"author":        "keyword",
+		"author_source": "keyword",
+		"model":         "keyword",
+		"host":          "keyword",
+		"session":       "keyword",
+		"updated_by":    "keyword",
 	}
 
 	for field, expectedType := range expectedTypes {
@@ -241,8 +248,8 @@ func TestBuildIndexBody_Mappings(t *testing.T) {
 		t.Errorf("history enabled = %v, want false (stored, not indexed)", history["enabled"])
 	}
 
-	if len(props) != 13 {
-		t.Errorf("expected 13 mappings, got %d", len(props))
+	if len(props) != 20 {
+		t.Errorf("expected 20 mappings, got %d", len(props))
 	}
 }
 
