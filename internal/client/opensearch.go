@@ -671,7 +671,7 @@ func buildSearchBody(query string, project, category, status string, limit int) 
 			// match the wrong field or fail with a 400.
 			"multi_match": map[string]interface{}{
 				"query":  query,
-				"fields": []string{"value", "notes"},
+				"fields": []string{"value", "notes", "summary"},
 			},
 		},
 	}

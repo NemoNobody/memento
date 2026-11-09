@@ -32,7 +32,8 @@ Authorship and summary:
 - Long values stay skimmable: a value over `summary_min_len` (default 2000)
   requires a `summary` (CLI `--summary`, MCP `summary`) capped at
   `summary_max_len` (default 400). The rule covers accepted values; notes
-  touches of old long facts are never rejected.
+  touches of old long facts are never rejected. `memento_search` matches
+  summaries: the search fields are value, notes and summary.
 - Config keys `author`/`model`/`host`/`session`/`summary_min_len`/
   `summary_max_len`; env `MEMENTO_AUTHOR`/`MEMENTO_MODEL`/`MEMENTO_HOST`/
   `MEMENTO_SESSION`/`MEMENTO_SUMMARY_MIN_LEN`/`MEMENTO_SUMMARY_MAX_LEN`.

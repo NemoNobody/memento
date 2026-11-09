@@ -73,7 +73,7 @@ pre-journal facts. Journal-era history is read with `memento journal` /
 memento search <query> [--project <p>] [--category <c>] [--status <s>]
 ```
 
-Full-text search over `value` and `notes`, filtered by project/category/status.
+Full-text search over `value`, `notes` and `summary`, filtered by project/category/status.
 Default status is `verified`. Stale facts are marked `[stale: Nd]` in the
 listing.
 

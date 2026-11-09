@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/NemoNobody/memento/internal/client"
 	"github.com/spf13/cobra"
 )
 
@@ -52,7 +53,9 @@ journal indices are lower bounds — the surviving journal, not the lifetime.`,
 			if truncated {
 				b.WriteString(" — showing the newest ")
 				b.WriteString(strconv.Itoa(len(entries)))
-				b.WriteString(" (raise --limit)")
+				b.WriteString(" (raise --limit, max ")
+				b.WriteString(strconv.Itoa(client.NavSizeCap))
+				b.WriteString(")")
 			}
 			b.WriteString("\n")
 			for _, e := range entries {

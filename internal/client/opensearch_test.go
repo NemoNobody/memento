@@ -15,8 +15,8 @@ func TestBuildSearchBody_NoFilters(t *testing.T) {
 		t.Errorf("query = %v, want hello world", mm["query"])
 	}
 	fields := mm["fields"].([]string)
-	if len(fields) != 2 || fields[0] != "value" || fields[1] != "notes" {
-		t.Errorf("fields = %v, want [value notes]", fields)
+	if len(fields) != 3 || fields[0] != "value" || fields[1] != "notes" || fields[2] != "summary" {
+		t.Errorf("fields = %v, want [value notes summary]", fields)
 	}
 	if _, ok := boolQ["filter"]; ok {
 		t.Error("filter present, want none")
@@ -59,8 +59,8 @@ func TestBuildSearchBody_AllFilters(t *testing.T) {
 		t.Errorf("query = %v, want hello", mm["query"])
 	}
 	fields := mm["fields"].([]string)
-	if len(fields) != 2 || fields[0] != "value" || fields[1] != "notes" {
-		t.Errorf("fields = %v, want [value notes]", fields)
+	if len(fields) != 3 || fields[0] != "value" || fields[1] != "notes" || fields[2] != "summary" {
+		t.Errorf("fields = %v, want [value notes summary]", fields)
 	}
 	filters, ok := boolQ["filter"].([]map[string]interface{})
 	if !ok {

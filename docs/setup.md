@@ -312,7 +312,7 @@ no auth at all — that is the documented dev posture (localhost-only bind).
 | `password: none` and a REFUSED hint | The file has a plaintext password while `allow_plaintext` is off: run `memento creds set`, then delete `opensearch_password` from the file |
 | Timeout after 30s | Host unreachable (firewall, wrong host/port) — requests time out after 30s |
 | `status` shows an unexpected config file | The lookup chain picked another file — pass `--conf <path>`, or set `MEMENTO_CONF` |
-| `search` misses a fact by its key | Search covers `value` and `notes`, not keys — use `memento get <key>` |
+| `search` misses a fact by its key | Search covers `value`, `notes` and `summary`, not keys — use `memento get <key>` |
 
 ## Security notes
 

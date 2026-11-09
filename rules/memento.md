@@ -14,7 +14,7 @@ Paste this into your always-on rules:
 
 ```
 - Start of a session in a project → `memento_list <project>` (always).
-- Before re-verifying something → `memento_search <query>` / `memento_get <key>`; after verifying something new → `memento_add`. Keys are navigated with `memento_keys` (search matches values/notes, not keys).
+- Before re-verifying something → `memento_search <query>` / `memento_get <key>`; after verifying something new → `memento_add`. Keys are navigated with `memento_keys` (search matches values/notes/summaries, not keys).
 - Value changed → correct via the same key; the accepted value is appended to the history journal. A key names a stable subject — predictable English, not a value (`proj:api:port`, not `proj:api:v1`).
 - Qualifiers and doubts → `notes` ("checked the dev config only"). Subject gone → `memento_obsolete <key> [reason]`.
 - Long value (over `summary_min_len`) → `memento_add` requires a `summary`: a short table-of-contents rendering (under `summary_max_len`) — search/find by summary, read the full value by key.
@@ -39,7 +39,7 @@ staleness in context. The store never decides.
 | `memento_status` | is the store reachable; never fails — `ok=false` plus a hint |
 | `memento_list <project>` | all facts of a project — session start |
 | `memento_keys [prefix] [match]` | key navigation: prefix and/or substring, across projects (search does **not** match keys) |
-| `memento_search <query>` | search in `value` and `notes` (not in keys) |
+| `memento_search <query>` | search in `value`, `notes` and `summary` (not in keys) |
 | `memento_get <key>` | exact key (`found=false` when absent) |
 | `memento_add <key> <value> [category] [project] [source] [notes]` | upsert (categories: location, config, endpoint, behavior, context_map — unknown ones are rejected); long values require a `summary` (see below) |
 | `memento_history_info <key>` | cheap history overview: writes, rediscoveries, first/last — no entry bodies |

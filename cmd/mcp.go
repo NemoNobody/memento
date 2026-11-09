@@ -90,7 +90,7 @@ func runMCPServer(confPath string) error {
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "memento_search",
-		Description: "Search stored facts by text. Looks in fact values and notes " +
+		Description: "Search stored facts by text. Looks in fact values, notes and summaries " +
 			"only — it does NOT match keys, so use memento_get for an exact key. " +
 			"By default returns only trusted ('verified') facts; obsolete facts are " +
 			"superseded and must not be treated as current. History is omitted " +
@@ -400,7 +400,7 @@ func resolveStatus(status string) (string, error) {
 }
 
 type searchInput struct {
-	Query          string `json:"query" jsonschema:"text to look for in fact values and notes (keys are not searched)"`
+	Query          string `json:"query" jsonschema:"text to look for in fact values, notes and summaries (keys are not searched)"`
 	Project        string `json:"project,omitempty" jsonschema:"limit results to this project"`
 	Category       string `json:"category,omitempty" jsonschema:"limit results to this category"`
 	Status         string `json:"status,omitempty" jsonschema:"limit results to this status: verified (default), obsolete, or any"`

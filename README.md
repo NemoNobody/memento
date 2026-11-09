@@ -139,7 +139,7 @@ memento docs "example"
 |---------|-------------|
 | `memento add <key> <value> <category> [--project <p>] [--source <s>] [--notes <n>] [--summary <s>] [--allow-secret]` | Add or correct a fact (the accepted value is appended to the journal; values over `summary_min_len` require `--summary`) |
 | `memento get <key> [--history]` | Get a fact by key (history is off by default; `--history` prints the legacy in-doc array — journal-era history lives in `memento journal`) |
-| `memento search <query> [--project <p>] [--category <c>] [--status <s>] [--limit N]` | Full-text search over values and notes (`--status any` disables the status filter; `--limit 0` = up to 1000) |
+| `memento search <query> [--project <p>] [--category <c>] [--status <s>] [--limit N]` | Full-text search over values, notes and summaries (`--status any` disables the status filter; `--limit 0` = up to 1000) |
 | `memento keys [prefix] [--match <s>] [--project <p>] [--status <s>]` | Find facts by key: prefix and/or substring (`*`, `?` wildcards in `--match`), across projects |
 | `memento list <project> [--prefix <p>]` | List all facts for a project, optionally narrowed to a key prefix (trailing `*` allowed) |
 | `memento journal <key> [--limit N]` | Read the journal: the append-only history of a key, newest first |
