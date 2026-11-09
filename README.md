@@ -16,7 +16,7 @@ Each fact carries evidence, not verdicts:
   `experiment`, `user:confirmed`, `doc:*`;
 - **observation time** (`observed_at`): when the value was actually seen;
 - **history**: every accepted value is appended to an append-only journal
-  index (`<index>-history-<period>`, monthly by default) instead of
+  index (`<index>-history-<period-date>`, monthly by default) instead of
   overwriting the fact; entries are never rewritten and the journal is not
   pruned by default (write-forever), so history shows how old it is;
 - **notes**: free-text qualifiers, e.g. "checked the dev config only";
@@ -138,7 +138,7 @@ memento docs "example"
 | Command | Description |
 |---------|-------------|
 | `memento add <key> <value> <category> [--project <p>] [--source <s>] [--notes <n>] [--summary <s>] [--allow-secret]` | Add or correct a fact (the accepted value is appended to the journal; values over `summary_min_len` require `--summary`) |
-| `memento get <key> [--history]` | Get a fact by key (history is off by default; `--history` prints the journal chain) |
+| `memento get <key> [--history]` | Get a fact by key (history is off by default; `--history` prints the legacy in-doc array — journal-era history lives in `memento journal`) |
 | `memento search <query> [--project <p>] [--category <c>] [--status <s>] [--limit N]` | Full-text search over values and notes (`--status any` disables the status filter; `--limit 0` = up to 1000) |
 | `memento keys [prefix] [--match <s>] [--project <p>] [--status <s>]` | Find facts by key: prefix and/or substring (`*`, `?` wildcards in `--match`), across projects |
 | `memento list <project> [--prefix <p>]` | List all facts for a project, optionally narrowed to a key prefix (trailing `*` allowed) |

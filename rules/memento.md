@@ -14,7 +14,7 @@ Paste this into your always-on rules:
 
 ```
 - Start of a session in a project → `memento_list <project>` (always).
-- Before re-verifying something → `memento_search <query>` / `memento_get <key>`; after verifying something new → `memento_add`.
+- Before re-verifying something → `memento_search <query>` / `memento_get <key>`; after verifying something new → `memento_add`. Keys are navigated with `memento_keys` (search matches values/notes, not keys).
 - Value changed → correct via the same key; the accepted value is appended to the history journal. A key names a stable subject — predictable English, not a value (`proj:api:port`, not `proj:api:v1`).
 - Qualifiers and doubts → `notes` ("checked the dev config only"). Subject gone → `memento_obsolete <key> [reason]`.
 - Long value (over `summary_min_len`) → `memento_add` requires a `summary`: a short table-of-contents rendering (under `summary_max_len`) — search/find by summary, read the full value by key.
@@ -38,6 +38,7 @@ staleness in context. The store never decides.
 |---|---|
 | `memento_status` | is the store reachable; never fails — `ok=false` plus a hint |
 | `memento_list <project>` | all facts of a project — session start |
+| `memento_keys [prefix] [match]` | key navigation: prefix and/or substring, across projects (search does **not** match keys) |
 | `memento_search <query>` | search in `value` and `notes` (not in keys) |
 | `memento_get <key>` | exact key (`found=false` when absent) |
 | `memento_add <key> <value> [category] [project] [source] [notes]` | upsert (categories: location, config, endpoint, behavior, context_map — unknown ones are rejected); long values require a `summary` (see below) |
@@ -45,6 +46,10 @@ staleness in context. The store never decides.
 | `memento_journal <key> [limit]` | the journal: every accepted value, newest first (read it only when the history matters) |
 | `memento_prune <key> [keep]` | drop old journal entries (destructive: plan first, `confirm=true` only after the user approves) |
 | `memento_obsolete <key> [reason]` | the subject is gone |
+
+The page-cache tools (`memento_fetch_doc`, `memento_get_doc`,
+`memento_search_docs`) live beside these: they store fetched web pages in a
+separate docs index. See `docs/mcp.md` — this rule is about the facts.
 
 ### When to search, when to store
 

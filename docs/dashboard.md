@@ -45,8 +45,11 @@ Two things to know:
   (`now-10y`…`now`). **Facts without `observed_at` do not appear** — a
   time-filtered query skips documents that lack the time field. Facts written
   by `memento` always carry it; older ones can be backfilled (below).
-- `history` is stored but not indexed, so it never appears in Dashboards. Read
-  it with `memento get <key>`.
+- The journal history of accepted values lives in journal indices and is not
+  modeled in Dashboards; read it with `memento journal <key>` (entries) or
+  `memento history-info <key>` (counts). The legacy in-doc `history` array
+  (pre-journal facts) is stored but not indexed, so it never appears in
+  Dashboards — read it with `memento get <key> --history`.
 
 ## Backfilling `observed_at`
 

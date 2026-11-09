@@ -168,6 +168,9 @@ One-time upgrade step from pre-journal releases: moves each fact's in-doc
 `observed_at`), appends the current value, sets `current_ref`, and removes
 the array. It prints the plan first; `--yes` writes. Unmigrated facts keep
 working; their history just stays in-doc until the next correction.
+Reruns after a partial failure are safe: entries are appended under ids
+derived from their content, so the rerun collides with what the previous
+run wrote (collision = success) and never duplicates.
 
 ## History retention
 
@@ -237,7 +240,8 @@ The author resolves once per process, down this chain:
 4. `none` — nothing resolved; writes carry no author labels.
 
 `model`/`host`/`session` come from config keys / env (`MEMENTO_MODEL`,
-`MEMENTO_HOST`, `MEMENTO_SESSION`); they are never guessed.
+`MEMENTO_HOST`, `MEMENTO_SESSION`); `host` falls back to the OS hostname
+(sanitized), `model` and `session` are never guessed.
 
 **Threat model:** these labels are audit metadata, not authentication. A
 client can set any `author` it likes (config), and the `security` label is
@@ -252,8 +256,9 @@ plugin's job: per-user accounts and index permissions).
 
 The index is plaintext: a secret written once is exposed in every later read
 (and in every agent context that reads it). The write paths (`add`,
-`obsolete`, and the MCP tools) scan the user-supplied text — value, notes,
-source (reason for obsolete) — for credential-like shapes: vendor token
+`obsolete`, and the MCP tools) scan the user-supplied text — key, value,
+summary, notes, source (for `obsolete`: key and reason) — for credential-like
+shapes: vendor token
 prefixes (`AKIA…`, `ghp_…`, `xox…`, `sk-…`, JWT, PEM headers), `Bearer`
 headers, `password = …` assignments, and long opaque strings (hex/base64).
 

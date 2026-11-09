@@ -6,7 +6,7 @@ release; v0.1.0 was the first internal build.
 ## Unreleased
 
 History journal: the in-doc `history` array is replaced by an append-only
-journal of dated indices (`<index>-history-<period>`, monthly by default;
+journal of dated indices (`<index>-history-<period-date>`, monthly by default;
 `history_index_period` config, `MEMENTO_HISTORY_PERIOD` env).
 
 - Every accepted value is journaled before the fact doc is updated; the fact
@@ -35,11 +35,31 @@ Authorship and summary:
   touches of old long facts are never rejected.
 - Config keys `author`/`model`/`host`/`session`/`summary_min_len`/
   `summary_max_len`; env `MEMENTO_AUTHOR`/`MEMENTO_MODEL`/`MEMENTO_HOST`/
-  `memento_session`/`MEMENTO_SUMMARY_MIN_LEN`/`MEMENTO_SUMMARY_MAX_LEN`.
+  `MEMENTO_SESSION`/`MEMENTO_SUMMARY_MIN_LEN`/`MEMENTO_SUMMARY_MAX_LEN`.
   `memento status` reports the effective author and its chain.
 - Docs: least-privilege store user guide for clusters with the security
   plugin (role/user/role-mapping recipes; the app role cannot delete the
   facts index), linked from SECURITY.md.
+
+Fixed:
+- Journal infrastructure: a failed first install (403, network blip) is
+  no longer remembered as "installed" — appends retry it until it lands,
+  so a long-lived MCP server never journals without the template and the
+  server-clock pipeline.
+- `memento migrate-history` reruns are safe after a partial failure:
+  entries are appended under content-derived ids, so the rerun collides
+  with (and skips) what the previous run wrote instead of duplicating;
+  a racing write's `current_ref` is never overwritten.
+- `prune`: a transient fact-read failure aborts the prune instead of
+  silently deleting the entry that carries the current value.
+- Journal reads order by the store clock (`ingest_at`), not the writers'.
+- Correction journal entries carry the fact's real `fact_id`.
+- Negative `MEMENTO_SUMMARY_MIN_LEN`/`MEMENTO_SUMMARY_MAX_LEN` are
+  rejected (they silently disabled the corresponding check); blank
+  author labels are a loud config error, not a silent OS-user fallback.
+- `list`/`search` lines show the summary (the table-of-contents
+  contract); `get` shows a summary line; author labels are quoted in
+  `get`/`journal`/`status` and stripped of non-printable characters.
 
 ## v0.6.0 — 2026-11-08
 

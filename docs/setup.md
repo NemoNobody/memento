@@ -109,7 +109,8 @@ chmod 600 ~/.memento.conf
 - The history journal is created automatically on the first accepted write: an
   ingest pipeline `<index>-journal-ts` (stamps entries with the server clock),
   a composable index template `<index>-journal`, and dated journal indices
-  `<index>-history-<period>` — monthly by default (`history_index_period`:
+  `<index>-history-<period-date>` (e.g. `memento-history-2026.11`) — monthly
+  by default (`history_index_period`:
   `day`/`week`/`month`/`quarter`/`year`). The store user needs privileges to
   create the template, the pipeline, and `<index>-history-*` indices.
 - Journal entries are append-only and never pruned automatically (write
@@ -162,11 +163,12 @@ index: memento
 history_index_period: month
 history_limit: 20
 secret_guard: reject
-author: admin (security)
+author: "admin" (security)
 password: keyring
 cluster: opensearch (OpenSearch 3.8.0)
 storage: cluster=yellow index=yellow unassigned_shards=1 data_nodes=1
-disk: busiest data node at 15% used
+  all primary shards are active; some replica shards are unassigned, so redundancy is reduced
+disk: busiest data node node-1 at 15% used
 status: OK
 ```
 
@@ -260,11 +262,13 @@ curl -k -u "admin:$OS_ADMIN_PW" -X PUT \
   https://127.0.0.1:9200/_plugins/_security/api/roles/memento_app \
   -H 'Content-Type: application/json' -d @/tmp/memento_role.json
 
-# the app user (the prompt reads the password; the value stays in your shell)
+# the app user (the prompt reads the password; the value stays in your shell).
+# jq builds valid JSON no matter what the password contains (", \, $...).
 read -rs MEMENTO_USER_PW
 curl -k -u "admin:$OS_ADMIN_PW" -X PUT \
   https://127.0.0.1:9200/_plugins/_security/api/internalusers/memento \
-  -H 'Content-Type: application/json' -d "{\"password\":\"$MEMENTO_USER_PW\"}"
+  -H 'Content-Type: application/json' \
+  -d "$(jq -n --arg pw "$MEMENTO_USER_PW" '{password: $pw}')"
 
 # map the role to the user
 curl -k -u "admin:$OS_ADMIN_PW" -X PUT \
