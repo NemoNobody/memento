@@ -21,3 +21,8 @@ response within a few days.
   could leak a secret into logs or outputs.
 - The OpenSearch cluster itself is out of scope — report those to the OpenSearch
   project or your cluster operator.
+- On a shared cluster, run `memento` as a least-privilege store user: the
+  recipes (role, user, role mapping) are in
+  [docs/setup.md](docs/setup.md) §7. The role deliberately cannot delete the
+  facts index; authorship labels stamped on writes come from the account the
+  server authenticates.

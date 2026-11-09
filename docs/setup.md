@@ -208,6 +208,84 @@ sources:
 - **Plaintext config** (only when `allow_plaintext: true`): read
   `opensearch_password` out of the file with your JSON tool.
 
+## 7. Least-privilege store user (security plugin)
+
+With the security plugin enabled, `memento` does not need an admin account.
+Create a dedicated user whose role can do exactly what the app does — and
+**cannot delete the facts index**. The names below use the default index
+names; if you set `index_name`/`docs_index_name`, adjust the patterns
+(the journal pattern is `<index>-history-*`).
+
+What the app touches, permission by permission:
+
+| Target | Why | Actions |
+|---|---|---|
+| cluster | version probe, `status` health/disk, journal infra | `cluster:monitor/main`, `cluster:monitor/health`, `cluster:monitor/nodes/stats`, `manage_index_templates`, `manage_ingest_pipelines` |
+| `memento` (facts) | read, search, create/update docs | `read`, `search`, `indices:data/write/index`, `indices:data/write/update`, `indices:admin/create` — **no delete** (the app never deletes facts; `obsolete` is a status, and index loss must be an admin decision) |
+| `memento-history-*` | append entries, read journal, `prune` | `read`, `search`, `indices:data/write/*` (the journal is append-only by app design; `delete` here exists only for the manual `prune`) |
+| `memento-docs` | fetch cache: store, read, search snapshots | `read`, `search`, `indices:data/write/index`, `indices:admin/create` |
+
+`GET /_security/authinfo` (the authorship probe) is self-service: every
+authenticated user may call it for themselves, so no extra permission is
+needed.
+
+Create it as admin (passwords via prompts so they never land in shell history):
+
+```bash
+read -rs OS_ADMIN_PW
+
+cat > /tmp/memento_role.json << 'EOF'
+{
+  "cluster_permissions": [
+    "cluster:monitor/main",
+    "cluster:monitor/health",
+    "cluster:monitor/nodes/stats",
+    "manage_index_templates",
+    "manage_ingest_pipelines"
+  ],
+  "index_permissions": [
+    {"index_patterns": ["memento"],
+     "allowed_actions": ["read", "search", "indices:data/write/index",
+                         "indices:data/write/update", "indices:admin/create"]},
+    {"index_patterns": ["memento-history-*"],
+     "allowed_actions": ["read", "search", "indices:data/write/*"]},
+    {"index_patterns": ["memento-docs"],
+     "allowed_actions": ["read", "search", "indices:data/write/index",
+                         "indices:admin/create"]}
+  ]
+}
+EOF
+
+curl -k -u "admin:$OS_ADMIN_PW" -X PUT \
+  https://127.0.0.1:9200/_plugins/_security/api/roles/memento_app \
+  -H 'Content-Type: application/json' -d @/tmp/memento_role.json
+
+# the app user (the prompt reads the password; the value stays in your shell)
+read -rs MEMENTO_USER_PW
+curl -k -u "admin:$OS_ADMIN_PW" -X PUT \
+  https://127.0.0.1:9200/_plugins/_security/api/internalusers/memento \
+  -H 'Content-Type: application/json' -d "{\"password\":\"$MEMENTO_USER_PW\"}"
+
+# map the role to the user
+curl -k -u "admin:$OS_ADMIN_PW" -X PUT \
+  https://127.0.0.1:9200/_plugins/_security/api/rolesmapping/memento_app \
+  -H 'Content-Type: application/json' -d '{"users":["memento"]}'
+rm -f /tmp/memento_role.json
+```
+
+Then set `opensearch_user: "memento"` in the config and run `memento creds set`
+(and `memento status`). Two side effects worth knowing:
+
+- Writes now stamp `author: memento (security)` — the name the *server*
+  authenticated, which is exactly the point of a shared store.
+- The journal template pins `index.number_of_replicas: 0`: on a single-node
+  cluster journal indices stay green (replicas would hang unassigned — the
+  classic single-node trap). Multi-node shared stores can raise it; the
+  template is yours to edit, the app only creates it once if absent.
+
+The dev compose (`make dev-opensearch`) runs with the security plugin off and
+no auth at all — that is the documented dev posture (localhost-only bind).
+
 ## Troubleshooting
 
 | Symptom | Cause / fix |
@@ -237,3 +315,6 @@ sources:
 - `insecure_skip_verify: true` disables certificate verification. TLS is
   verified by default; enable this only for a local node with the demo
   certificate, never for anything shared.
+- On a cluster with the security plugin, run `memento` as a least-privilege
+  user (§7): the app cannot delete the facts index, and every write carries
+  the authorship label the server authenticated.

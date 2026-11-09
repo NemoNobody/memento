@@ -35,8 +35,11 @@ Authorship and summary:
   touches of old long facts are never rejected.
 - Config keys `author`/`model`/`host`/`session`/`summary_min_len`/
   `summary_max_len`; env `MEMENTO_AUTHOR`/`MEMENTO_MODEL`/`MEMENTO_HOST`/
-  `MEMENTO_SESSION`/`MEMENTO_SUMMARY_MIN_LEN`/`MEMENTO_SUMMARY_MAX_LEN`.
+  `memento_session`/`MEMENTO_SUMMARY_MIN_LEN`/`MEMENTO_SUMMARY_MAX_LEN`.
   `memento status` reports the effective author and its chain.
+- Docs: least-privilege store user guide for clusters with the security
+  plugin (role/user/role-mapping recipes; the app role cannot delete the
+  facts index), linked from SECURITY.md.
 
 ## v0.6.0 — 2026-11-08
 
