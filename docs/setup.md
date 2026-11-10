@@ -370,6 +370,8 @@ set their own tool timeouts).
 | Timeout after 30s | Host unreachable (firewall, wrong host/port) — requests time out after 30s |
 | `status` shows an unexpected config file | The lookup chain picked another file — pass `--conf <path>`, or set `MEMENTO_CONF` |
 | `search` misses a fact by its key | Search covers `value`, `notes` and `summary`, not keys — use `memento get <key>` |
+| render error reports both reasons, obscura side: `navigation exceeded ... deadline` | The renderer ran but could not load the page: raise `fetch_timeout_seconds` (it is the nav budget) or the site hangs the render route |
+| a doc with `via: obscura` whose body is a block page ("Access denied", IP-Block/Country-Block) | The site gates on egress IP/country, not the fingerprint — the renderer passes the TLS wall only: configure `fetch_proxy_url` (the renderer inherits it; a proxy is a new IP), then re-fetch with `--refresh` (the block page stays cached until TTL) |
 
 ## Security notes
 
