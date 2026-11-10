@@ -139,7 +139,10 @@ a concurrent `notes_append` cannot be dropped by a read-modify-write from the
 stale read, and status/`current_ref` land in the same atomic update. The
 journal entry carries the reason in notes (audit symmetry with
 `memento_patch`). A reason with `memento_patch` on an already-obsolete fact is
-refused — the reason belongs to the transition.
+refused — the reason belongs to the transition. That refusal is computed from
+the read taken before the scripted update: a retire racing in between the read
+and the script slips past the check (the journal entry documents that event, so
+the audit trail never lies about the state — at worst a notes line duplicates).
 
 ## The journal (history)
 
@@ -310,10 +313,12 @@ Guarantees and limits:
   `reject` there is no bypass. Redaction runs before the stored `size` and
   `content_hash` are computed, so the metadata describes exactly the text
   that ships. The stored raw HTML is redacted in a high-confidence pass
-  applied twice (the second pass closes the overlap tail: a span starting
-  inside an earlier replacement), and its redactions join the audit trail as
-  field `html` — the raw HTML is never served to agents, but the surgery on
-  the store is reported. The document URL is scanned high-confidence only:
+  applied twice: the second pass closes the common overlap-tail case (a span
+  starting inside an earlier replacement); a greedy span can still swallow a
+  scheme prefix, so a credential glued directly to a long token can survive
+  into the stored HTML — the raw HTML is never served to agents, so the
+  residual exposure is disk-only. Its redactions join the audit trail as
+  field `html`: the surgery on the store is reported. The document URL is scanned high-confidence only:
   it is identity (redaction is impossible) and medium shapes are ordinary in
   it (git SHAs in GitHub paths). The post-redirect `final_url` carries the
   same identity role: scanned high-confidence only, and a credential-bearing

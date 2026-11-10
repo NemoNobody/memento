@@ -77,25 +77,39 @@ Fetch guard triage and fetch v1 fixes:
 - The secret guard now grades findings: `high` (vendor prefixes, PEM blocks,
   basic-auth URLs, `Bearer`, assignments with a 20+ char multi-class secret) vs
   `medium` (long hex/base64, weak assignments like `password = someVarName`).
-  On fetched pages: high-confidence shapes in agent-visible fields and the
-  stored HTML are REDACTED in place (marker `[memento-redacted:pattern]`) and
-  the page is stored — the answer lists `redactions` (field/pattern/size, no
-  preview) plus a `warning`; redaction runs before `size`/`content_hash`, so
-  metadata matches the stored text. Medium findings in visible text refuse the
-  the write (confirmable at `ask`, no bypass at `reject`) — silent redaction would
-  mangle real documentation. The same graded set scans fact writes. The stored
-  HTML is redacted in a second pass (the overlap tail) and its redactions join
-  the audit trail (field `html`); the URL and the post-redirect `final_url` are
-  scanned high-confidence only (a credential-bearing redirect target refuses
-  the doc); image hrefs are redacted in place; the credential-assignment rule
-  reads quoted JSON/YAML config lines; the agent-supplied `project` tag is
-  guard-scanned on every write path (facts and docs). The
-  credential-assignment rule reads quoted JSON/YAML lines (`"api_key":
-  "S3cr3t"`). The stored raw HTML is redacted twice (the second pass closes
-  the overlap tail), its redactions are reported as field `html`; the
-  document URL is scanned high-confidence only (identity: a git SHA in a
-  GitHub path is ordinary); the agent-supplied `project` tag is guard-scanned
-  at the call (the cache-hit re-tag path never sees the content guard).
+  On fetched pages: high-confidence shapes in agent-visible fields are REDACTED
+  in place (marker `[memento-redacted:pattern]`) and the page is stored — the
+  answer lists `redactions` (field/pattern/size, no preview) plus a `warning`;
+  redaction runs before `size`/`content_hash`, so metadata matches the stored
+  text. Medium findings in visible text refuse the write (confirmable at `ask`,
+  no bypass at `reject`) — silent redaction would mangle real documentation.
+  The URL and the post-redirect `final_url` are scanned high-confidence only
+  (identity fields: a git SHA in a GitHub path is ordinary; a
+  credential-bearing redirect target refuses the doc); image hrefs are
+  redacted in place; the credential-assignment rule reads quoted JSON/YAML
+  config lines (`"api_key": "S3cr3t"`); the agent-supplied `project` tag is
+  guard-scanned on every write path (facts and docs — for cached docs at the
+  call, the re-tag path never sees the content guard).
+- The stored raw HTML is redacted with the high-confidence set, twice: the
+  second pass closes the common overlap-tail case (a span starting inside an
+  earlier replacement; the marker rule refuses a right-hand side starting with
+  `[`, so the pair is a fixed point). A greedy span can still swallow a scheme
+  prefix — the residual exposure is disk-only, the stored HTML is never served
+  to agents. Its redactions join the audit trail as field `html`.
+- `memento obsolete` refuses a reason on an already-obsolete fact (mirrors
+  `memento_patch`): the journal skips a re-retire, so notes must not grow an
+  audit line the journal never recorded.
+- Keys are trimmed at every CLI edge (`add`, `get`, `obsolete`, `prune`,
+  `journal`, `history-info`) and for the `keys` `match`, matching the
+  store's trimmed keys; CLI `add` defaults the project to `global` (the MCP
+  rule) so documents never sit outside project navigation.
+- Retire reasons fold to one line in notes (whitespace runs → single spaces):
+  the audit trail stays one event per line.
+- Render env-proxy hardening: the proxy Go's environment machinery produced
+  is validated as a parsed struct — a malformed env proxy normalized so the
+  credentials hide in the path is refused, and no `@` ever reaches obscura's
+  argv (`/proc`-visible).
+
 - Default fetch User-Agent is a desktop Chrome string (sites 403 known bot
   UAs; override with `fetch_user_agent`/`MEMENTO_FETCH_USER_AGENT`).
 - 429 is treated as an IP ban: with `fetch_proxy_fallback` the proxy is a new

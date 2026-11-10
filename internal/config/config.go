@@ -503,6 +503,18 @@ func ValidateProxyURL(v string) error {
 	if err != nil {
 		return fmt.Errorf("invalid syntax (its text is not echoed)")
 	}
+	return ValidateProxy(u)
+}
+
+// ValidateProxy checks the parsed shape: scheme whitelist, a host a client
+// can actually dial, and no user info. It runs on the struct, not on a string
+// round-trip: Go's proxy machinery normalizes a malformed env proxy
+// ("http://user:sekret@p:3128;" becomes "http://http://user:sekret@p:3128;"
+// in String()), so a re-parse of that text hides the credentials in the path
+// and a string-level check waves them through. Exported for the render path,
+// which validates the struct http.ProxyFromEnvironment produced before any
+// of it reaches a subprocess argv.
+func ValidateProxy(u *url.URL) error {
 	switch u.Scheme {
 	case "http", "https", "socks5", "socks5h":
 	default:

@@ -2,15 +2,14 @@ package cmd
 
 import (
 	"context"
+	"errors"
+	"github.com/NemoNobody/memento/internal/model"
+	"github.com/spf13/cobra"
 	"io"
 	"os"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/NemoNobody/memento/internal/model"
-
-	"github.com/spf13/cobra"
 )
 
 var getFlags struct {
@@ -23,7 +22,10 @@ func GetCmd() *cobra.Command {
 		Short: "Get fact by key",
 		Args:  cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-			key := args[0]
+			key := strings.TrimSpace(args[0])
+			if key == "" {
+				fatalErr(errors.New("key is required"))
+			}
 			ctx := context.Background()
 			c, err := newClient()
 			if err != nil {

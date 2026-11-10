@@ -225,3 +225,56 @@ func TestGuardFetchFinalURLAndImages(t *testing.T) {
 		t.Errorf("the image URL redaction must be reported: %+v", redactions)
 	}
 }
+
+// TestFetchGuardProjectScanned pins that the project label is scanned on the
+// fetch write path (identity text in a shared store). The documented
+// asymmetry: project is NOT HighOnly — a SHA-shaped label can refuse a fetch
+// at reject without bypass (docs/setup names it).
+func TestFetchGuardProjectScanned(t *testing.T) {
+	doc := &model.Doc{
+		Title: "P", URL: "https://x/y", Project: "p",
+		Sections: []model.Section{{Order: 0, Heading: "H", Text: "clean"}},
+		HTML:     "<html></html>",
+	}
+	if _, err := guardFetch(doc, config.GuardReject, false); err != nil {
+		t.Fatalf("clean project must pass: %v", err)
+	}
+	doc.Project = "key=" + guardSentinel
+	if _, err := guardFetch(doc, config.GuardReject, true); err == nil {
+		t.Fatal("high-confidence shape in project must refuse at reject")
+	}
+}
+
+// TestFetchGuardAuditOrder pins the audit-trail order: the html surgery is
+// reported first, then the identity fields, then the sections. An agent
+// reading doc.Redactions must see the storage-level edits before the
+// field-level ones (the order the guard applies them).
+func TestFetchGuardAuditOrder(t *testing.T) {
+	doc := &model.Doc{
+		Title:    "clean",
+		URL:      "https://x/y",
+		Project:  "p",
+		HTML:     `<b>key="` + guardSentinel + `"</b>`,
+		Sections: []model.Section{{Order: 0, Heading: "h", Text: "leaked: " + guardSentinel}},
+	}
+	reds, err := guardFetch(doc, config.GuardReject, false)
+	if err != nil {
+		t.Fatalf("redactable doc must not refuse: %v", err)
+	}
+	if len(reds) < 2 {
+		t.Fatalf("redactions = %+v, want html and section entries", reds)
+	}
+	if reds[0].Field != "html" {
+		t.Errorf("first audit entry = %q, want html", reds[0].Field)
+	}
+	seenHTML := false
+	for _, r := range reds {
+		if r.Field == "html" {
+			seenHTML = true
+			break
+		}
+	}
+	if !seenHTML {
+		t.Error("html redactions missing from the audit trail")
+	}
+}

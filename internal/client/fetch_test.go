@@ -1,11 +1,14 @@
 package client
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -516,5 +519,172 @@ func TestFetchPageHook(t *testing.T) {
 	if _, err := FetchPage(context.Background(), cfg, ft.srv.URL+"/page", reject); err == nil ||
 		!strings.Contains(err.Error(), "medium finding") {
 		t.Errorf("hook rejection must propagate: %v", err)
+	}
+}
+
+// TestFetchPageDefaultUA pins the anti-fingerprinting default: an unconfigured
+// client arrives as a current desktop browser, not as "memento/x.y.z".
+func TestFetchPageDefaultUA(t *testing.T) {
+	ft := newFetchTarget(t)
+	cfg := config.DefaultConfig()
+	cfg.FetchAllowPrivate = true
+
+	if _, err := FetchPage(context.Background(), cfg, ft.srv.URL+"/page", nil); err != nil {
+		t.Fatalf("FetchPage: %v", err)
+	}
+	if ft.ua != config.DefaultFetchUserAgent {
+		t.Errorf("server saw UA %q, want the Chrome default", ft.ua)
+	}
+	if !strings.Contains(ft.ua, "Chrome/145") {
+		t.Errorf("default UA %q is not a current browser line", ft.ua)
+	}
+}
+
+// TestFetchPageRateLimitedPoliteRetry pins the 429-without-proxy contract:
+// one short polite retry on the same client, no hammering, no proxy needed.
+func TestFetchPageRateLimitedPoliteRetry(t *testing.T) {
+	ft := newFetchTarget(t)
+	cfg := config.DefaultConfig()
+	cfg.FetchAllowPrivate = true
+
+	doc, err := FetchPage(context.Background(), cfg, ft.srv.URL+"/ratelimit", nil)
+	if err != nil {
+		t.Fatalf("429 polite retry: %v", err)
+	}
+	if ft.rlHits != 2 {
+		t.Errorf("target saw %d requests, want exactly 2 (one polite retry)", ft.rlHits)
+	}
+	if len(doc.Sections) == 0 || doc.Sections[0].Heading != "Limited" {
+		t.Errorf("sections = %+v, want the page served after the retry", doc.Sections)
+	}
+}
+
+// TestFetchPageEmptyContentTypeIsHTML pins the lenient branch: servers that
+// send no Content-Type at all (httptest cannot produce this — Go sniffs — so
+// a raw response is written on a bare listener) must be parsed as HTML.
+func TestFetchPageEmptyContentTypeIsHTML(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		// Read the request headers only (the client waits for the response;
+		// draining to EOF would deadlock).
+		br := bufio.NewReader(conn)
+		for {
+			line, err := br.ReadString('\n')
+			if err != nil || line == "\r\n" {
+				break
+			}
+		}
+		body := "<html><head><title>NoCT</title></head><body><h1>Head</h1><p>body text here</p></body></html>"
+		_, _ = fmt.Fprintf(conn, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(body), body)
+	}()
+
+	cfg := config.DefaultConfig()
+	cfg.FetchAllowPrivate = true
+	doc, err := FetchPage(context.Background(), cfg, "http://"+ln.Addr().String()+"/noct", nil)
+	if err != nil {
+		t.Fatalf("empty Content-Type fetch: %v", err)
+	}
+	if doc.Title != "NoCT" {
+		t.Errorf("title = %q, want the HTML parsed", doc.Title)
+	}
+}
+
+// TestFetchPageOversize pins the cap's failure mode: the page is an input,
+// not a target; over the cap the fetch refuses with an actionable message.
+func TestFetchPageOversize(t *testing.T) {
+	ft := newFetchTarget(t)
+	cfg := config.DefaultConfig()
+	cfg.FetchAllowPrivate = true
+	cfg.FetchMaxBytes = 100
+
+	_, err := FetchPage(context.Background(), cfg, ft.srv.URL+"/big", nil)
+	if err == nil {
+		t.Fatal("want oversize refusal")
+	}
+	if !strings.Contains(err.Error(), "fetch_max_bytes") {
+		t.Errorf("oversize error = %v, want fetch_max_bytes named", err)
+	}
+}
+
+// TestFetchPageRefusesPrivateAddress pins the default privacy posture:
+// loopback targets are refused unless fetch_allow_private is set on purpose.
+func TestFetchPageRefusesPrivateAddress(t *testing.T) {
+	ft := newFetchTarget(t)
+	cfg := config.DefaultConfig() // fetch_allow_private defaults off
+
+	_, err := FetchPage(context.Background(), cfg, ft.srv.URL+"/page", nil)
+	if err == nil {
+		t.Fatal("loopback fetch must be refused by default")
+	}
+	if !strings.Contains(err.Error(), "non-public") {
+		t.Errorf("loopback refusal = %v, want the privacy-guard message", err)
+	}
+}
+
+// TestFetchPageTruncatesSections pins that extraction limits are loud: the
+// stored text is a prefix and doc.Truncated says so.
+func TestFetchPageTruncatesSections(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/huge", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		writeBody(t, w, "<html><body><h1>Big</h1><p>"+strings.Repeat("x", MaxSectionChars+500)+"</p></body></html>")
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	cfg := config.DefaultConfig()
+	cfg.FetchAllowPrivate = true
+	doc, err := FetchPage(context.Background(), cfg, srv.URL+"/huge", nil)
+	if err != nil {
+		t.Fatalf("FetchPage: %v", err)
+	}
+	if !doc.Truncated {
+		t.Error("Truncated = false, want true (the section was capped)")
+	}
+	if len(doc.Sections) == 0 || utf8RuneLen(doc.Sections[0].Text) != MaxSectionChars {
+		t.Errorf("section text length = %d, want capped at %d", len(doc.Sections[0].Text), MaxSectionChars)
+	}
+}
+
+func utf8RuneLen(s string) int { return len([]rune(s)) }
+
+// TestFetchPageStatusClasses pins the typed failure classes the caller
+// branches on: render/proxy eligibility and CLI hints are driven by the
+// class, not by message parsing.
+func TestFetchPageStatusClasses(t *testing.T) {
+	ft := newFetchTarget(t)
+	cfg := config.DefaultConfig()
+	cfg.FetchAllowPrivate = true
+
+	_, err := FetchPage(context.Background(), cfg, ft.srv.URL+"/blocked", nil)
+	var fe *FetchError
+	if !errors.As(err, &fe) || fe.Status != http.StatusForbidden {
+		t.Fatalf("403 without proxy: %v, want FetchError status 403", err)
+	}
+	if fe.Class != ClassStatus {
+		t.Errorf("403 class = %q, want %q", fe.Class, ClassStatus)
+	}
+	// 404 is a status too, and never render-eligible: the renderer faces
+	// the same missing document.
+	_, err = FetchPage(context.Background(), cfg, ft.srv.URL+"/missing", nil)
+	if !errors.As(err, &fe) || fe.Status != http.StatusNotFound {
+		t.Fatalf("404: %v, want FetchError status 404", err)
+	}
+	if renderEligible(err) {
+		t.Error("404 must not be render-eligible")
+	}
+	// 403 is render-eligible: a browser from the same IP may still get in.
+	_, err = FetchPage(context.Background(), cfg, ft.srv.URL+"/blocked", nil)
+	if !renderEligible(err) {
+		t.Error("403 must be render-eligible")
 	}
 }

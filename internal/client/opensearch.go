@@ -607,6 +607,17 @@ func (c *Client) Obsolete(ctx context.Context, key, reason string) error {
 	if err != nil {
 		return fmt.Errorf("obsolete fact: %w", err)
 	}
+	reason = strings.TrimSpace(reason)
+	if reason != "" && existing.Status == "obsolete" {
+		// Mirror Patch's refusal: a reason belongs to the verified→obsolete
+		// transition. Re-retiring with a reason would append a duplicate notes
+		// line while the journal stays untouched (it fires only on status
+		// changes) — notes would grow audit lines the journal never recorded.
+		return fmt.Errorf("obsolete: fact %q is already obsolete (a reason belongs to the verified→obsolete transition)", key)
+	}
+	// notes is one line per qualifier (see Patch): fold any whitespace run a
+	// caller passes into single spaces before the reason joins the notes.
+	reason = strings.Join(strings.Fields(reason), " ")
 	// The journal snapshot carries the notes as of journal time (a concurrent
 	// atomic append that lands after this Get lags one line; the doc stays
 	// right — see the Patch journal contract).
@@ -757,7 +768,10 @@ func (c *Client) Patch(ctx context.Context, key string, p PatchFields) (PatchRes
 		return PatchResult{}, fmt.Errorf("patch: fact %q is already obsolete (a reason belongs to the verified→obsolete transition)", key)
 	}
 	if statusChanged && p.Status == "obsolete" && p.Reason != "" {
-		retireReason = p.Reason
+		// notes is one line per qualifier: a reason with newlines would
+		// embed a multi-line block and break the "one line, one event"
+		// reading of the audit trail.
+		retireReason = strings.Join(strings.Fields(p.Reason), " ")
 		journalNotes = appendNote(journalNotes, retireReason)
 	}
 

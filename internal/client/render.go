@@ -183,14 +183,29 @@ func renderEgressProxyWith(cfg *config.Config, rawURL string, envProxy func(*htt
 		if perr != nil {
 			return "", nil // NormalizeURL validated the URL; no env decision
 		}
-		evu, eerr := envProxy(&http.Request{Method: http.MethodGet, URL: u})
+		evU, eerr := envProxy(&http.Request{Method: http.MethodGet, URL: u})
 		if eerr != nil {
-			return "", fmt.Errorf("reading the environment proxy: %v (refusing to render direct)", eerr)
+			// Go's proxyparse error text embeds the offending proxy spec —
+			// which can carry credentials. The rule for every message that
+			// reaches agent context: the raw env value is not echoed.
+			return "", fmt.Errorf("the environment proxy is unreadable; refusing to render direct (check HTTP_PROXY/HTTPS_PROXY)")
 		}
-		if evu == nil {
+		if evU == nil {
 			return "", nil
 		}
-		proxy = evu.String()
+		// Validate the STRUCT http.ProxyFromEnvironment produced, not the
+		// string round-trip: Go normalizes a malformed env proxy so the
+		// credentials hide in the path of a re-parse, and a string-level
+		// check would wave that through into obscura's argv (/proc-visible).
+		if verr := config.ValidateProxy(evU); verr != nil {
+			return "", fmt.Errorf("the environment proxy %v; refusing to render direct", verr)
+		}
+		if strings.Contains(evU.String(), "@") {
+			// Defense in depth: a normalized form can hide user info in the
+			// path; no '@' ever reaches the renderer argv.
+			return "", fmt.Errorf("the environment proxy carries user info; refusing to render direct (argv is visible in /proc)")
+		}
+		proxy = evU.String()
 	}
 	if verr := config.ValidateProxyURL(proxy); verr != nil {
 		return "", fmt.Errorf("%v; refusing to render direct", verr)
@@ -230,10 +245,21 @@ func renderSSRFCheck(ctx context.Context, cfg *config.Config, rawURL string) err
 	if rerr != nil {
 		return fmt.Errorf("refusing to render: cannot verify %s is public: %v", host, rerr)
 	}
-	for _, ip := range ips {
-		if blockedIP(ip.IP) {
-			return fmt.Errorf("refusing to render %s: it resolves to the non-public address %s", host, ip.IP)
-		}
+	if bad, blocked := blockedInList(ips); blocked {
+		return fmt.Errorf("refusing to render %s: it resolves to the non-public address %s", host, bad)
 	}
 	return nil
+}
+
+// blockedInList applies the blockedIP rule to every resolved address: one
+// blocked answer in the set is enough to refuse (a hostname with a public
+// and a loopback A record is the DNS-rebinding shape). Extracted so the
+// rule is unit-testable with literal addresses, offline.
+func blockedInList(ips []net.IPAddr) (net.IP, bool) {
+	for _, ip := range ips {
+		if blockedIP(ip.IP) {
+			return ip.IP, true
+		}
+	}
+	return nil, false
 }

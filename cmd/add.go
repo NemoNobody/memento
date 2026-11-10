@@ -32,10 +32,13 @@ func AddCmd() *cobra.Command {
 			key, value, category := args[0], args[1], args[2]
 			// Validate the shape before guard and store: an empty key produces
 			// a cryptic store error, and an unknown category never ages
-			// (silent rot). The MCP server enforces the same checks.
+			// (silent rot). The MCP server enforces the same checks. Keys are
+			// stored trimmed: a raw " k " would create a second document the
+			// MCP edge (which trims) can never find.
 			if strings.TrimSpace(key) == "" {
 				fatalErr(errors.New("key must not be empty"))
 			}
+			key = strings.TrimSpace(key)
 			if strings.TrimSpace(value) == "" {
 				fatalErr(errors.New("value must not be empty"))
 			}
@@ -47,6 +50,13 @@ func AddCmd() *cobra.Command {
 			// never age and never match --category. ValidCategory accepted it
 			// case-insensitively; store the lowercase canonical form.
 			category = strings.ToLower(category)
+			// Project defaults to "global" (the MCP addOne rule): the project
+			// label is a filter, and a document stored under project "" sits
+			// outside every project-scoped navigation.
+			project := strings.TrimSpace(addFlags.project)
+			if project == "" {
+				project = "global"
+			}
 			// Guard before any store contact: a rejected write must not even
 			// create the index (the MCP server enforces the same order).
 			cfg, err := config.LoadConfig()
@@ -56,7 +66,7 @@ func AddCmd() *cobra.Command {
 			if err := guardCheck(cfg.SecretGuard, addFlags.allowSecret,
 				guardField{Name: "key", Text: key},
 				guardField{Name: "value", Text: value},
-				guardField{Name: "project", Text: addFlags.project},
+				guardField{Name: "project", Text: project},
 				guardField{Name: "notes", Text: addFlags.notes},
 				guardField{Name: "summary", Text: addFlags.summary},
 				guardField{Name: "source", Text: addFlags.source}); err != nil {
@@ -67,7 +77,7 @@ func AddCmd() *cobra.Command {
 				fatalErr(err)
 			}
 			ctx := context.Background()
-			f := model.NewFact(key, value, category, addFlags.project, addFlags.source, addFlags.notes)
+			f := model.NewFact(key, value, category, project, addFlags.source, addFlags.notes)
 			f.Summary = addFlags.summary
 			res, err := c.Add(ctx, f)
 			if err != nil {
@@ -87,7 +97,7 @@ func AddCmd() *cobra.Command {
 			b.WriteString(" category=")
 			b.WriteString(strconv.Quote(category))
 			b.WriteString(" project=")
-			b.WriteString(strconv.Quote(addFlags.project))
+			b.WriteString(strconv.Quote(project))
 			b.WriteString("\n")
 			if _, err := io.WriteString(os.Stdout, b.String()); err != nil {
 				fatalErr(err)

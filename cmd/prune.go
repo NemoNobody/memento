@@ -28,7 +28,10 @@ must respect — show the plan to the user, then re-run with --yes only after
 their approval.`,
 		Args: cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-			key := args[0]
+			key := strings.TrimSpace(args[0])
+			if key == "" {
+				fatalErr(errors.New("key is required"))
+			}
 			ctx := context.Background()
 			c, cfg, err := newClientWithConfig()
 			if err != nil {

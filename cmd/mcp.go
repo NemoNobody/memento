@@ -556,6 +556,14 @@ func (s *mcpServer) get(ctx context.Context, req *mcp.CallToolRequest, in getInp
 	for i, k := range in.Keys {
 		in.Keys[i] = strings.TrimSpace(k)
 	}
+	// Every key must survive the trim (validate all up front, before any
+	// store contact): a keys list carrying " " would otherwise serve the keys
+	// before it and fail the call only after touching the store.
+	for i, k := range in.Keys {
+		if k == "" {
+			return nil, getOutput{}, fmt.Errorf("memento_get: empty key in keys at index %d", i)
+		}
+	}
 	hasKey := in.Key != ""
 	if hasKey == (len(in.Keys) > 0) {
 		return nil, getOutput{}, fmt.Errorf("memento_get: provide exactly one of key or keys (up to %d)", maxGetKeys)
@@ -570,9 +578,6 @@ func (s *mcpServer) get(ctx context.Context, req *mcp.CallToolRequest, in getInp
 	if len(in.Keys) > 0 {
 		items := make([]itemGet, 0, len(in.Keys))
 		for _, k := range in.Keys {
-			if strings.TrimSpace(k) == "" {
-				return nil, getOutput{}, fmt.Errorf("memento_get: empty key in keys at index %d", len(items))
-			}
 			f, err := c.Get(ctx, k)
 			if errors.Is(err, client.ErrNotFound) {
 				items = append(items, itemGet{Key: k, Found: false})
@@ -915,7 +920,10 @@ type keysInput struct {
 // CLI and MCP share one contract.
 func (s *mcpServer) keys(ctx context.Context, req *mcp.CallToolRequest, in keysInput) (*mcp.CallToolResult, factsOutput, error) {
 	// Validate the query shape before any store contact: a bad query is the
-	// caller's problem, not an availability problem.
+	// caller's problem, not an availability problem. The match is trimmed the
+	// same way the prefix is: store keys are trimmed, and " k " as a wildcard
+	// over trimmed keys answers a silent zero.
+	in.Match = strings.TrimSpace(in.Match)
 	if in.Prefix == "" && in.Match == "" {
 		return nil, factsOutput{}, fmt.Errorf("memento_keys: provide a key prefix and/or a match pattern")
 	}

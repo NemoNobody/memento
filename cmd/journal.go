@@ -2,15 +2,15 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"github.com/NemoNobody/memento/internal/client"
+	"github.com/spf13/cobra"
 	"io"
 	"os"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/NemoNobody/memento/internal/client"
-	"github.com/spf13/cobra"
 )
 
 var journalFlags struct {
@@ -29,7 +29,10 @@ re-confirmation by a different author). Counts after an admin deleted old
 journal indices are lower bounds — the surviving journal, not the lifetime.`,
 		Args: cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-			key := args[0]
+			key := strings.TrimSpace(args[0])
+			if key == "" {
+				fatalErr(errors.New("key is required"))
+			}
 			if journalFlags.limit < 1 {
 				// A zero/negative limit collapsing to the 1000-entry cap reads
 				// as a small page; demand an explicit positive bound.
@@ -101,7 +104,10 @@ entries the app cannot see. Trust them with the category's staleness rule,
 not as lifetime totals.`,
 		Args: cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-			key := args[0]
+			key := strings.TrimSpace(args[0])
+			if key == "" {
+				fatalErr(errors.New("key is required"))
+			}
 			ctx := context.Background()
 			c, err := newClient()
 			if err != nil {

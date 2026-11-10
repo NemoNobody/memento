@@ -2,7 +2,9 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -383,5 +385,93 @@ func TestRenderSlotIsCtxAware(t *testing.T) {
 	}
 	if time.Since(start) > time.Second {
 		t.Errorf("the queue ignored the cancelled context (%v)", time.Since(start))
+	}
+}
+
+// TestRenderEgressEnvProxyHardening pins the struct-level env-proxy
+// validation: Go 1.27's proxy machinery normalizes a malformed env proxy so
+// the credentials hide in the path of String(); a string-level re-validation
+// waves that through and the secret lands in obscura's argv (/proc-visible).
+func TestRenderEgressEnvProxyHardening(t *testing.T) {
+	cfg := config.DefaultConfig()
+
+	// The classic credential form: the parsed struct carries User.
+	cred := func(*http.Request) (*url.URL, error) {
+		return &url.URL{Scheme: "http", User: url.UserPassword("user", "sekret"), Host: "env:3128"}, nil
+	}
+	if _, err := renderEgressProxyWith(cfg, "https://example.com/x", cred); err == nil {
+		t.Error("env proxy with user info must fail the render")
+	} else if strings.Contains(err.Error(), "sekret") {
+		t.Errorf("credential leaked into the message: %v", err)
+	}
+
+	// The normalized-mangle shape: User==nil, the credential hides in the
+	// path. A string re-parse passes every field check; the '@' defense must
+	// refuse it.
+	mangled := func(*http.Request) (*url.URL, error) {
+		return &url.URL{Scheme: "http", Host: "http", Path: "//user:sekret@p:3128;"}, nil
+	}
+	if _, err := renderEgressProxyWith(cfg, "https://example.com/x", mangled); err == nil {
+		t.Error("normalized mangle with '@' in the path must fail the render")
+	} else if strings.Contains(err.Error(), "sekret") {
+		t.Errorf("credential leaked into the message: %v", err)
+	}
+
+	// A well-formed socks5 env proxy is forwarded verbatim (obscura must
+	// support the scheme; documented in docs/setup.md).
+	socks := func(*http.Request) (*url.URL, error) {
+		return url.Parse("socks5://env:1080")
+	}
+	p, err := renderEgressProxyWith(cfg, "https://example.com/x", socks)
+	if err != nil || p != "socks5://env:1080" {
+		t.Errorf("socks5 env proxy: %q %v", p, err)
+	}
+
+	// The env-parser error text embeds the offending spec (credentials
+	// possible): the message is fixed and does not echo it.
+	loud := func(*http.Request) (*url.URL, error) {
+		return nil, errors.New(`proxy file line "http://user:sekret@p:3128" is invalid`)
+	}
+	if _, err := renderEgressProxyWith(cfg, "https://example.com/x", loud); err == nil {
+		t.Error("env proxy parse error must fail the render")
+	} else if strings.Contains(err.Error(), "sekret") {
+		t.Errorf("raw env value echoed into the message: %v", err)
+	}
+}
+
+// TestRenderSSRFCheckEmptyHost pins the empty-host refusal; the SSRF gate
+// runs before obscura spawns, so a URL with no host must never reach it.
+func TestRenderSSRFCheckEmptyHost(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.FetchRender = config.RenderObscura
+	if err := renderSSRFCheck(context.Background(), cfg, "http://:8080/x"); err == nil {
+		t.Error("empty host must be refused")
+	}
+}
+
+// TestBlockedInList pins the "one blocked answer is enough" rule with
+// literal addresses (no DNS): a hostname answering both a public and a
+// non-public A record — the DNS-rebinding shape — must refuse.
+func TestBlockedInList(t *testing.T) {
+	cases := []struct {
+		name  string
+		ips   []net.IPAddr
+		want  bool
+		badIP string
+	}{
+		{"all public", []net.IPAddr{{IP: net.ParseIP("93.184.216.34")}}, false, ""},
+		{"public plus loopback", []net.IPAddr{{IP: net.ParseIP("93.184.216.34")}, {IP: net.ParseIP("127.0.0.1")}}, true, "127.0.0.1"},
+		{"metadata endpoint", []net.IPAddr{{IP: net.ParseIP("169.254.169.254")}}, true, "169.254.169.254"},
+		{"loopback v6", []net.IPAddr{{IP: net.ParseIP("::1")}}, true, "::1"},
+		{"empty", nil, false, ""},
+	}
+	for _, tc := range cases {
+		bad, blocked := blockedInList(tc.ips)
+		if blocked != tc.want {
+			t.Errorf("%s: blocked = %v, want %v", tc.name, blocked, tc.want)
+		}
+		if tc.want && (bad == nil || bad.String() != tc.badIP) {
+			t.Errorf("%s: reported address = %v, want %s", tc.name, bad, tc.badIP)
+		}
 	}
 }

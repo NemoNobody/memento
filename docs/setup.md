@@ -332,7 +332,12 @@ consults it for the target (the plain transport honors it, so the render must
 not run direct behind it). A proxy URL that cannot be forwarded (credentials
 in the URL, a scheme-less value like `host:3128`) is a **config load error**
 for every command — the render never falls back to direct egress behind your
-back.
+back. The environment proxy is read through Go's standard proxy machinery,
+which normalizes malformed values; the render validates the **parsed struct**,
+so a credential hidden in a normalized path never reaches the renderer argv
+(`/proc`-visible). `NO_PROXY` applies to the render as well: the renderer
+shares the plain transport's egress decision. An explicit `socks5://` proxy is
+forwarded to obscura verbatim — the renderer must support the scheme.
 
 SSRF: the plain fetch refuses internal addresses at dial time (loopback,
 RFC1918, link-local/cloud metadata), and a host refused that way fails as a

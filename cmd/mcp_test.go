@@ -761,3 +761,23 @@ func TestMCPServerGetKeysCapOffline(t *testing.T) {
 		t.Errorf("keys cap not enforced: %s", toolText(res))
 	}
 }
+
+// TestNewFactViewCompactDropsHistory pins the context-economy rule: compact
+// rows are a table of contents; the history chain is the most expensive
+// field in the payload, so compact implies no history even when the caller
+// asked for it.
+func TestNewFactViewCompactDropsHistory(t *testing.T) {
+	now := time.Now().UTC()
+	f := model.Fact{
+		Key: "k", Value: "v", Category: "config", Project: "p", Status: "verified",
+		CreatedAt: now, UpdatedAt: now, ObservedAt: now,
+	}
+	v := newFactView(f, true, true)
+	if v.History != nil {
+		t.Errorf("compact row must carry no history, got %+v", v.History)
+	}
+	full := newFactView(f, true, false)
+	if full.History == nil {
+		t.Error("full row with include_history must carry the history block")
+	}
+}

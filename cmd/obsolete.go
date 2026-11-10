@@ -2,12 +2,12 @@ package cmd
 
 import (
 	"context"
+	"errors"
+	"github.com/NemoNobody/memento/internal/config"
+	"github.com/spf13/cobra"
 	"os"
 	"strconv"
-
-	"github.com/NemoNobody/memento/internal/config"
-
-	"github.com/spf13/cobra"
+	"strings"
 )
 
 var obsoleteFlags struct {
@@ -20,7 +20,10 @@ func ObsoleteCmd() *cobra.Command {
 		Short: "Mark a fact obsolete because its subject is gone",
 		Args:  cobra.RangeArgs(1, 2),
 		Run: func(cmd *cobra.Command, args []string) {
-			key := args[0]
+			key := strings.TrimSpace(args[0])
+			if key == "" {
+				fatalErr(errors.New("key is required"))
+			}
 			reason := ""
 			if len(args) == 2 {
 				reason = args[1]
