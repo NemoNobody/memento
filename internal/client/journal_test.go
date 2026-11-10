@@ -689,3 +689,104 @@ func TestAppendJournalPinsPipelineOnExistingIndex(t *testing.T) {
 		t.Errorf("settings body must wire the ts pipeline: %s", puts[0].Body)
 	}
 }
+
+// TestScanAllFactsEmptyProjectScansAll: the default migrate-history scope
+// must scan every project. A term{"project":""} filter matches no document
+// (writers always store a non-empty project), so an empty project omits the
+// scope filter instead of emptying it — otherwise the one-time migration
+// silently no-ops and reports "scanned: 0".
+func TestScanAllFactsEmptyProjectScansAll(t *testing.T) {
+	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
+		if r.Method == http.MethodPost && r.Path == "/memento/_search" {
+			return http.StatusOK, `{"took":1,"hits":{"total":{"value":1,"relation":"eq"},"hits":[
+				{"_index":"memento","_id":"k","_source":{"fact_id":"i","key":"k","project":"p1","value":"v","category":"config","status":"verified"}}]}}`
+		}
+		return http.StatusInternalServerError, `{"status":500,"error":"unexpected: ` + r.Method + " " + r.Path + `"}`
+	})
+	facts, _, err := c.ScanAllFacts(context.Background(), "")
+	if err != nil {
+		t.Fatalf("ScanAllFacts: %v", err)
+	}
+	if len(facts) != 1 {
+		t.Fatalf("facts = %d, want 1: an empty project must scan all projects", len(facts))
+	}
+	reqs := fake.requestsFor(http.MethodPost, "/memento/_search")
+	if len(reqs) != 1 {
+		t.Fatalf("searches = %d, want 1", len(reqs))
+	}
+	if strings.Contains(reqs[0].Body, `"project"`) {
+		t.Errorf("empty-project scan must omit the project term filter, body=%s", reqs[0].Body)
+	}
+	if !strings.Contains(reqs[0].Body, "match_all") {
+		t.Errorf("empty-project scan must match all documents, body=%s", reqs[0].Body)
+	}
+	if _, _, err := c.ScanAllFacts(context.Background(), "p1"); err != nil {
+		t.Fatalf("ScanAllFacts scoped: %v", err)
+	}
+	reqs = fake.requestsFor(http.MethodPost, "/memento/_search")
+	if len(reqs) != 2 {
+		t.Fatalf("searches = %d, want 2", len(reqs))
+	}
+	if !strings.Contains(reqs[1].Body, `"term":{"project":"p1"}`) {
+		t.Errorf("scoped scan must keep the project term filter, body=%s", reqs[1].Body)
+	}
+}
+
+// TestMigrateFactLinkedWithArrayAppendsOnlyHistory: a fact that already
+// carries current_ref but still carries the legacy array gets the array
+// entries and nothing else — no fabricated duplicate of the current value,
+// no re-link (the script keeps the live ref) — and its array is removed.
+func TestMigrateFactLinkedWithArrayAppendsOnlyHistory(t *testing.T) {
+	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
+		if code, body := journalInfraOK(r); code != http.StatusInternalServerError {
+			return code, body
+		}
+		switch {
+		case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-"):
+			return http.StatusOK, `{"_id":"entry","result":"created"}`
+		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+		}
+		return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Path + `"}`
+	})
+	f := model.NewFact("k", "v-current", "config", "p", "s", "")
+	f.CurrentRef = "live-ref"
+	f.History = []model.HistoryEntry{
+		{Value: "v1", ObservedAt: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), Source: "a"},
+	}
+	appended, err := c.MigrateFact(context.Background(), f, time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("MigrateFact: %v", err)
+	}
+	if appended != 1 {
+		t.Errorf("appended = %d, want 1 (array entry only, the linked current value is already journaled)", appended)
+	}
+	appends := journalAppends(fake)
+	if len(appends) != 1 {
+		t.Fatalf("journal writes = %d, want 1", len(appends))
+	}
+	if strings.Contains(appends[0].Body, "v-current") {
+		t.Errorf("must not re-journal the linked current value, body=%s", appends[0].Body)
+	}
+	updates := fake.requestsFor(http.MethodPost, "/memento/_update/k")
+	if len(updates) != 1 {
+		t.Fatalf("fact updates = %d, want 1 (the array must still be removed)", len(updates))
+	}
+	if !strings.Contains(updates[0].Body, "current_ref == null") {
+		t.Errorf("link script must stay conditional (live ref untouched), body=%s", updates[0].Body)
+	}
+
+	// A fully migrated fact (linked, no array) is a no-op: no further
+	// appends, no further update request.
+	full := model.NewFact("k2", "v", "config", "p", "s", "")
+	full.CurrentRef = "live-ref"
+	if n, err := c.MigrateFact(context.Background(), full, time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC)); err != nil || n != 0 {
+		t.Errorf("fully migrated fact: n=%d err=%v, want 0/no error", n, err)
+	}
+	if got := len(journalAppends(fake)); got != 1 {
+		t.Errorf("journal writes after no-op = %d, want still 1", got)
+	}
+	if got := len(fake.requestsFor(http.MethodPost, "/memento/_update/k")); got != 1 {
+		t.Errorf("updates after no-op = %d, want still 1", got)
+	}
+}

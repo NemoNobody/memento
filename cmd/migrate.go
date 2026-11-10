@@ -8,12 +8,44 @@ import (
 	"strings"
 	"time"
 
+	"github.com/NemoNobody/memento/internal/model"
 	"github.com/spf13/cobra"
 )
 
 var migrateFlags struct {
 	project string
 	yes     bool
+}
+
+// needsMigration reports whether one fact still carries work for the
+// journal migration. A fact that is journal-linked (current_ref set) AND no
+// longer carries the legacy history array is done. A linked fact that still
+// carries the array is NOT done: an early migration pass or a post-upgrade
+// edit linked the ref but left the array behind, and only this migration
+// removes it.
+func needsMigration(f model.Fact) bool {
+	return f.CurrentRef == "" || len(f.History) > 0
+}
+
+// planMigrate computes the plan counters over a scanned page: facts to
+// touch, journal entries the touch will append (the legacy entries, plus
+// one for the current value only while the fact is still unlinked), and
+// facts already done. Keeping the counters next to needsMigration pins
+// plan/execute agreement: the plan a user approves must match what --yes
+// writes.
+func planMigrate(facts []model.Fact) (toMigrate, entries, skipped int) {
+	for _, f := range facts {
+		if !needsMigration(f) {
+			skipped++
+			continue
+		}
+		toMigrate++
+		entries += len(f.History)
+		if f.CurrentRef == "" {
+			entries++
+		}
+	}
+	return toMigrate, entries, skipped
 }
 
 func MigrateHistoryCmd() *cobra.Command {
@@ -37,21 +69,14 @@ no mixed readers to stage around.`,
 			if err != nil {
 				fatalErr(err)
 			}
+			// Project labels are stored trimmed; the term filter is
+			// whitespace-exact (the CLI trimming contract).
+			migrateFlags.project = strings.TrimSpace(migrateFlags.project)
 			facts, meta, err := c.ScanAllFacts(ctx, migrateFlags.project)
 			if err != nil {
 				fatalErr(err)
 			}
-			var toMigrate int
-			var entries int
-			var skipped int
-			for _, f := range facts {
-				if f.CurrentRef != "" {
-					skipped++ // already journal-linked
-					continue
-				}
-				toMigrate++
-				entries += len(f.History) + 1
-			}
+			toMigrate, entries, skipped := planMigrate(facts)
 			var b strings.Builder
 			b.WriteString("facts scanned: ")
 			b.WriteString(strconv.Itoa(len(facts)))
@@ -69,7 +94,7 @@ no mixed readers to stage around.`,
 			b.WriteString(strconv.Itoa(entries))
 			b.WriteString(" journal entries\n")
 			if skipped > 0 {
-				b.WriteString("already linked (skipped): ")
+				b.WriteString("already migrated (skipped): ")
 				b.WriteString(strconv.Itoa(skipped))
 				b.WriteString("\n")
 			}
@@ -92,7 +117,7 @@ no mixed readers to stage around.`,
 			now := time.Now().UTC()
 			var done, failed int
 			for _, f := range facts {
-				if f.CurrentRef != "" {
+				if !needsMigration(f) {
 					continue
 				}
 				if _, err := c.MigrateFact(ctx, &f, now); err != nil {

@@ -488,11 +488,17 @@ func (c *Client) PruneJournal(ctx context.Context, key string, keep int) (int, e
 // journalInfraMu lives on the Client (see opensearch.go); journal infra is
 // (re)installed until it succeeds (see ensureJournalInfra).
 
-// MigrateFact moves one fact's in-doc history array into the journal
-// (big-bang migration, one-time): history entries become op=write entries
-// in oldest-first order, the current value gets its own entry, current_ref
-// points at it, and the array is removed from _source. It returns the
-// number of journal entries appended.
+// MigrateFact finishes one fact's journal migration (big-bang migration,
+// one-time): legacy in-doc history entries become op=write journal entries
+// in oldest-first order, the current value gets its own entry when the fact
+// is not linked yet, current_ref points at it, and the array is removed
+// from _source. It returns the number of journal entries appended.
+//
+// A fact that already carries current_ref but still has the legacy array
+// (a post-upgrade edit linked the ref but left the array behind, or an
+// earlier rerun died before the array was dropped) gets ONLY the array
+// entries appended: re-appending the current value would fabricate a
+// duplicate journal entry, and the link script keeps a live ref untouched.
 //
 // The appends use deterministic doc ids (journalEntryID) AND target the
 // index derived from the same stored time: a rerun after a partial failure
@@ -506,8 +512,8 @@ func (c *Client) PruneJournal(ctx context.Context, key string, keep int) (int, e
 // the fact carries a fresher ref (the migration's snapshot predates it),
 // and overwriting it would point the new value at the old journal entry.
 func (c *Client) MigrateFact(ctx context.Context, f *model.Fact, now time.Time) (int, error) {
-	if f.CurrentRef != "" {
-		return 0, nil // already migrated (journal-first facts have a ref)
+	if f.CurrentRef != "" && len(f.History) == 0 {
+		return 0, nil // fully migrated: linked, the array is already gone
 	}
 	// The migration runner authors the appended entries: the original writers
 	// predate the journal and left no per-entry labels, and an entry must
@@ -539,25 +545,30 @@ func (c *Client) MigrateFact(ctx context.Context, f *model.Fact, now time.Time) 
 		}
 		appended++
 	}
-	ts := f.ObservedAt
-	if ts.IsZero() {
-		ts = f.UpdatedAt
+	ref := f.CurrentRef
+	if f.CurrentRef == "" {
+		// The current value gets its own entry only while the fact is
+		// unlinked: a linked fact's current version is already journaled.
+		ts := f.ObservedAt
+		if ts.IsZero() {
+			ts = f.UpdatedAt
+		}
+		if ts.IsZero() {
+			ts = now
+		}
+		idTs := f.ObservedAt
+		if idTs.IsZero() {
+			idTs = f.UpdatedAt
+		}
+		cur := model.NewJournalEntry(f.Key, f.FactID, f.Project, f.Category, model.OpWrite, f.Value, f.Notes, f.Source, ts)
+		info.applyTo(cur)
+		ref = journalEntryID(f.Key, model.OpWrite, f.Value, f.Notes, f.Source, idTs)
+		curIdx := journalIndexName(c.cfg.IndexName, c.cfg.HistoryIndexPeriod, idTs)
+		if _, err := c.appendJournalID(ctx, cur, ref, curIdx); err != nil {
+			return appended, fmt.Errorf("migrate %q: current entry: %w", f.Key, err)
+		}
+		appended++
 	}
-	if ts.IsZero() {
-		ts = now
-	}
-	idTs := f.ObservedAt
-	if idTs.IsZero() {
-		idTs = f.UpdatedAt
-	}
-	cur := model.NewJournalEntry(f.Key, f.FactID, f.Project, f.Category, model.OpWrite, f.Value, f.Notes, f.Source, ts)
-	info.applyTo(cur)
-	ref := journalEntryID(f.Key, model.OpWrite, f.Value, f.Notes, f.Source, idTs)
-	curIdx := journalIndexName(c.cfg.IndexName, c.cfg.HistoryIndexPeriod, idTs)
-	if _, err := c.appendJournalID(ctx, cur, ref, curIdx); err != nil {
-		return appended, fmt.Errorf("migrate %q: current entry: %w", f.Key, err)
-	}
-	appended++
 
 	body, _ := json.Marshal(map[string]interface{}{
 		"script": map[string]interface{}{
@@ -587,5 +598,20 @@ if (ctx._source.updated_at == null || params.updated_at.compareTo(ctx._source.up
 // ScanAllFacts returns every fact (size cap NavSizeCap) for migration
 // planning and execution; project == "" scans all projects.
 func (c *Client) ScanAllFacts(ctx context.Context, project string) ([]model.Fact, SearchMeta, error) {
+	if project == "" {
+		return c.search(ctx, buildScanAllBody())
+	}
 	return c.search(ctx, buildProjectBody(project, "", "key"))
+}
+
+// buildScanAllBody is the migration scan over EVERY project. Writers always
+// store a non-empty project, so a term{"project":""} filter would match no
+// document and the default migrate-history run would silently no-op: the
+// scope filter is omitted, not emptied.
+func buildScanAllBody() map[string]interface{} {
+	return map[string]interface{}{
+		"query": map[string]interface{}{"match_all": map[string]interface{}{}},
+		"sort":  []map[string]interface{}{{"key": map[string]interface{}{"order": "asc"}}},
+		"size":  NavSizeCap,
+	}
 }
