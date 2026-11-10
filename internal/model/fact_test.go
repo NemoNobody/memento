@@ -195,6 +195,38 @@ func TestAgeDays(t *testing.T) {
 	}
 }
 
+func TestAgeHours(t *testing.T) {
+	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+
+	fresh := &Fact{Category: "location", ObservedAt: now}
+	if got := fresh.AgeHours(now); got != 0 {
+		t.Errorf("observed now: AgeHours = %d, want 0", got)
+	}
+
+	// The disambiguation the field exists for: age_days cannot tell 1h from
+	// 23h, age_hours can.
+	honour := &Fact{Category: "config", ObservedAt: now.Add(-1 * time.Hour)}
+	if got := honour.AgeHours(now); got != 1 || honour.AgeDays(now) != 0 {
+		t.Errorf("observed 1h ago: AgeHours = %d (AgeDays %d), want 1 (0)", got, honour.AgeDays(now))
+	}
+	dayOld := &Fact{Category: "config", ObservedAt: now.Add(-23 * time.Hour)}
+	if got := dayOld.AgeHours(now); got != 23 || dayOld.AgeDays(now) != 0 {
+		t.Errorf("observed 23h ago: AgeHours = %d (AgeDays %d), want 23 (0)", got, dayOld.AgeDays(now))
+	}
+
+	// A clock skew must not produce a negative age.
+	future := &Fact{Category: "location", ObservedAt: now.Add(time.Hour)}
+	if got := future.AgeHours(now); got != 0 {
+		t.Errorf("observed in the future: AgeHours = %d, want 0", got)
+	}
+
+	// Pre-observed_at facts report -1: the age is unknown, not zero.
+	legacy := &Fact{Category: "location"}
+	if got := legacy.AgeHours(now); got != -1 {
+		t.Errorf("zero observed_at: AgeHours = %d, want -1", got)
+	}
+}
+
 func TestStale(t *testing.T) {
 	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	cases := []struct {

@@ -135,6 +135,21 @@ func (f *Fact) AgeDays(now time.Time) int {
 	return d
 }
 
+// AgeHours returns whole hours since the last observation, or -1 when
+// observed_at is unknown. Fresh facts age in hours, not days: age_days=0
+// cannot tell "just stored" from "23 hours old", and the agent's
+// trust/re-verify decision depends on that difference.
+func (f *Fact) AgeHours(now time.Time) int {
+	if f.ObservedAt.IsZero() {
+		return -1
+	}
+	h := int(now.Sub(f.ObservedAt) / time.Hour)
+	if h < 0 {
+		return 0
+	}
+	return h
+}
+
 // Stale reports whether the fact is past its category TTL and should be
 // re-verified. An unknown observation time is stale by definition: the agent
 // cannot tell how old it is, so it must re-read the source.
