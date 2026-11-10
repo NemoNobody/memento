@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/NemoNobody/memento/internal/config"
 	"github.com/NemoNobody/memento/internal/model"
@@ -258,11 +259,11 @@ func TestAddCorrectionUsesScriptedUpdate(t *testing.T) {
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected"}`
 	})
 
-	created, err := c.Add(context.Background(), model.NewFact("k", "new value", "config", "p", "test:contract", ""))
+	res, err := c.Add(context.Background(), model.NewFact("k", "new value", "config", "p", "test:contract", ""))
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	if created {
+	if res.Created {
 		t.Error("created = true when the fact already existed")
 	}
 
@@ -317,11 +318,11 @@ func TestAddSameValueUpdatesNotesOnly(t *testing.T) {
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected"}`
 	})
 
-	created, err := c.Add(context.Background(), model.NewFact("k", "same", "config", "p", "test:contract", "retouched"))
+	res, err := c.Add(context.Background(), model.NewFact("k", "same", "config", "p", "test:contract", "retouched"))
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	if created {
+	if res.Created {
 		t.Error("created = true for an existing fact")
 	}
 
@@ -424,11 +425,11 @@ func TestAddSendsRefreshWaitForForNewFacts(t *testing.T) {
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected"}`
 	})
 
-	created, err := c.Add(context.Background(), model.NewFact("new", "v", "config", "p", "test:contract", ""))
+	res, err := c.Add(context.Background(), model.NewFact("new", "v", "config", "p", "test:contract", ""))
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	if !created {
+	if !res.Created {
 		t.Error("created = false for a brand-new fact")
 	}
 	puts := fake.requestsFor(http.MethodPut, "/memento/_doc/new")
@@ -473,11 +474,11 @@ func TestAddCreateRaceFallsToCorrection(t *testing.T) {
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected request: ` + r.Method + ` ` + r.Path + `"}`
 	})
 
-	created, err := c.Add(context.Background(), model.NewFact("k", "mine", "config", "p", "test:contract", ""))
+	res, err := c.Add(context.Background(), model.NewFact("k", "mine", "config", "p", "test:contract", ""))
 	if err != nil {
 		t.Fatalf("Add lost the create race: %v", err)
 	}
-	if created {
+	if res.Created {
 		t.Error("created = true; the fact was created by the concurrent winner")
 	}
 	if gets != 2 {
@@ -621,11 +622,15 @@ func TestPruneMissingFactIsNotFound(t *testing.T) {
 }
 
 // TestObsoleteKeepsValueAndAppendsReason pins the obsolete contract: the value
-// and observed_at are left untouched (there is no new observation), and the
-// reason is appended to notes so earlier qualifiers survive.
+// and observed_at are left untouched (there is no new observation), the reason
+// is appended to notes so earlier qualifiers survive, and the transition is
+// journaled (audit symmetry with memento_add/memento_patch).
 func TestObsoleteKeepsValueAndAppendsReason(t *testing.T) {
 	var updateBody string
 	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
+		if code, body := journalRoutesOK(r); code != http.StatusInternalServerError {
+			return code, body
+		}
 		switch {
 		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
 			return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
@@ -665,6 +670,17 @@ func TestObsoleteKeepsValueAndAppendsReason(t *testing.T) {
 	if _, has := doc["observed_at"]; has {
 		t.Error("obsolete must not touch observed_at")
 	}
+	if doc["current_ref"] != "journal-entry-1" {
+		t.Errorf("current_ref = %v, want journal-entry-1: the transition must be journaled", doc["current_ref"])
+	}
+	journalPath := "/memento-history-" + time.Now().UTC().Format("2006.01") + "/_doc"
+	appends := fake.requestsFor(http.MethodPost, journalPath)
+	if len(appends) != 1 {
+		t.Fatalf("journal appends = %d, want 1 (path %s)", len(appends), journalPath)
+	}
+	if !strings.Contains(appends[0].Body, "old note\\nfile deleted") {
+		t.Errorf("journal entry must carry the stated notes: %s", appends[0].Body)
+	}
 }
 
 // TestObsoleteMissingFactIsNotFound keeps the MCP handler's errors.Is check
@@ -690,7 +706,7 @@ func TestListPrefixScope(t *testing.T) {
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected request: ` + r.Method + ` ` + r.Path + `"}`
 	})
 
-	if _, _, err := c.List(context.Background(), "memento", "memento:state:*"); err != nil {
+	if _, _, err := c.List(context.Background(), "memento", "memento:state:*", "key"); err != nil {
 		t.Fatalf("List: %v", err)
 	}
 	reqs := fake.requestsFor(http.MethodPost, "/memento/_search")
@@ -721,7 +737,7 @@ func TestListPrefixScope(t *testing.T) {
 	fake.requests = nil
 	fake.mu.Unlock()
 
-	if _, _, err := c.List(context.Background(), "memento", "a*b"); err == nil {
+	if _, _, err := c.List(context.Background(), "memento", "a*b", "key"); err == nil {
 		t.Error("List with middle * must fail")
 	}
 	if len(fake.requestsFor(http.MethodPost, "/memento/_search")) != 0 {

@@ -38,6 +38,37 @@ Authorship and summary:
   `summary_max_len`; env `MEMENTO_AUTHOR`/`MEMENTO_MODEL`/`MEMENTO_HOST`/
   `MEMENTO_SESSION`/`MEMENTO_SUMMARY_MIN_LEN`/`MEMENTO_SUMMARY_MAX_LEN`.
   `memento status` reports the effective author and its chain.
+
+MCP ergonomics (context economy, partial updates, batch):
+- `memento_list` is **compact by default** (`compact: false` restores full
+  rows) and **sorted by `updated_at` desc** by default (`sort: "key"` for the
+  old stable order). A compact row carries key/summary/category/status/
+  notes-head/age; the full value is one `memento_get` away (~5x tokens saved
+  on the most expensive call in a session). `memento_keys` is always compact.
+  **Breaking** for clients relying on full rows / key order.
+- New `memento_patch`: partial update of an existing fact — value, summary,
+  source, notes replace, atomic `notes_append` (dated line, applied
+  server-side so concurrent writers cannot drop a note), status flip
+  (a transition is journaled; obsolete→verified sets `observed_at=now`;
+  `reason` goes with obsolete). On a value change the old summary is cleared
+  unless a new one is provided (a stale table of contents is a lie).
+- New `memento_add_batch` (1..10 facts per call, the session-end ritual in
+  one round-trip): per-item guard and `confirm_secret`, duplicate keys
+  rejected, partial success reported per item.
+- `memento_get` accepts `keys: [...]` (up to 10) for batch reads
+  (`items[]` with per-key `found`).
+- `memento_add` answers say what happened: `created`, `changed` (false =
+  same-value touch) and `previous_summary` (the superseded table of
+  contents). `memento_obsolete`/status flips are journaled (audit symmetry).
+- `memento_search_docs` hits carry the MATCHED section (`section: {order,
+  heading, snippet}` centered on the match) — `memento_get_doc(section=order)`
+  reads it in full; doc-level snippet remains the fallback.
+- `memento_search`/`memento_list` zero-hit answers carry a navigation `hint`;
+  `memento_search` gained `compact: true` for value-free rows.
+- `memento_status` reports `mcp_version`, `commit`, `started_at` (the running
+  binary, not the repo on disk); `version` renamed to `opensearch_version`.
+  **Breaking** for clients reading `version`.
+- 15 MCP tools.
 - Docs: least-privilege store user guide for clusters with the security
   plugin (role/user/role-mapping recipes; the app role cannot delete the
   facts index; `indices:admin/get` + per-pattern create/settings/update

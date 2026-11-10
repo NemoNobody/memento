@@ -13,10 +13,14 @@ provenance-carrying memory. Keep it where your agent reads its rules:
 Paste this into your always-on rules:
 
 ```
-- Start of a session in a project → `memento_list <project>` (always).
+- Start of a session in a project → `memento_list <project>` (always; compact
+  by default — a table of contents, newest-activity first; `memento_get` reads
+  any row in full).
+- End of a session → `memento_add_batch` with the state facts (open-items,
+  git-state) — one round-trip.
 - Before re-verifying something → `memento_search <query>` / `memento_get <key>`; after verifying something new → `memento_add`. Keys are navigated with `memento_keys` (search matches values/notes/summaries, not keys).
 - Value changed → correct via the same key; the accepted value is appended to the history journal. A key names a stable subject — predictable English, not a value (`proj:api:port`, not `proj:api:v1`).
-- Qualifiers and doubts → `notes` ("checked the dev config only"). Subject gone → `memento_obsolete <key> [reason]`.
+- Qualifiers and doubts → `notes` ("checked the dev config only"); the cheap qualifier update is `memento_patch` with `notes_append` (dated line, atomic, no value resend). Subject gone → `memento_obsolete <key> [reason]`.
 - Long value (over `summary_min_len`) → `memento_add` requires a `summary`: a short table-of-contents rendering (under `summary_max_len`) — search/find by summary, read the full value by key.
 - Reads return the current value only (`stale`/`age_days` included); history costs context — use `memento_history_info` (cheap counts) and `memento_journal` (the entries) only when the history matters. `stale: true` → re-verify against the source before trusting.
 - `memento_prune` is destructive and manual (the journal is write-forever by design): without `confirm: true` it only returns the plan; show the plan to the user and confirm only after their approval.
@@ -42,6 +46,8 @@ staleness in context. The store never decides.
 | `memento_search <query>` | search in `value`, `notes` and `summary` (not in keys) |
 | `memento_get <key>` | exact key (`found=false` when absent) |
 | `memento_add <key> <value> [category] [project] [source] [notes]` | upsert (categories: location, config, endpoint, behavior, context_map — unknown ones are rejected); long values require a `summary` (see below) |
+| `memento_add_batch` | 1..10 facts in one call (session-end ritual); per-item guard, partial success |
+| `memento_patch` | partial update of an existing fact: `notes_append`, status flip (`verified`\|`obsolete`), value/source — omitted fields untouched |
 | `memento_history_info <key>` | cheap history overview: writes, rediscoveries, first/last — no entry bodies |
 | `memento_journal <key> [limit]` | the journal: every accepted value, newest first (read it only when the history matters) |
 | `memento_prune <key> [keep]` | drop old journal entries (destructive: plan first, `confirm=true` only after the user approves) |

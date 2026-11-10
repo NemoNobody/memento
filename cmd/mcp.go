@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/NemoNobody/memento/internal/client"
 	"github.com/NemoNobody/memento/internal/config"
@@ -91,17 +93,20 @@ func runMCPServer(confPath string) error {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "memento_search",
 		Description: "Search stored facts by text. Looks in fact values, notes and summaries " +
-			"only — it does NOT match keys, so use memento_get for an exact key. " +
-			"By default returns only trusted ('verified') facts; obsolete facts are " +
-			"superseded and must not be treated as current. History is omitted " +
-			"unless include_history=true. Answers carry age_days/stale: a stale fact " +
+			"only — it does NOT match keys, so use memento_get for an exact key " +
+			"(memento_keys navigates keys by pattern). By default returns only " +
+			"trusted ('verified') facts; obsolete facts are superseded and must not " +
+			"be treated as current. History is omitted unless include_history=true. " +
+			"compact=true drops full values (rows scan cheap; memento_get reads). " +
+			"Answers carry age_days/stale: a stale fact " +
 			"must be re-verified against the source before being trusted.",
 	}, s.search)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "memento_get",
-		Description: "Get one fact by its exact key. Returns found=false when there " +
-			"is no such fact (that is not an error). History is omitted unless " +
+		Description: "Get facts by exact key: key=... for one fact (found=false when " +
+			"there is no such fact — that is not an error), keys=[...] for a batch of " +
+			"up to 10 (items[] with per-key found). History is omitted unless " +
 			"include_history=true. Answers carry age_days/stale: a stale fact must be " +
 			"re-verified against the source before being trusted.",
 	}, s.get)
@@ -112,21 +117,55 @@ func runMCPServer(confPath string) error {
 			"values, behavior. Re-use the same key to correct a fact — the " +
 			"accepted value is appended to the history journal and the fact " +
 			"points at it. Re-adding the same value is a notes/source touch: no " +
-			"journal entry, observed_at stays, status returns to verified " +
-			"(resurrects an obsolete fact), updated_by moves. Values longer " +
+			"journal entry, observed_at stays (staleness keeps aging — a re-read " +
+			"is not a re-verification), status returns to verified " +
+			"(resurrects an obsolete fact), updated_by moves. The answer says " +
+			"what happened: created/changed (changed=false is a same-value " +
+			"touch) and previous_summary names the superseded version. Values longer " +
 			"than summary_min_len " +
 			"require a summary (kept under summary_max_len): it is the " +
-			"store's table of contents. Never store secrets (passwords, " +
-			"tokens, keys): the store is plaintext and a secret_guard rejects " +
-			"credential-like text on writes.",
+			"store's table of contents. For cheap partial updates (dated note, " +
+			"status flip) use memento_patch — no value resend. Never store " +
+			"secrets (passwords, tokens, keys): the store is plaintext and a " +
+			"secret_guard rejects credential-like text on writes.",
 	}, s.add)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "memento_add_batch",
+		Description: "Store 1..10 facts in one call (the session-end ritual: " +
+			"open-items, git-state, ... in a single round-trip). Per-item guard " +
+			"and confirm_secret (one approved false positive never whitewashes " +
+			"the rest); duplicate keys are rejected; partial success is legal — " +
+			"the per-item answer says created/changed/error for each. Same " +
+			"semantics as memento_add.",
+	}, s.addBatch)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "memento_patch",
+		Description: "Partial update of an EXISTING fact (never creates — use " +
+			"memento_add): change value/summary/source, replace notes, append a " +
+			"dated note line (notes_append — the cheap qualifier update, atomic " +
+			"server-side), flip status (verified|obsolete; a transition is " +
+			"journaled, obsolete→verified sets observed_at=now; reason goes with " +
+			"obsolete). Omitted fields are untouched. Journal semantics match " +
+			"memento_add: value changes and status transitions append entries, " +
+			"notes/summary/source moves are touches. On a value change the old " +
+			"summary is CLEARED unless you pass a new one (a stale table of " +
+			"contents is a lie).",
+	}, s.patch)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "memento_list",
 		Description: "List the facts stored for a project. Defaults to trusted " +
 			"('verified') facts only. prefix keeps only keys starting with it " +
 			"(trailing * allowed; keys conventionally start with the project " +
-			"name, e.g. prefix '<project>:state:'). History is omitted unless " +
+			"name, e.g. prefix '<project>:state:'). COMPACT by default: key/summary/" +
+			"category/status/notes-head/age rows (a project listing is the most " +
+			"expensive agent call otherwise — full values cost ~5x); compact=false " +
+			"restores full rows, memento_get reads any single fact. SORT by default " +
+			"updated (newest activity first: 'what moved since last session'; note " +
+			"a same-value touch moves updated_at without changing age/stale); " +
+			"sort=key for stable navigation. History is omitted unless " +
 			"include_history=true.",
 	}, s.list)
 
@@ -136,7 +175,9 @@ func runMCPServer(confPath string) error {
 			"e.g. 'proj:foo:loc:') and/or match (key substring; * and ? wildcards). " +
 			"At least one is required; results are sorted by key. The key-level " +
 			"navigation tool — use it to scope before memento_list/get; project is " +
-			"an optional extra filter. Defaults to trusted ('verified') facts only.",
+			"an optional extra filter. Rows are compact (key/summary/age: " +
+			"navigation is scanned, not read). Defaults to trusted ('verified') " +
+			"facts only.",
 	}, s.keys)
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -151,9 +192,10 @@ func runMCPServer(confPath string) error {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "memento_obsolete",
 		Description: "Mark a fact obsolete because its subject is gone (file " +
-			"deleted, endpoint removed). Use memento_add instead when the value " +
-			"merely changed — corrections move the old value to history. The value " +
-			"is kept for reference; the reason is appended to notes.",
+			"deleted, endpoint removed). Use memento_add when the value " +
+			"changed, memento_patch to flip status — the transition is journaled " +
+			"either way. The value is kept for reference; the reason is appended " +
+			"to notes.",
 	}, s.obsolete)
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -203,8 +245,10 @@ func runMCPServer(confPath string) error {
 		Name: "memento_search_docs",
 		Description: "BM25 search over stored page snapshots (section text only; " +
 			"the raw html is write-only and never searched). Returns hash+url+title+" +
-			"snippet per doc; pull full text with memento_get_doc. Complements " +
-			"memento_search, which searches verified facts, not pages.",
+			"project per doc, with the MATCHED section (order, heading, a snippet " +
+			"centered on the match): memento_get_doc(hash, section=order) reads that " +
+			"section in full. Complements memento_search, which searches verified " +
+			"facts, not pages.",
 	}, s.searchDocs)
 
 	err := srv.Run(context.Background(), &mcp.StdioTransport{})
@@ -238,9 +282,12 @@ type historyView struct {
 
 // factView is the MCP-facing shape of a fact: a stable contract for clients
 // (RFC3339 timestamps, no internal fields) rather than the internal model.
+// In compact mode most fields carry omitempty so the JSON drops them: the
+// compact view is a table of contents (key, summary, state, age), the full
+// value is one memento_get away.
 type factView struct {
 	Key          string        `json:"key" jsonschema:"stable fact key, e.g. proj:foo:loc:bar.py"`
-	Value        string        `json:"value" jsonschema:"the fact itself"`
+	Value        string        `json:"value,omitempty" jsonschema:"the fact itself (compact mode: only a 100-rune head when the fact has no summary)"`
 	Category     string        `json:"category" jsonschema:"location | config | endpoint | behavior | context_map"`
 	Project      string        `json:"project" jsonschema:"project name, or 'global'"`
 	Status       string        `json:"status" jsonschema:"verified | obsolete"`
@@ -249,13 +296,13 @@ type factView struct {
 	Author       string        `json:"author,omitempty" jsonschema:"who recorded the fact (self-reported label, not authentication); the author_source field names the chain that produced it"`
 	AuthorSource string        `json:"author_source,omitempty" jsonschema:"security | config | os | none — which chain link named the author"`
 	UpdatedBy    string        `json:"updated_by,omitempty" jsonschema:"self-reported label of the last writer; the birth author fields are write-once"`
-	Notes        string        `json:"notes,omitempty" jsonschema:"qualifiers: what was checked, how far, caveats"`
+	Notes        string        `json:"notes,omitempty" jsonschema:"qualifiers: what was checked, how far, caveats (compact mode: first 100 runes)"`
 	ObservedAt   string        `json:"observed_at" jsonschema:"RFC3339 when the current value was observed"`
 	AgeDays      int           `json:"age_days" jsonschema:"whole days since the observation; -1 when observed_at is unknown"`
 	Stale        bool          `json:"stale" jsonschema:"true when age passes the category TTL (config/endpoint 14d, location/behavior 30d, context_map never) — re-verify against the source before trusting"`
 	History      []historyView `json:"history,omitempty" jsonschema:"previous observations, oldest first; present only when include_history=true"`
-	CreatedAt    string        `json:"created_at" jsonschema:"RFC3339 creation time"`
-	UpdatedAt    string        `json:"updated_at" jsonschema:"RFC3339 last update time"`
+	CreatedAt    string        `json:"created_at,omitempty" jsonschema:"RFC3339 creation time (dropped in compact mode)"`
+	UpdatedAt    string        `json:"updated_at" jsonschema:"RFC3339 last update time; a same-value touch moves it (age/stale do not)"`
 }
 
 // rfc3339OrEmpty formats t for the MCP contract, or returns "" when t is the
@@ -267,12 +314,30 @@ func rfc3339OrEmpty(t time.Time) string {
 	return t.Format(time.RFC3339)
 }
 
+// truncRunes keeps the first n runes of s, marking a real cut with an
+// ellipsis. Compact views trade text for context: a reader that needs the
+// rest calls memento_get.
+func truncRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return strings.TrimRight(string(r[:n]), " \t\n") + "…"
+}
+
 // newFactView renders a fact for the MCP contract. History ships only when
 // asked for: corrections are frequent (state keys get re-observed daily) and
 // shipping every past observation bloats the agent's context on every read.
 // Staleness is computed at read time — the store provides the evidence
 // (observed_at), the signal (stale/age_days) tells the agent to re-verify.
-func newFactView(f model.Fact, includeHistory bool) factView {
+//
+// compact keeps the fields an agent navigates by (key, summary, category,
+// status, source, notes head, age/stale, updated_at) and drops the bulk
+// (value, authorship labels, created_at): full facts are ~5x the tokens of a
+// compact one, and list/search over a whole project is the most expensive
+// call in a session. A fact without a summary keeps a 100-rune head of its
+// value so it is not an empty row.
+func newFactView(f model.Fact, includeHistory, compact bool) factView {
 	v := factView{
 		Key:          f.Key,
 		Value:        f.Value,
@@ -291,6 +356,15 @@ func newFactView(f model.Fact, includeHistory bool) factView {
 		CreatedAt:    rfc3339OrEmpty(f.CreatedAt),
 		UpdatedAt:    rfc3339OrEmpty(f.UpdatedAt),
 	}
+	if compact {
+		v.Author, v.AuthorSource, v.UpdatedBy, v.CreatedAt = "", "", "", ""
+		v.Notes = truncRunes(v.Notes, 100)
+		if v.Summary == "" {
+			v.Value = truncRunes(v.Value, 100)
+		} else {
+			v.Value = ""
+		}
+	}
 	if includeHistory {
 		history := make([]historyView, 0, len(f.History))
 		for _, h := range f.History {
@@ -305,10 +379,10 @@ func newFactView(f model.Fact, includeHistory bool) factView {
 	return v
 }
 
-func newFactViews(facts []model.Fact, includeHistory bool) []factView {
+func newFactViews(facts []model.Fact, includeHistory, compact bool) []factView {
 	views := make([]factView, 0, len(facts))
 	for _, f := range facts {
-		views = append(views, newFactView(f, includeHistory))
+		views = append(views, newFactView(f, includeHistory, compact))
 	}
 	return views
 }
@@ -316,7 +390,10 @@ func newFactViews(facts []model.Fact, includeHistory bool) []factView {
 // factsOutput is the list-shaped result shared by memento_search and memento_list.
 type factsOutput struct {
 	Count int        `json:"count" jsonschema:"number of facts returned"`
-	Facts []factView `json:"facts" jsonschema:"matching facts, newest first is not guaranteed"`
+	Facts []factView `json:"facts" jsonschema:"matching facts (order: search = relevance; list = sort parameter, updated by default; keys = by key)"`
+	// Hint is navigation advice for the zero-hit case: an agent that gets a
+	// bare 0 starts guessing; a pointer to the right tool ends the loop.
+	Hint string `json:"hint,omitempty" jsonschema:"present when count=0: which tool/shape to try next"`
 	// Truncated is the honest page signal: the store matched more than the
 	// page delivered. For list/keys the page is the navigation cap (1000),
 	// for search it is the requested limit — the advice differs, and an
@@ -406,6 +483,7 @@ type searchInput struct {
 	Status         string `json:"status,omitempty" jsonschema:"limit results to this status: verified (default), obsolete, or any"`
 	Limit          int    `json:"limit,omitempty" jsonschema:"max hits to return (default 10, cap 50): the context budget for search results"`
 	IncludeHistory bool   `json:"include_history,omitempty" jsonschema:"include the full history chain (default: current value only)"`
+	Compact        bool   `json:"compact,omitempty" jsonschema:"compact rows (no value/authorship; notes truncated): default false, full values — a hit IS the answer; set true when scanning many hits"`
 }
 
 func (s *mcpServer) search(ctx context.Context, req *mcp.CallToolRequest, in searchInput) (*mcp.CallToolResult, factsOutput, error) {
@@ -431,28 +509,70 @@ func (s *mcpServer) search(ctx context.Context, req *mcp.CallToolRequest, in sea
 	if err != nil {
 		return nil, factsOutput{}, storeError("memento_search", err)
 	}
-	return nil, factsOutput{
+	out := factsOutput{
 		Count:     len(facts),
 		Truncated: meta.Total > len(facts)+meta.Skipped,
 		Skipped:   meta.Skipped,
-		Facts:     newFactViews(facts, in.IncludeHistory),
-	}, nil
+		Facts:     newFactViews(facts, in.IncludeHistory, in.Compact),
+	}
+	if out.Count == 0 {
+		// A bare 0 invites URL-style guessing and tool churn; name the next
+		// right move instead.
+		out.Hint = "0 hits: this search reads values/notes/summaries, not keys — for key lookup use memento_keys (prefix/match); for a project overview memento_list; try shorter terms"
+	}
+	return nil, out, nil
 }
 
 type getInput struct {
-	Key            string `json:"key" jsonschema:"exact fact key"`
-	IncludeHistory bool   `json:"include_history,omitempty" jsonschema:"include the full history chain (default: current value only)"`
+	Key            string   `json:"key,omitempty" jsonschema:"exact fact key (single-key contract)"`
+	Keys           []string `json:"keys,omitempty" jsonschema:"batch lookup: up to 10 exact keys; returns items[] with found per key (mutually exclusive with key)"`
+	IncludeHistory bool     `json:"include_history,omitempty" jsonschema:"include the full history chain (default: current value only)"`
 }
 
 type getOutput struct {
+	Found bool      `json:"found" jsonschema:"false when no fact has this key (single-key mode only)"`
+	Fact  *factView `json:"fact,omitempty" jsonschema:"the fact, when found (single-key mode)"`
+	Items []itemGet `json:"items,omitempty" jsonschema:"batch mode (keys param): one item per requested key, in request order"`
+}
+
+// itemGet is one batch-lookup result: found=false is an answer, not an error.
+type itemGet struct {
+	Key   string    `json:"key" jsonschema:"the requested key"`
 	Found bool      `json:"found" jsonschema:"false when no fact has this key"`
 	Fact  *factView `json:"fact,omitempty" jsonschema:"the fact, when found"`
 }
 
 func (s *mcpServer) get(ctx context.Context, req *mcp.CallToolRequest, in getInput) (*mcp.CallToolResult, getOutput, error) {
+	// Validate the shape before any store contact: exactly one of key/keys.
+	hasKey := strings.TrimSpace(in.Key) != ""
+	if hasKey == (len(in.Keys) > 0) {
+		return nil, getOutput{}, fmt.Errorf("memento_get: provide exactly one of key or keys (up to %d)", maxGetKeys)
+	}
+	if len(in.Keys) > maxGetKeys {
+		return nil, getOutput{}, fmt.Errorf("memento_get: keys is capped at %d (context economy)", maxGetKeys)
+	}
 	c, err := s.newClient(ctx)
 	if err != nil {
 		return nil, getOutput{}, storeError("memento_get", err)
+	}
+	if len(in.Keys) > 0 {
+		items := make([]itemGet, 0, len(in.Keys))
+		for _, k := range in.Keys {
+			if strings.TrimSpace(k) == "" {
+				return nil, getOutput{}, fmt.Errorf("memento_get: empty key in keys at index %d", len(items))
+			}
+			f, err := c.Get(ctx, k)
+			if errors.Is(err, client.ErrNotFound) {
+				items = append(items, itemGet{Key: k, Found: false})
+				continue
+			}
+			if err != nil {
+				return nil, getOutput{}, storeError("memento_get", err)
+			}
+			v := newFactView(*f, in.IncludeHistory, false)
+			items = append(items, itemGet{Key: k, Found: true, Fact: &v})
+		}
+		return nil, getOutput{Items: items}, nil
 	}
 	f, err := c.Get(ctx, in.Key)
 	if errors.Is(err, client.ErrNotFound) {
@@ -462,9 +582,16 @@ func (s *mcpServer) get(ctx context.Context, req *mcp.CallToolRequest, in getInp
 	if err != nil {
 		return nil, getOutput{}, storeError("memento_get", err)
 	}
-	v := newFactView(*f, in.IncludeHistory)
+	v := newFactView(*f, in.IncludeHistory, false)
 	return nil, getOutput{Found: true, Fact: &v}, nil
 }
+
+// maxGetKeys and maxAddBatchItems cap the batch tools: a batch is a
+// round-trip saving, not a context flood.
+const (
+	maxGetKeys       = 10
+	maxAddBatchItems = 10
+)
 
 type addInput struct {
 	Key      string `json:"key" jsonschema:"stable fact key, e.g. proj:foo:loc:bar.py — re-use the same key to update"`
@@ -484,20 +611,42 @@ type addInput struct {
 type addOutput struct {
 	Key     string `json:"key" jsonschema:"the stored key"`
 	Created bool   `json:"created" jsonschema:"true when the fact was newly created, false when an existing fact was updated"`
+	Changed bool   `json:"changed" jsonschema:"true when a new version was accepted (birth, value correction); false = same-value touch: notes/source moved, observed_at and the journal untouched"`
 	Status  string `json:"status" jsonschema:"status of the stored fact"`
+	// PreviousSummary names the superseded version at zero journal cost:
+	// the summary the accepted correction replaced ("" when the prior fact
+	// had none). It is what closes the "did I replace the critical value or
+	// just touch it?" ambiguity.
+	PreviousSummary string `json:"previous_summary,omitempty" jsonschema:"summary of the value this write replaced (empty when the fact was created fresh or the prior version had no summary)"`
 }
 
 func (s *mcpServer) add(ctx context.Context, req *mcp.CallToolRequest, in addInput) (*mcp.CallToolResult, addOutput, error) {
+	cfg, cerr := s.loadConfig()
+	if cerr != nil {
+		return nil, addOutput{}, storeError("memento_add", cerr)
+	}
+	out, err := s.addOne(ctx, cfg, in)
+	if err != nil {
+		return nil, addOutput{}, err
+	}
+	return nil, out, nil
+}
+
+// addOne is the add contract for one item: validate → guard → write. The
+// config arrives loaded (the guard and the client share it; a locked wallet
+// is not prompted twice), so memento_add_batch runs the identical pipeline
+// per item without re-reading config per call.
+func (s *mcpServer) addOne(ctx context.Context, cfg *config.Config, in addInput) (addOutput, error) {
 	// Validate the shape before guard and store: an empty key produces a
 	// cryptic store error, and an unknown category never ages (silent rot).
 	if strings.TrimSpace(in.Key) == "" {
-		return nil, addOutput{}, errors.New("memento_add: key is required")
+		return addOutput{}, errors.New("memento_add: key is required")
 	}
 	if strings.TrimSpace(in.Value) == "" {
-		return nil, addOutput{}, errors.New("memento_add: value is required")
+		return addOutput{}, errors.New("memento_add: value is required")
 	}
 	if !model.ValidCategory(strings.ToLower(in.Category)) {
-		return nil, addOutput{}, fmt.Errorf("memento_add: unknown category %q (want location | config | endpoint | behavior | context_map)", in.Category)
+		return addOutput{}, fmt.Errorf("memento_add: unknown category %q (want location | config | endpoint | behavior | context_map)", in.Category)
 	}
 	// Canonicalize for storage: the TTL table and the search category filter
 	// are case-sensitive, so a mixed-case write would silently never age and
@@ -510,31 +659,142 @@ func (s *mcpServer) add(ctx context.Context, req *mcp.CallToolRequest, in addInp
 		in.Source = "tool:mcp"
 	}
 	// The guard runs before any store contact: a rejected write must be
-	// rejected even when OpenSearch is down. The config is loaded once and
-	// reused by the client (a locked wallet is not prompted twice per write).
-	cfg, cerr := s.loadConfig()
-	if cerr != nil {
-		return nil, addOutput{}, storeError("memento_add", cerr)
-	}
+	// rejected even when OpenSearch is down.
 	if err := guardCheck(cfg.SecretGuard, in.ConfirmSecret,
 		guardField{"key", in.Key},
 		guardField{"value", in.Value},
 		guardField{"notes", in.Notes},
 		guardField{"summary", in.Summary},
 		guardField{"source", in.Source}); err != nil {
-		return nil, addOutput{}, err
+		return addOutput{}, err
 	}
 	c, err := s.clientFromConfig(ctx, cfg)
 	if err != nil {
-		return nil, addOutput{}, storeError("memento_add", err)
+		return addOutput{}, storeError("memento_add", err)
 	}
 	f := model.NewFact(in.Key, in.Value, in.Category, in.Project, in.Source, in.Notes)
 	f.Summary = in.Summary
-	created, err := c.Add(ctx, f)
+	res, err := c.Add(ctx, f)
 	if err != nil {
-		return nil, addOutput{}, storeError("memento_add", err)
+		return addOutput{}, storeError("memento_add", err)
 	}
-	return nil, addOutput{Key: in.Key, Created: created, Status: f.Status}, nil
+	return addOutput{Key: in.Key, Created: res.Created, Changed: res.Changed,
+		Status: f.Status, PreviousSummary: res.PreviousSummary}, nil
+}
+
+// addBatchInput carries add-shaped items; confirm_secret is per item, so a
+// user-approved false positive on one fact never whitewashes the next.
+type addBatchInput struct {
+	Items []addInput `json:"items" jsonschema:"1..10 add-shaped items (key, value, category, ...); duplicate keys are rejected"`
+}
+
+type addBatchOutput struct {
+	Count int            `json:"count" jsonschema:"number of items processed"`
+	Items []addBatchItem `json:"items" jsonschema:"per-item outcome in request order; a failed item does not roll back the others"`
+}
+
+type addBatchItem struct {
+	Key     string `json:"key" jsonschema:"the item's key"`
+	Created bool   `json:"created,omitempty" jsonschema:"see memento_add"`
+	Changed bool   `json:"changed" jsonschema:"see memento_add"`
+	Status  string `json:"status,omitempty" jsonschema:"status of the stored fact"`
+	// Error carries the item's rejection (guard hit, validation, store
+	// failure). Partial success is legal: OpenSearch writes are per-doc, and
+	// a batch transaction would be a fiction.
+	Error string `json:"error,omitempty" jsonschema:"this item's failure (guard/validation/store); other items were processed regardless"`
+}
+
+func (s *mcpServer) addBatch(ctx context.Context, req *mcp.CallToolRequest, in addBatchInput) (*mcp.CallToolResult, addBatchOutput, error) {
+	if len(in.Items) == 0 || len(in.Items) > maxAddBatchItems {
+		return nil, addBatchOutput{}, fmt.Errorf("memento_add_batch: items must be 1..%d", maxAddBatchItems)
+	}
+	// Duplicate keys in one batch are ambiguous by construction: the second
+	// item silently corrects the first (order-dependent created/changed and
+	// summary requirements). Reject the shape instead of picking a winner.
+	seen := make(map[string]bool, len(in.Items))
+	for _, it := range in.Items {
+		if seen[it.Key] {
+			return nil, addBatchOutput{}, fmt.Errorf("memento_add_batch: duplicate key %q in one batch", it.Key)
+		}
+		seen[it.Key] = true
+	}
+	cfg, cerr := s.loadConfig()
+	if cerr != nil {
+		return nil, addBatchOutput{}, storeError("memento_add_batch", cerr)
+	}
+	out := addBatchOutput{Items: make([]addBatchItem, 0, len(in.Items))}
+	for _, it := range in.Items {
+		res, err := s.addOne(ctx, cfg, it)
+		item := addBatchItem{Key: it.Key, Created: res.Created, Changed: res.Changed, Status: res.Status}
+		if err != nil {
+			item.Error = err.Error()
+		}
+		out.Items = append(out.Items, item)
+	}
+	out.Count = len(out.Items)
+	// A store-wide failure (config/client) surfaces as per-item errors: the
+	// batch itself answers "what happened to each write", which is the point.
+	return nil, out, nil
+}
+
+type patchInput struct {
+	Key         string `json:"key" jsonschema:"exact fact key of an EXISTING fact (patch never creates: use memento_add)"`
+	Value       string `json:"value,omitempty" jsonschema:"new value: journaled, observed_at moves; the summary resets with it (pass a new summary for a long value)"`
+	Summary     string `json:"summary,omitempty" jsonschema:"new table of contents (with a value change: omitting it CLEARS the old summary — an old summary for a new value is a lie)"`
+	Notes       string `json:"notes,omitempty" jsonschema:"replaces notes (non-empty = provided, add's convention)"`
+	NotesAppend string `json:"notes_append,omitempty" jsonschema:"append a dated line 'YYYY-MM-DD: text' to notes (atomic server-side; the cheap qualifier update — no need to resend the value)"`
+	Source      string `json:"source,omitempty" jsonschema:"replaces source when non-empty"`
+	Status      string `json:"status,omitempty" jsonschema:"verified | obsolete: a transition is journaled; obsolete→verified sets observed_at=now (re-declaring alive is a fresh verification)"`
+	Reason      string `json:"reason,omitempty" jsonschema:"why it became obsolete (only with status=obsolete; folded into notes)"`
+
+	// ConfirmSecret bypasses a guard hit at secret_guard=ask (see addInput).
+	ConfirmSecret bool `json:"confirm_secret,omitempty" jsonschema:"confirm a guard hit is a false positive (secret_guard=ask only); set only after the user approved the exact finding"`
+}
+
+type patchOutput struct {
+	Key     string `json:"key" jsonschema:"the patched key"`
+	Changed bool   `json:"changed" jsonschema:"true = new version accepted (value change, status transition; journal entry written); false = qualifier-only touch"`
+	Status  string `json:"status" jsonschema:"status of the fact after the patch"`
+}
+
+func (s *mcpServer) patch(ctx context.Context, req *mcp.CallToolRequest, in patchInput) (*mcp.CallToolResult, patchOutput, error) {
+	if strings.TrimSpace(in.Key) == "" {
+		return nil, patchOutput{}, errors.New("memento_patch: key is required")
+	}
+	cfg, cerr := s.loadConfig()
+	if cerr != nil {
+		return nil, patchOutput{}, storeError("memento_patch", cerr)
+	}
+	// Every provided field is user-supplied text on a write path — the guard
+	// covers all of them, notes_append and reason included (a secret can
+	// arrive in a dated note as easily as in a value).
+	if err := guardCheck(cfg.SecretGuard, in.ConfirmSecret,
+		guardField{"key", in.Key},
+		guardField{"value", in.Value},
+		guardField{"summary", in.Summary},
+		guardField{"notes", in.Notes},
+		guardField{"notes_append", in.NotesAppend},
+		guardField{"source", in.Source},
+		guardField{"reason", in.Reason}); err != nil {
+		return nil, patchOutput{}, err
+	}
+	c, err := s.clientFromConfig(ctx, cfg)
+	if err != nil {
+		return nil, patchOutput{}, storeError("memento_patch", err)
+	}
+	res, err := c.Patch(ctx, in.Key, client.PatchFields{
+		Value:       in.Value,
+		Summary:     in.Summary,
+		Notes:       in.Notes,
+		NotesAppend: in.NotesAppend,
+		Source:      in.Source,
+		Status:      in.Status,
+		Reason:      in.Reason,
+	})
+	if err != nil {
+		return nil, patchOutput{}, storeError("memento_patch", err)
+	}
+	return nil, patchOutput{Key: in.Key, Changed: res.Changed, Status: res.Status}, nil
 }
 
 type listInput struct {
@@ -542,14 +802,33 @@ type listInput struct {
 	Prefix         string `json:"prefix,omitempty" jsonschema:"keep only keys starting with this prefix (trailing * allowed), e.g. '<project>:state:'"`
 	Status         string `json:"status,omitempty" jsonschema:"limit results to this status: verified (default), obsolete, or any"`
 	IncludeHistory bool   `json:"include_history,omitempty" jsonschema:"include the full history chain (default: current value only)"`
+	// Compact defaults to true: list is a table of contents, and full values
+	// for a whole project are the single most expensive agent call
+	// (observed ~15k tokens for 32 facts). compact=false restores the full
+	// view; a listed fact's full text is one memento_get away.
+	Compact *bool `json:"compact,omitempty" jsonschema:"compact rows: key/summary/category/status/source/notes-head/age (DEFAULT true); false = full values, ~5x the tokens"`
+	// Sort defaults to updated: the dominant list use-case is session start
+	// ("what moved since last time"); memento_keys covers key-order navigation.
+	Sort string `json:"sort,omitempty" jsonschema:"'updated' (default: newest activity first; a touch moves updated_at, not age/stale) or 'key' (stable navigation order)"`
 }
 
 func (s *mcpServer) list(ctx context.Context, req *mcp.CallToolRequest, in listInput) (*mcp.CallToolResult, factsOutput, error) {
+	compact := true
+	if in.Compact != nil {
+		compact = *in.Compact
+	}
+	sort := strings.ToLower(strings.TrimSpace(in.Sort))
+	if sort == "" {
+		sort = "updated"
+	}
+	if sort != "updated" && sort != "key" {
+		return nil, factsOutput{}, fmt.Errorf("memento_list: sort must be updated|key, got %q", in.Sort)
+	}
 	c, err := s.newClient(ctx)
 	if err != nil {
 		return nil, factsOutput{}, storeError("memento_list", err)
 	}
-	facts, meta, err := c.List(ctx, in.Project, in.Prefix)
+	facts, meta, err := c.List(ctx, in.Project, in.Prefix, sort)
 	if err != nil {
 		return nil, factsOutput{}, storeError("memento_list", err)
 	}
@@ -572,7 +851,7 @@ func (s *mcpServer) list(ctx context.Context, req *mcp.CallToolRequest, in listI
 		}
 		facts = kept
 	}
-	return nil, factsOutput{Count: len(facts), Truncated: rawLen > client.NavSizeCap, Skipped: meta.Skipped, Facts: newFactViews(facts, in.IncludeHistory)}, nil
+	return nil, factsOutput{Count: len(facts), Truncated: rawLen > client.NavSizeCap, Skipped: meta.Skipped, Facts: newFactViews(facts, in.IncludeHistory, compact)}, nil
 }
 
 type keysInput struct {
@@ -607,7 +886,10 @@ func (s *mcpServer) keys(ctx context.Context, req *mcp.CallToolRequest, in keysI
 	if err != nil {
 		return nil, factsOutput{}, storeError("memento_keys", err)
 	}
-	return nil, factsOutput{Count: len(facts), Truncated: meta.Total > client.NavSizeCap, Skipped: meta.Skipped, Facts: newFactViews(facts, in.IncludeHistory)}, nil
+	// Keys is key-level navigation: the rows are scanned, not read — the
+	// compact view is always the right shape here (no parameter: the full
+	// value of a key-matched fact is a memento_get away).
+	return nil, factsOutput{Count: len(facts), Truncated: meta.Total > client.NavSizeCap, Skipped: meta.Skipped, Facts: newFactViews(facts, in.IncludeHistory, true)}, nil
 }
 
 type obsoleteInput struct {
@@ -986,12 +1268,24 @@ type searchDocsInput struct {
 	Limit   int    `json:"limit,omitempty" jsonschema:"max documents to return (default 5, cap 20): the context budget for search results"`
 }
 
+// docSectionHit is the section that matched the query: get_doc(section=order)
+// returns the full text around the match.
+type docSectionHit struct {
+	Order   int    `json:"order" jsonschema:"section number: memento_get_doc(hash, section=order) reads the full section"`
+	Heading string `json:"heading,omitempty" jsonschema:"section heading (table of contents)"`
+	Snippet string `json:"snippet" jsonschema:"match-centered text (±160 runes), whitespace-collapsed"`
+}
+
 type docHitView struct {
 	Hash    string `json:"hash" jsonschema:"document id for memento_get_doc"`
 	URL     string `json:"url"`
 	Title   string `json:"title"`
+	Project string `json:"project,omitempty" jsonschema:"project tag of the stored document"`
 	Stale   bool   `json:"stale" jsonschema:"past TTL: refresh with memento_fetch_doc before quoting"`
-	Snippet string `json:"snippet,omitempty" jsonschema:"first section, whitespace-collapsed and capped"`
+	// Section is the matched section (all-terms scan in Go); Snippet is the
+	// doc-level fallback (first section) when no section is identified.
+	Section *docSectionHit `json:"section,omitempty" jsonschema:"the section that matched the query"`
+	Snippet string         `json:"snippet,omitempty" jsonschema:"first section, whitespace-collapsed and capped (fallback when no section matched)"`
 }
 
 type docsHitsOutput struct {
@@ -1021,13 +1315,108 @@ func (s *mcpServer) searchDocs(ctx context.Context, req *mcp.CallToolRequest, in
 		return nil, docsHitsOutput{}, storeError("memento_search_docs", err)
 	}
 	now := time.Now().UTC()
+	terms := queryTerms(in.Query)
 	hits := make([]docHitView, 0, len(docs))
 	for _, d := range docs {
-		h := docHitView{Hash: d.URLHash, URL: d.URL, Title: d.Title, Stale: d.Stale(now)}
-		if len(d.Sections) > 0 {
+		h := docHitView{Hash: d.URLHash, URL: d.URL, Title: d.Title, Project: d.Project, Stale: d.Stale(now)}
+		if i := pickMatchedSection(d.Sections, terms); i >= 0 {
+			sec := d.Sections[i]
+			h.Section = &docSectionHit{Order: sec.Order, Heading: sec.Heading, Snippet: centerSnippet(sec.Text, terms)}
+		} else if len(d.Sections) > 0 {
 			h.Snippet = snippet(d.Sections[0].Text, 300)
 		}
 		hits = append(hits, h)
 	}
 	return nil, docsHitsOutput{Count: len(hits), Truncated: meta.Total > len(hits)+meta.Skipped, Skipped: meta.Skipped, Docs: hits}, nil
+}
+
+// queryTerms approximates OpenSearch's standard tokenizer: lowercased
+// alphanumeric runs of length >= 3, deduplicated. Stopwords need no list:
+// the all-terms section scan punishes them uniformly.
+func queryTerms(query string) []string {
+	var out []string
+	seen := map[string]bool{}
+	var cur []rune
+	flush := func() {
+		w := string(cur)
+		cur = cur[:0]
+		if len(w) >= 3 && !seen[w] {
+			seen[w] = true
+			out = append(out, w)
+		}
+	}
+	for _, r := range strings.ToLower(query) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			cur = append(cur, r)
+		} else {
+			flush()
+		}
+	}
+	flush()
+	return out
+}
+
+// pickMatchedSection picks the section containing ALL query terms — a direct
+// match beats any frequency-based pick (frequency overvalues long sections).
+// Fallback: the section with the most distinct terms; -1 = no match.
+// This is the cheap Go-side scan the design chose over nested inner_hits.
+func pickMatchedSection(sections []model.Section, terms []string) int {
+	if len(terms) == 0 {
+		return -1
+	}
+	best, bestHits := -1, 0
+	for i, sec := range sections {
+		lower := strings.ToLower(sec.Text)
+		hits := 0
+		for _, t := range terms {
+			if strings.Contains(lower, t) {
+				hits++
+			}
+		}
+		if hits == len(terms) {
+			return i
+		}
+		if hits > bestHits {
+			best, bestHits = i, hits
+		}
+	}
+	if bestHits > 0 {
+		return best
+	}
+	return -1
+}
+
+// centerSnippet windows the text around the first term hit (±160 runes) so
+// the answer is visible in the snippet, not just the section opening.
+func centerSnippet(text string, terms []string) string {
+	collapsed := []rune(strings.Join(strings.Fields(text), " "))
+	lower := strings.ToLower(string(collapsed))
+	pos := -1
+	for _, t := range terms {
+		if p := strings.Index(lower, t); p >= 0 && (pos < 0 || p < pos) {
+			pos = p
+		}
+	}
+	const win = 160
+	if pos < 0 {
+		return snippet(text, 2*win)
+	}
+	// pos is a byte index into the lowercased string; rune-align it onto the
+	// collapsed text (case folding can shift byte lengths; snippets tolerate).
+	r := utf8.RuneCountInString(lower[:pos])
+	start, end := r-win, r+win
+	if start < 0 {
+		start = 0
+	}
+	if end > len(collapsed) {
+		end = len(collapsed)
+	}
+	out := string(collapsed[start:end])
+	if start > 0 {
+		out = "…" + out
+	}
+	if end < len(collapsed) {
+		out += "…"
+	}
+	return out
 }

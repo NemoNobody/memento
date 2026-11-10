@@ -68,13 +68,16 @@ func AddCmd() *cobra.Command {
 			ctx := context.Background()
 			f := model.NewFact(key, value, category, addFlags.project, addFlags.source, addFlags.notes)
 			f.Summary = addFlags.summary
-			created, err := c.Add(ctx, f)
+			res, err := c.Add(ctx, f)
 			if err != nil {
 				fatalErr(err)
 			}
-			verb := "updated"
-			if created {
+			verb := "touched (same value)"
+			switch {
+			case res.Created:
 				verb = "added"
+			case res.Changed:
+				verb = "updated"
 			}
 			var b strings.Builder
 			b.WriteString(verb)

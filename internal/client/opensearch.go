@@ -247,6 +247,22 @@ ctx._source.updated_by = params.updated_by;
 ctx._source.updated_at = params.updated_at;
 `
 
+// AddResult reports what an accepted Add did — the answer to "what happened
+// to my write", which {created} alone cannot tell (a replacement and a
+// same-value touch both report created=false, and on a critical fact the
+// difference is the whole point).
+type AddResult struct {
+	// Created: the fact did not exist and this write gave it birth.
+	Created bool
+	// Changed: a new version was accepted (birth, value correction, status
+	// transition). false means a same-value touch: notes/source moved,
+	// observed_at and the journal untouched.
+	Changed bool
+	// PreviousSummary is the summary the correction replaced ("" when the
+	// prior fact had none) — names the superseded version cheaply.
+	PreviousSummary string
+}
+
 // Add stores a fact under its key. Three cases: the key is new (created, then
 // journaled and linked); the value is unchanged (only notes/source/status
 // move — observed_at must not, the observation is old and only the qualifier
@@ -272,11 +288,11 @@ ctx._source.updated_at = params.updated_at;
 // erasing the old summary is the honest state — an old table of contents for
 // a new value is a lie.
 //
-// It reports whether the fact was newly created. Writes wait for a refresh,
+// It reports the accepted outcome (see AddResult). Writes wait for a refresh,
 // so the fact is immediately visible to subsequent Search/List calls.
-func (c *Client) Add(ctx context.Context, f *model.Fact) (created bool, err error) {
+func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 	if err := c.checkSummaryCap(f); err != nil {
-		return false, err
+		return AddResult{}, err
 	}
 	existing, err := c.Get(ctx, f.Key)
 	if errors.Is(err, ErrNotFound) {
@@ -284,15 +300,15 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (created bool, err erro
 		// correction): a same-value notes touch must not fail over a summary
 		// the pre-summary fact never had.
 		if err := c.checkSummaryRequired(f); err != nil {
-			return false, err
+			return AddResult{}, err
 		}
 		// Birth labels are stamped once (write-once): who/what/where created
 		// the fact. Later writes move only updated_by.
 		c.resolveAuthor(ctx).stampFact(f)
 		f.UpdatedBy = f.Author
-		created, err = c.createFact(ctx, f)
+		created, err := c.createFact(ctx, f)
 		if err != nil {
-			return false, err
+			return AddResult{}, err
 		}
 		if created {
 			// Journal the birth value, then link the fact to it. A journal
@@ -300,22 +316,22 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (created bool, err erro
 			// catches it), not a broken fact.
 			ref, jErr := c.journalAppend(ctx, f, f.FactID, f.ObservedAt)
 			if jErr != nil {
-				return true, jErr
+				return AddResult{Created: true, Changed: true}, jErr
 			}
 			if lErr := c.linkCurrentRef(ctx, f.Key, ref); lErr != nil {
-				return true, lErr
+				return AddResult{Created: true, Changed: true}, lErr
 			}
-			return true, nil
+			return AddResult{Created: true, Changed: true}, nil
 		}
 		// op_type=create lost the race to a concurrent Add of the same key
 		// (a plain index would last-write-win and drop the winner's value
 		// with no journal entry): re-read and apply as a correction below.
 		existing, err = c.Get(ctx, f.Key)
 		if err != nil {
-			return false, fmt.Errorf("add fact: %w", err)
+			return AddResult{}, fmt.Errorf("add fact: %w", err)
 		}
 	} else if err != nil {
-		return false, fmt.Errorf("add fact: %w", err)
+		return AddResult{}, fmt.Errorf("add fact: %w", err)
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -341,13 +357,16 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (created bool, err erro
 			Params:     opensearchapi.UpdateParams{Refresh: "wait_for"},
 		})
 		if err != nil {
-			return false, wrapWriteError("add fact", err)
+			return AddResult{}, wrapWriteError("add fact", err)
 		}
-		return false, nil
+		// Same value: notes/source/status moved, observed_at must not (the
+		// observation is old), the journal is untouched. changed=false tells
+		// the caller nothing was accepted as a new version.
+		return AddResult{Changed: false}, nil
 	}
 
 	if err := c.checkSummaryRequired(f); err != nil {
-		return false, err
+		return AddResult{}, err
 	}
 
 	// The journal entry carries the doc's fact_id (not the caller's fresh
@@ -355,7 +374,7 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (created bool, err erro
 	// fact_id is that identity.
 	ref, err := c.journalAppend(ctx, f, existing.FactID, f.ObservedAt)
 	if err != nil {
-		return false, err
+		return AddResult{}, err
 	}
 
 	body, _ := json.Marshal(map[string]interface{}{
@@ -382,9 +401,12 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (created bool, err erro
 		Params:     opensearchapi.UpdateParams{Refresh: "wait_for"},
 	})
 	if err != nil {
-		return false, wrapWriteError("add fact", err)
+		return AddResult{Changed: true}, wrapWriteError("add fact", err)
 	}
-	return false, nil
+	// The value was accepted as a new version (journal entry + correction):
+	// changed=true, and the summary the correction is replacing is reported
+	// so the caller can name the superseded version without reading the journal.
+	return AddResult{Changed: true, PreviousSummary: existing.Summary}, nil
 }
 
 // journalAppend appends the journal entry for an accepted fact value and
@@ -502,12 +524,16 @@ func (c *Client) Search(ctx context.Context, query string, project, category, st
 // List returns all facts for a project whose key starts with prefix.
 // An empty prefix lists the whole project. A prefix may carry the trailing
 // '*' sugar ("state:*" == "state:"); a '*' anywhere else is rejected.
-func (c *Client) List(ctx context.Context, project, prefix string) ([]model.Fact, SearchMeta, error) {
+//
+// sort: "updated" (newest activity first — the session-start use-case: what
+// moved since last time) or "key" (stable navigation order). Facts written
+// before updated_at existed sort last under "updated" (missing:_last).
+func (c *Client) List(ctx context.Context, project, prefix, sort string) ([]model.Fact, SearchMeta, error) {
 	p, err := NormalizePrefix(prefix)
 	if err != nil {
 		return nil, SearchMeta{}, err
 	}
-	return c.search(ctx, buildProjectBody(project, p))
+	return c.search(ctx, buildProjectBody(project, p, sort))
 }
 
 // Keys returns facts whose key matches a prefix and/or a substring, across
@@ -543,6 +569,12 @@ func NormalizePrefix(prefix string) (string, error) {
 // Obsolete marks a fact obsolete because its subject is gone. The value and
 // observed_at are intentionally left untouched — there is no new observation.
 // The reason is appended to Notes so earlier qualifiers are not lost.
+//
+// The transition is journaled (the journal records accepted state, and a
+// status flip is state): the audit trail is symmetric — going obsolete and
+// coming back verified both leave entries. The journal entry carries the
+// current value with the reason folded into notes, so "when did this die and
+// why" is answerable from the log.
 func (c *Client) Obsolete(ctx context.Context, key, reason string) error {
 	existing, err := c.Get(ctx, key)
 	if err != nil {
@@ -556,11 +588,22 @@ func (c *Client) Obsolete(ctx context.Context, key, reason string) error {
 			notes = notes + "\n" + reason
 		}
 	}
+	currentRef := existing.CurrentRef
+	if existing.Status != "obsolete" {
+		stated := *existing
+		stated.Notes = notes
+		ref, jErr := c.journalAppend(ctx, &stated, existing.FactID, time.Now().UTC())
+		if jErr != nil {
+			return jErr
+		}
+		currentRef = ref
+	}
 	body, _ := json.Marshal(map[string]interface{}{
 		"doc": map[string]interface{}{
-			"status":     "obsolete",
-			"notes":      notes,
-			"updated_at": time.Now().UTC().Format(time.RFC3339),
+			"status":      "obsolete",
+			"notes":       notes,
+			"current_ref": currentRef,
+			"updated_at":  time.Now().UTC().Format(time.RFC3339),
 		},
 	})
 	_, err = c.api.Update(ctx, opensearchapi.UpdateReq{
@@ -576,6 +619,216 @@ func (c *Client) Obsolete(ctx context.Context, key, reason string) error {
 		return wrapWriteError("obsolete fact", err)
 	}
 	return nil
+}
+
+// PatchFields is the partial-update payload: an empty string means "not
+// provided, leave the field alone" (the same presence convention as add).
+// Erasing a field to empty is not a patch operation — corrections carry
+// content, not deletions.
+type PatchFields struct {
+	Value       string // new value: journaled, observed_at moves, summary resets with it
+	Summary     string // new table of contents; with a value change, "" clears the old one
+	Notes       string // replaces notes when non-empty (add's rule)
+	NotesAppend string // dated "YYYY-MM-DD: text" line appended atomically (painless)
+	Source      string // replaces source when non-empty
+	Status      string // verified | obsolete — a transition is journaled (audit symmetry)
+	Reason      string // why it became obsolete (folded into notes; guard-checked)
+}
+
+// PatchResult reports what the patch did.
+type PatchResult struct {
+	// Changed: a new version was accepted (value change, status transition).
+	// false = qualifier-only patch (notes/source/summary): touch, no journal.
+	Changed bool
+	Status  string
+}
+
+// patchScript applies only the provided params (null = untouched). The notes
+// append runs inside the script: read-modify-write of notes from the Go side
+// would race with a concurrent add/patch and silently drop one of the notes
+// (the correction script's notes handling has the same property by design).
+const patchScript = `
+if (params.value != null) { ctx._source.value = params.value; }
+if (params.summary != null) { ctx._source.summary = params.summary; }
+if (params.notes != null) { ctx._source.notes = params.notes; }
+if (params.notes_append != null) {
+  String n = ctx._source.notes == null ? '' : ctx._source.notes.toString();
+  ctx._source.notes = n.isEmpty() ? params.notes_append : n + '\n' + params.notes_append;
+}
+if (params.source != null) { ctx._source.source = params.source; }
+if (params.status != null) { ctx._source.status = params.status; }
+if (params.observed_at != null) { ctx._source.observed_at = params.observed_at; }
+if (params.current_ref != null) { ctx._source.current_ref = params.current_ref; }
+ctx._source.updated_at = params.updated_at;
+ctx._source.updated_by = params.updated_by;
+`
+
+// Patch applies a partial update to an existing fact. It exists so an agent
+// can extend qualifiers (append a dated note) or flip status without
+// re-sending — and re-paying context for — the whole value. Journal
+// semantics mirror add: the journal records accepted state, so a value
+// change and a status transition both append entries; notes/source/summary
+// moves are touches (no entry, observed_at stays).
+//
+// Summary invalidation: the summary describes the current value. On a value
+// change the summary is replaced by the provided one ("" clears it — an old
+// table of contents for a new value is a lie). A long new value requires a
+// new summary (the add rule).
+//
+// Resurrection (obsolete → verified) sets observed_at=now: re-declaring a
+// dead fact alive IS a fresh verification, and a fact that resurrects while
+// staying stale would contradict its own staleness signal.
+func (c *Client) Patch(ctx context.Context, key string, p PatchFields) (PatchResult, error) {
+	if p.Value == "" && p.Summary == "" && p.Notes == "" && p.NotesAppend == "" &&
+		p.Source == "" && p.Status == "" && p.Reason == "" {
+		return PatchResult{}, fmt.Errorf("patch: nothing to change (provide value, summary, notes, notes_append, source, status, or reason)")
+	}
+	if p.Reason != "" && p.Status != "obsolete" {
+		return PatchResult{}, fmt.Errorf("patch: reason is only accepted with status=obsolete")
+	}
+	if p.Status != "" && p.Status != "verified" && p.Status != "obsolete" {
+		return PatchResult{}, fmt.Errorf("patch: status must be verified|obsolete, got %q", p.Status)
+	}
+
+	existing, err := c.Get(ctx, key)
+	if errors.Is(err, ErrNotFound) {
+		return PatchResult{}, fmt.Errorf("patch: fact %q not found — use add to create it", key)
+	}
+	if err != nil {
+		return PatchResult{}, fmt.Errorf("patch: %w", err)
+	}
+
+	valueChanged := p.Value != "" && p.Value != existing.Value
+	statusChanged := p.Status != "" && p.Status != existing.Status
+	resurrect := statusChanged && p.Status == "verified"
+	retire := statusChanged && p.Status == "obsolete"
+
+	// notes for the doc: replace wins, then append, then the retire reason.
+	newNotes := existing.Notes
+	if p.Notes != "" {
+		newNotes = p.Notes
+	}
+	appendLine := ""
+	if p.NotesAppend != "" {
+		appendLine = time.Now().UTC().Format("2006-01-02") + ": " + p.NotesAppend
+		if newNotes == "" {
+			newNotes = appendLine
+		} else {
+			newNotes = newNotes + "\n" + appendLine
+		}
+	}
+
+	if valueChanged {
+		probe := model.NewFact(key, p.Value, existing.Category, existing.Project, existing.Source, newNotes)
+		probe.Summary = p.Summary
+		if err := c.checkSummaryRequired(probe); err != nil {
+			return PatchResult{}, err
+		}
+		if err := c.checkSummaryCap(probe); err != nil {
+			return PatchResult{}, err
+		}
+	} else if p.Summary != "" {
+		probe := model.NewFact(key, existing.Value, existing.Category, existing.Project, existing.Source, existing.Notes)
+		probe.Summary = p.Summary
+		if err := c.checkSummaryCap(probe); err != nil {
+			return PatchResult{}, err
+		}
+	}
+
+	now := time.Now().UTC()
+	currentRef := existing.CurrentRef
+	if valueChanged || statusChanged {
+		stated := *existing
+		if valueChanged {
+			stated.Value = p.Value
+		}
+		stated.Notes = newNotes
+		if p.Source != "" {
+			stated.Source = p.Source
+		}
+		ref, jErr := c.journalAppend(ctx, &stated, existing.FactID, now)
+		if jErr != nil {
+			return PatchResult{}, jErr
+		}
+		currentRef = ref
+	}
+
+	newStatus := existing.Status
+	if p.Status != "" {
+		newStatus = p.Status
+	}
+
+	params := map[string]interface{}{
+		"value":        nil,
+		"summary":      nil,
+		"notes":        nil,
+		"notes_append": nil,
+		"source":       nil,
+		"status":       nil,
+		"observed_at":  nil,
+		"current_ref":  nil,
+		"updated_at":   now.Format(time.RFC3339),
+		"updated_by":   c.resolveAuthor(ctx).Author,
+	}
+	if valueChanged {
+		params["value"] = p.Value
+		// The summary moves with the value unconditionally: the provided one
+		// (possibly "" = clear) replaces the old table of contents.
+		params["summary"] = p.Summary
+		params["observed_at"] = now.Format(time.RFC3339)
+		params["current_ref"] = currentRef
+	} else if statusChanged {
+		params["current_ref"] = currentRef
+	}
+	if resurrect {
+		params["observed_at"] = now.Format(time.RFC3339)
+	}
+	if p.Summary != "" && !valueChanged {
+		params["summary"] = p.Summary
+	}
+	if p.Notes != "" {
+		params["notes"] = newNotes
+	} else if appendLine != "" {
+		params["notes_append"] = appendLine
+	}
+	if retire && p.Reason != "" {
+		// The reason folds into notes atomically (the doc-write path above
+		// already includes it in newNotes for the journal; the doc gets it
+		// through the same append).
+		if appendLine != "" {
+			params["notes"] = newNotes + "\n" + p.Reason
+			params["notes_append"] = nil
+		} else {
+			params["notes"] = newNotes + "\n" + p.Reason
+		}
+	}
+	if p.Source != "" {
+		params["source"] = p.Source
+	}
+	if p.Status != "" {
+		params["status"] = p.Status
+	}
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"script": map[string]interface{}{
+			"lang":   "painless",
+			"source": patchScript,
+			"params": params,
+		},
+	})
+	_, err = c.api.Update(ctx, opensearchapi.UpdateReq{
+		Index:      c.cfg.IndexName,
+		DocumentID: key,
+		Body:       strings.NewReader(string(body)),
+		Params:     opensearchapi.UpdateParams{Refresh: "wait_for"},
+	})
+	if err != nil {
+		if isNotFound(err) {
+			return PatchResult{}, fmt.Errorf("patch %w: %q", ErrNotFound, key)
+		}
+		return PatchResult{}, wrapWriteError("patch fact", err)
+	}
+	return PatchResult{Changed: valueChanged || statusChanged, Status: newStatus}, nil
 }
 
 // pruneHistoryScript keeps only the newest params.keep history entries in
@@ -698,7 +951,7 @@ const NavSizeCap = 1000
 
 // buildProjectBody builds the search query body for a project lookup,
 // optionally narrowed to a key prefix.
-func buildProjectBody(project, prefix string) map[string]interface{} {
+func buildProjectBody(project, prefix, sort string) map[string]interface{} {
 	filters := []map[string]interface{}{
 		{"term": map[string]interface{}{"project": project}},
 	}
@@ -707,10 +960,18 @@ func buildProjectBody(project, prefix string) map[string]interface{} {
 			"prefix": map[string]interface{}{"key": prefix},
 		})
 	}
-	return map[string]interface{}{
+	body := map[string]interface{}{
 		"query": map[string]interface{}{"bool": map[string]interface{}{"filter": filters}},
 		"size":  NavSizeCap,
 	}
+	if sort == "updated" {
+		body["sort"] = []map[string]interface{}{{
+			"updated_at": map[string]interface{}{"order": "desc", "missing": "_last"},
+		}}
+	} else {
+		body["sort"] = []map[string]interface{}{{"key": map[string]interface{}{"order": "asc"}}}
+	}
+	return body
 }
 
 // buildKeysBody builds the key-navigation query: AND of the given filters,

@@ -97,7 +97,8 @@ func childEnv(overrides []string) []string {
 
 var wantTools = []string{
 	"memento_status", "memento_search", "memento_get",
-	"memento_add", "memento_list", "memento_keys", "memento_prune", "memento_obsolete",
+	"memento_add", "memento_add_batch", "memento_patch", "memento_list", "memento_keys",
+	"memento_prune", "memento_obsolete",
 	"memento_journal", "memento_history_info",
 	"memento_fetch_doc", "memento_get_doc", "memento_search_docs",
 }
@@ -490,7 +491,7 @@ func TestNewFactViewCarriesTimeAndHistory(t *testing.T) {
 		},
 	}
 
-	v := newFactView(f, true)
+	v := newFactView(f, true, false)
 	if v.ObservedAt != "2026-01-02T03:04:05Z" {
 		t.Errorf("ObservedAt = %q, want RFC3339", v.ObservedAt)
 	}
@@ -508,7 +509,7 @@ func TestNewFactViewCarriesTimeAndHistory(t *testing.T) {
 		t.Errorf("zero observed_at must map to empty string, got %q", v.History[1].ObservedAt)
 	}
 
-	off := newFactView(f, false)
+	off := newFactView(f, false, false)
 	if len(off.History) != 0 {
 		t.Errorf("history must be stripped by default, got %v", off.History)
 	}
@@ -528,13 +529,13 @@ func TestNewFactViewCarriesTimeAndHistory(t *testing.T) {
 	// Fresh facts must not raise the signal.
 	now := time.Now().UTC()
 	fresh := model.Fact{Key: "k", Value: "v", Category: "location", ObservedAt: now}
-	fv := newFactView(fresh, false)
+	fv := newFactView(fresh, false, false)
 	if fv.AgeDays != 0 || fv.Stale {
 		t.Errorf("fresh fact: age_days = %d, stale = %v, want 0/false", fv.AgeDays, fv.Stale)
 	}
 
 	// Pre-observed_at facts: age is unknown (-1) and TTL'd categories are stale.
-	empty := newFactView(model.Fact{Key: "k", Value: "v"}, false)
+	empty := newFactView(model.Fact{Key: "k", Value: "v"}, false, false)
 	if empty.ObservedAt != "" {
 		t.Errorf("zero ObservedAt must map to empty string, got %q", empty.ObservedAt)
 	}
@@ -547,7 +548,7 @@ func TestNewFactViewCarriesTimeAndHistory(t *testing.T) {
 	if empty.Stale {
 		t.Error("category with no TTL must not be stale when observed_at is unknown")
 	}
-	legacyConfig := newFactView(model.Fact{Key: "k", Value: "v", Category: "config"}, false)
+	legacyConfig := newFactView(model.Fact{Key: "k", Value: "v", Category: "config"}, false, false)
 	if !legacyConfig.Stale {
 		t.Error("unknown observation time must be stale for TTL'd categories")
 	}
@@ -569,5 +570,172 @@ func TestMCPKeysEmptyQuery(t *testing.T) {
 	}
 	if !res.IsError || !strings.Contains(toolText(res), "prefix") {
 		t.Errorf("empty keys query must be rejected with a prefix hint; got: %s", toolText(res))
+	}
+}
+
+// TestQueryTerms pins the tokenizer approximation: lowercased alphanumeric
+// runs of length >= 3, deduplicated. The section pick depends on it.
+func TestQueryTerms(t *testing.T) {
+	got := queryTerms("OpenSearch, opensearch URL https://x")
+	want := []string{"opensearch", "url", "https", "x"}
+	if strings.Join(got, ",") != strings.Join(want[:3], ",") {
+		// "x" is length 1 and must be dropped; order must follow first use.
+		t.Errorf("terms = %v, want %v", got, want[:3])
+	}
+	if len(got) != 3 {
+		t.Errorf("len(terms) = %d, want 3 (short runs dropped, dupe collapsed): %v", len(got), got)
+	}
+	if queryTerms("") != nil {
+		t.Error("empty query must yield no terms")
+	}
+	if terms := queryTerms("ключ ключ项目2"); len(terms) != 2 {
+		t.Errorf("unicode terms = %v, want 2 (cyrillic and CJK survive)", terms)
+	}
+}
+
+// TestPickMatchedSection pins the all-terms rule: a section containing every
+// term wins even when it is not first; frequency alone never wins outright;
+// no match is -1 (doc-level snippet fallback).
+func TestPickMatchedSection(t *testing.T) {
+	sections := []model.Section{
+		{Order: 1, Text: "alpha beta gamma epsilon"},
+		{Order: 2, Text: "zeta eta theta"},
+		{Order: 3, Text: "gamma ... delta ... alpha"},
+	}
+	terms := queryTerms("alpha gamma delta")
+	if i := pickMatchedSection(sections, terms); i != 2 {
+		t.Errorf("pick = %d, want 2 (section 3 has ALL terms; section 1 lacks delta)", i)
+	}
+	// No section has all terms: the most distinct terms wins.
+	if i := pickMatchedSection(sections, queryTerms("alpha zeta")); i != 0 && i != 2 {
+		t.Errorf("fallback pick = %d, want 0 (one term, first)", i)
+	}
+	if i := pickMatchedSection(sections, queryTerms("nonexistent")); i != -1 {
+		t.Errorf("no-match pick = %d, want -1", i)
+	}
+	if i := pickMatchedSection(sections, nil); i != -1 {
+		t.Errorf("empty terms pick = %d, want -1", i)
+	}
+}
+
+// TestCenterSnippet checks the match-centered window: the term is inside the
+// snippet, the window is bounded, and edges carry ellipsis markers.
+func TestCenterSnippet(t *testing.T) {
+	text := strings.Repeat("filler ", 200) + " KEYWORD tail"
+	s := centerSnippet(text, []string{"keyword"})
+	if !strings.Contains(strings.ToLower(s), "keyword") {
+		t.Errorf("snippet must contain the matched term: %q", s)
+	}
+	if !strings.HasPrefix(s, "…") {
+		t.Errorf("mid-text window must open with an ellipsis: %q", s)
+	}
+	if r := []rune(s); len(r) > 2*160+10 {
+		t.Errorf("snippet too wide: %d runes", len(r))
+	}
+	// Term at the very start: no leading ellipsis.
+	head := centerSnippet("KEYWORD "+strings.Repeat("x ", 300), []string{"keyword"})
+	if !strings.HasPrefix(head, "KEYWORD") {
+		t.Errorf("head term must start the snippet without a leading ellipsis: %q", head[:20])
+	}
+	// No hit at all: plain capped snippet, no crash.
+	if s := centerSnippet("nothing here", []string{"absent"}); s == "" {
+		t.Error("no-term fallback must still produce a snippet")
+	}
+}
+
+// TestNewFactViewCompact pins the compact shape: the bulk fields (value with
+// a summary, authorship labels, created_at) are dropped, notes keep a head,
+// and a summary-less fact keeps a 100-rune value head so the row is not empty.
+func TestNewFactViewCompact(t *testing.T) {
+	now := time.Now().UTC()
+	long := strings.Repeat("д", 150)
+	f := model.Fact{
+		Key: "k", Value: long, Category: "config", Project: "p", Status: "verified",
+		Source: "tool:read_file", Author: "a1", AuthorSource: "security", UpdatedBy: "a2",
+		Notes: strings.Repeat("n", 150), Summary: "sum",
+		ObservedAt: now, CreatedAt: now, UpdatedAt: now,
+	}
+	c := newFactView(f, false, true)
+	if c.Value != "" {
+		t.Errorf("compact row with a summary must drop the value, got %d runes", len([]rune(c.Value)))
+	}
+	if c.Author != "" || c.AuthorSource != "" || c.UpdatedBy != "" || c.CreatedAt != "" {
+		t.Errorf("compact must drop authorship/created_at: %+v", c)
+	}
+	if len([]rune(c.Notes)) != 101 { // 100 runes + ellipsis
+		t.Errorf("notes head = %d runes, want 101", len([]rune(c.Notes)))
+	}
+	if c.Summary != "sum" || c.Key != "k" || c.Status != "verified" {
+		t.Errorf("compact keeps the navigation fields: %+v", c)
+	}
+
+	noSum := f
+	noSum.Summary = ""
+	c2 := newFactView(noSum, false, true)
+	if len([]rune(c2.Value)) != 101 {
+		t.Errorf("summary-less compact row keeps a 100-rune head, got %d", len([]rune(c2.Value)))
+	}
+	// Short values survive untouched.
+	short := model.Fact{Key: "k", Value: "tiny", Category: "location", Project: "p", Status: "verified"}
+	if c3 := newFactView(short, false, true); c3.Value != "tiny" {
+		t.Errorf("short value in compact mode = %q, want tiny", c3.Value)
+	}
+}
+
+// TestMCPServerM1ValidationOffline pins the new tools' input contracts:
+// batch, patch, and get reject bad shapes BEFORE touching the store.
+func TestMCPServerM1ValidationOffline(t *testing.T) {
+	session := connectTestServer(t, "OPENSEARCH_URL=https://127.0.0.1:9")
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name string
+		args map[string]any
+		want string
+	}{
+		{"memento_add_batch", map[string]any{"items": []any{}}, "1..10"},
+		{"memento_add_batch", map[string]any{"items": []any{
+			map[string]any{"key": "k", "value": "v", "category": "config"},
+			map[string]any{"key": "k", "value": "w", "category": "config"},
+		}}, "duplicate key"},
+		{"memento_patch", map[string]any{"key": ""}, "key is required"},
+		{"memento_get", map[string]any{"key": "k", "keys": []any{"k"}}, "exactly one"},
+		{"memento_get", map[string]any{}, "exactly one"},
+	} {
+		t.Run(tc.name+" "+tc.want, func(t *testing.T) {
+			res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: tc.name, Arguments: tc.args})
+			if err != nil {
+				t.Fatalf("CallTool(%s): %v", tc.name, err)
+			}
+			if !res.IsError {
+				t.Fatalf("%s accepted invalid input: %+v", tc.name, tc.args)
+			}
+			text := toolText(res)
+			if !strings.Contains(text, tc.want) {
+				t.Errorf("error must mention %q, got: %s", tc.want, text)
+			}
+			if strings.Contains(text, "127.0.0.1:9") {
+				t.Errorf("validation ran after the store was reached: %s", text)
+			}
+		})
+	}
+}
+
+// TestMCPServerSearchDocsSectionShapeOffline pins the get-keys contract
+// end-to-end on the validation layer: keys over the cap is rejected with an
+// actionable message before the store is reached.
+func TestMCPServerGetKeysCapOffline(t *testing.T) {
+	session := connectTestServer(t, "OPENSEARCH_URL=https://127.0.0.1:9")
+	keys := make([]any, 11)
+	for i := range keys {
+		keys[i] = "k"
+	}
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "memento_get", Arguments: map[string]any{"keys": keys}})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if !res.IsError || !strings.Contains(toolText(res), "capped at 10") {
+		t.Errorf("keys cap not enforced: %s", toolText(res))
 	}
 }

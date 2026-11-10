@@ -26,7 +26,7 @@ func ListCmd() *cobra.Command {
 			if err != nil {
 				fatalErr(err)
 			}
-			facts, meta, err := c.List(ctx, project, listFlags.prefix)
+			facts, meta, err := c.List(ctx, project, listFlags.prefix, "key")
 			if err != nil {
 				fatalErr(err)
 			}

@@ -226,11 +226,11 @@ func TestAddCorrectionAppendsJournalBeforeMain(t *testing.T) {
 	})
 
 	f := model.NewFact("k", "v2", "config", "p", "tool:read_file", "")
-	created, err := c.Add(context.Background(), f)
+	res, err := c.Add(context.Background(), f)
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	if created {
+	if res.Created {
 		t.Error("created = true, want false (key existed)")
 	}
 
@@ -377,11 +377,11 @@ func TestAddCreatesIndexThenJournalsNewFact(t *testing.T) {
 	})
 
 	f := model.NewFact("k", "v1", "config", "p", "s", "")
-	created, err := c.Add(context.Background(), f)
+	res, err := c.Add(context.Background(), f)
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	if !created {
+	if !res.Created {
 		t.Error("created = false, want true")
 	}
 	if !fake.sawAnyPrefix("/memento-history-") {

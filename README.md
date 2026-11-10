@@ -137,7 +137,7 @@ memento docs "example"
 
 | Command | Description |
 |---------|-------------|
-| `memento add <key> <value> <category> [--project <p>] [--source <s>] [--notes <n>] [--summary <s>] [--allow-secret]` | Add or correct a fact (the accepted value is appended to the journal; values over `summary_min_len` require `--summary`) |
+| `memento add <key> <value> <category> [--project <p>] [--source <s>] [--notes <n>] [--summary <s>] [--allow-secret]` | Add or correct a fact (prints `added`/`updated`/`touched (same value)`; the accepted value is appended to the journal; values over `summary_min_len` require `--summary`) |
 | `memento get <key> [--history]` | Get a fact by key (history is off by default; `--history` prints the legacy in-doc array — journal-era history lives in `memento journal`) |
 | `memento search <query> [--project <p>] [--category <c>] [--status <s>] [--limit N]` | Full-text search over values, notes and summaries (`--status any` disables the status filter; `--limit 0` = up to 1000) |
 | `memento keys [prefix] [--match <s>] [--project <p>] [--status <s>]` | Find facts by key: prefix and/or substring (`*`, `?` wildcards in `--match`), across projects |
@@ -162,14 +162,20 @@ same value updates notes only and leaves the journal untouched.
 ## MCP server
 
 `memento mcp` speaks MCP over stdio, so agents (VS Code, others) call
-`memento_status`, `memento_search`, `memento_get`, `memento_add`, `memento_list`,
+`memento_status`, `memento_search`, `memento_get`, `memento_add`,
+`memento_add_batch`, `memento_patch`, `memento_list`,
 `memento_keys`, `memento_journal`, `memento_history_info`, `memento_prune`,
 `memento_obsolete`, `memento_fetch_doc`, `memento_get_doc` and
 `memento_search_docs` directly. Reads omit
 history unless
 `include_history=true` is passed (that chain is the legacy pre-journal
 in-doc array; journal history is read with `memento_journal` /
-`memento_history_info`), and carry `age_days`/`stale`. Registration and
+`memento_history_info`), and carry `age_days`/`stale`. `memento_list` is
+compact by default (a table of contents: key/summary/state/age — the full
+value is one `memento_get` away) and newest-activity-first; cheap partial
+updates (dated note, status flip) go through `memento_patch` without
+re-sending the value; `memento_add_batch` packs the session-end ritual into
+one round-trip. Registration and
 troubleshooting: [docs/mcp.md](docs/mcp.md).
 
 ## Use with agents

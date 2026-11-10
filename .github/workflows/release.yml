@@ -26,7 +26,8 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME}"
-          LDFLAGS="-s -w -X github.com/NemoNobody/memento/internal/version.Version=${VERSION}"
+          COMMIT="${GITHUB_SHA:0:7}"
+          LDFLAGS="-s -w -X github.com/NemoNobody/memento/internal/version.Version=${VERSION} -X github.com/NemoNobody/memento/internal/version.Commit=${COMMIT}"
           for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
             os="${target%/*}"; arch="${target#*/}"
             out="dist/memento-${os}-${arch}"

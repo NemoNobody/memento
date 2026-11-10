@@ -2,7 +2,10 @@
 # local `make ci` reproduces what the CI gate enforces.
 
 VERSION ?= dev
-LDFLAGS := -s -w -X github.com/NemoNobody/memento/internal/version.Version=$(VERSION)
+# Commit stamps the exact tree into the binary (memento_status reports it).
+# `?=` + shell fallback: local builds get the live HEAD; CI can pass it explicitly.
+COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null)
+LDFLAGS := -s -w -X github.com/NemoNobody/memento/internal/version.Version=$(VERSION) -X github.com/NemoNobody/memento/internal/version.Commit=$(COMMIT)
 BIN     ?= memento
 
 CONTAINER ?= $(shell if command -v docker >/dev/null 2>&1; then echo "docker compose"; elif command -v podman-compose >/dev/null 2>&1; then echo "podman-compose"; else echo "podman compose"; fi)

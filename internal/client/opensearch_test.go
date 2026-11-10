@@ -39,7 +39,7 @@ func TestBuildSearchBody_Limit(t *testing.T) {
 // returns an arbitrary 10-hit subset with no truncation signal.
 func TestBuildNavBodiesSizeCapped(t *testing.T) {
 	bodies := map[string]map[string]interface{}{
-		"project": buildProjectBody("p", ""),
+		"project": buildProjectBody("p", "", "key"),
 		"keys":    buildKeysBody("p:", "", "", ""),
 	}
 	for name, body := range bodies {
@@ -116,7 +116,7 @@ func TestBuildSearchBody_SingleFilter(t *testing.T) {
 }
 
 func TestBuildProjectBody(t *testing.T) {
-	got := buildProjectBody("proj1", "")
+	got := buildProjectBody("proj1", "", "key")
 	q := got["query"].(map[string]interface{})
 	b := q["bool"].(map[string]interface{})
 	filters := b["filter"].([]map[string]interface{})
@@ -128,7 +128,7 @@ func TestBuildProjectBody(t *testing.T) {
 		t.Errorf("project = %v, want proj1", term["project"])
 	}
 
-	got = buildProjectBody("proj1", "proj1:state:")
+	got = buildProjectBody("proj1", "proj1:state:", "key")
 	q = got["query"].(map[string]interface{})
 	b = q["bool"].(map[string]interface{})
 	filters = b["filter"].([]map[string]interface{})
@@ -265,5 +265,27 @@ func TestBuildIndexBody_ValidJSON(t *testing.T) {
 	}
 	if _, ok := m["mappings"]; !ok {
 		t.Error("missing mappings in index body")
+	}
+}
+
+// TestBuildProjectBodySort pins the list sort contract: sort=updated orders
+// by last activity (newest first, undated docs last — legacy facts must not
+// hijack the top), anything else keeps the stable key-ascending navigation.
+func TestBuildProjectBodySort(t *testing.T) {
+	got := buildProjectBody("p", "", "updated")
+	sort, ok := got["sort"].([]map[string]interface{})
+	if !ok || len(sort) != 1 {
+		t.Fatalf("sort = %v, want one clause", got["sort"])
+	}
+	updated, ok := sort[0]["updated_at"].(map[string]interface{})
+	if !ok || updated["order"] != "desc" || updated["missing"] != "_last" {
+		t.Errorf("updated sort clause = %v, want desc with missing:_last", sort[0])
+	}
+
+	got = buildProjectBody("p", "", "key")
+	sort = got["sort"].([]map[string]interface{})
+	key, ok := sort[0]["key"].(map[string]interface{})
+	if !ok || key["order"] != "asc" {
+		t.Errorf("key sort clause = %v, want asc", sort[0])
 	}
 }

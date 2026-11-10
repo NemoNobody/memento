@@ -7,9 +7,11 @@ import (
 	"os/user"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/NemoNobody/memento/internal/client"
 	"github.com/NemoNobody/memento/internal/config"
+	"github.com/NemoNobody/memento/internal/version"
 	"github.com/spf13/cobra"
 )
 
@@ -59,11 +61,20 @@ func permWarning(cfg *config.Config, configFile string) string {
 		"): run chmod 600 " + configFile
 }
 
+// processStart is when this binary process booted: memento_status carries it
+// (RFC3339) so an agent can tell a long-lived MCP server from one that
+// restarted after an update — the "is the tool I'm talking to the build I
+// just installed?" question.
+var processStart = time.Now().UTC()
+
 // statusReport is the shared diagnostics payload behind `memento status` and the
 // memento_status MCP tool. It never carries an error: it describes the situation
 // so both a human and an agent can act on it.
 type statusReport struct {
 	OK                 bool                 `json:"ok" jsonschema:"true when OpenSearch is reachable and the store is usable"`
+	MCPVersion         string               `json:"mcp_version" jsonschema:"memento MCP server version (dev for source builds; the git tag for releases) — NOT the OpenSearch version"`
+	Commit             string               `json:"commit,omitempty" jsonschema:"git commit this binary was stamped from (release/dev builds); empty for plain source builds"`
+	StartedAt          string               `json:"started_at" jsonschema:"RFC3339 when this MCP server process started (a restart after an update moves it)"`
 	URL                string               `json:"url" jsonschema:"the OpenSearch URL that was tried"`
 	Index              string               `json:"index" jsonschema:"the index name used for facts"`
 	HistoryIndexPeriod string               `json:"history_index_period" jsonschema:"date granularity of the journal indices: day | week | month | quarter | year"`
@@ -77,7 +88,7 @@ type statusReport struct {
 	ConfigFile         string               `json:"config_file" jsonschema:"config file actually used, empty when none was found"`
 	EnvOverrides       []string             `json:"env_overrides,omitempty" jsonschema:"environment variables that override the config file"`
 	ClusterName        string               `json:"cluster_name,omitempty" jsonschema:"OpenSearch cluster name, when reachable"`
-	Version            string               `json:"version,omitempty" jsonschema:"OpenSearch version, when reachable"`
+	OpenSearchVersion  string               `json:"opensearch_version,omitempty" jsonschema:"OpenSearch version, when reachable"`
 	Storage            *client.StorageState `json:"storage,omitempty" jsonschema:"cluster health, disk usage and read-only state; absent when the store is unreachable"`
 	StorageNote        string               `json:"storage_note,omitempty" jsonschema:"what the health status means for this index, in words"`
 	Error              string               `json:"error,omitempty" jsonschema:"why the store is not usable"`
@@ -129,7 +140,12 @@ func listNote(names []string) string {
 // configuration — and with a password in the environment the status request
 // sends the credentials to a cloned repo's hijack endpoint.
 func collectStatus(ctx context.Context, confPath string, noCWD bool) statusReport {
-	rep := statusReport{ConfigFile: resolvedConfigPath(confPath, noCWD)}
+	rep := statusReport{
+		ConfigFile: resolvedConfigPath(confPath, noCWD),
+		MCPVersion: version.Version,
+		Commit:     version.Commit,
+		StartedAt:  processStart.Format(time.RFC3339),
+	}
 	setEnvOverrides(&rep)
 
 	var cfg *config.Config
@@ -204,7 +220,7 @@ func collectStatus(ctx context.Context, confPath string, noCWD bool) statusRepor
 
 	rep.OK = true
 	rep.ClusterName = info.ClusterName
-	rep.Version = info.Version.Number
+	rep.OpenSearchVersion = info.Version.Number
 	rep.Storage = c.StorageState(ctx)
 	rep.StorageNote = storageNote(rep.Storage)
 	// With a live client the security probe can resolve the store user: the
@@ -292,7 +308,16 @@ func printStatus(w io.Writer, rep statusReport) error {
 		_, err := io.WriteString(w, b.String())
 		return err
 	}
-	b.WriteString("url: ")
+	b.WriteString("memento ")
+	b.WriteString(rep.MCPVersion)
+	if rep.Commit != "" {
+		b.WriteString(" (")
+		b.WriteString(rep.Commit)
+		b.WriteString(")")
+	}
+	b.WriteString(", started ")
+	b.WriteString(rep.StartedAt)
+	b.WriteString("\nurl: ")
 	b.WriteString(rep.URL)
 	b.WriteString("\nindex: ")
 	b.WriteString(rep.Index)
@@ -327,7 +352,7 @@ func printStatus(w io.Writer, rep statusReport) error {
 		b.WriteString("cluster: ")
 		b.WriteString(rep.ClusterName)
 		b.WriteString(" (OpenSearch ")
-		b.WriteString(rep.Version)
+		b.WriteString(rep.OpenSearchVersion)
 		b.WriteString(")\n")
 		if _, err := io.WriteString(w, b.String()); err != nil {
 			return err

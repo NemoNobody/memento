@@ -587,5 +587,5 @@ if (ctx._source.updated_at == null || params.updated_at.compareTo(ctx._source.up
 // ScanAllFacts returns every fact (size cap NavSizeCap) for migration
 // planning and execution; project == "" scans all projects.
 func (c *Client) ScanAllFacts(ctx context.Context, project string) ([]model.Fact, SearchMeta, error) {
-	return c.search(ctx, buildProjectBody(project, ""))
+	return c.search(ctx, buildProjectBody(project, "", "key"))
 }
