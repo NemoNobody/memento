@@ -64,7 +64,10 @@ fact is a fresh verification — it resurrects the fact to `verified`, moves
 `observed_at` to now, and the transition is journaled (the Patch resurrect
 rule kept symmetric, so "when was it last seen alive" is always answerable
 from the log). `--notes` carries qualifiers ("checked the dev config
-only") to later sessions. A value over `summary_min_len` requires `--summary`
+only") to later sessions. An empty `--source` or `--notes` means "not given",
+never "erase": neither overwrites a stored value (the Patch contract) — on
+the touch path the qualifiers are not kept in history, so such a wipe would be
+irreversible. A value over `summary_min_len` requires `--summary`
 (the store's table of contents, see below).
 
 ### get
@@ -149,6 +152,9 @@ refused — the reason belongs to the transition. That refusal is computed from
 the read taken before the scripted update: a retire racing in between the read
 and the script slips past the check (the journal entry documents that event, so
 the audit trail never lies about the state — at worst a notes line duplicates).
+`memento_obsolete` refuses the same way, from the same kind of pre-read: two
+racing retires can duplicate the notes line and journal one entry each — the
+journal records every accepted write, so the events stay truthful.
 
 ## The journal (history)
 
@@ -318,13 +324,15 @@ Guarantees and limits:
   redaction would mangle it): at `ask` a finding can be confirmed, at
   `reject` there is no bypass. Redaction runs before the stored `size` and
   `content_hash` are computed, so the metadata describes exactly the text
-  that ships. The stored raw HTML is redacted in a high-confidence pass
-  applied twice: the second pass closes the common overlap-tail case (a span
-  starting inside an earlier replacement); a greedy span can still swallow a
-  scheme prefix, so a credential glued directly to a long token can survive
-  into the stored HTML — the raw HTML is never served to agents, so the
-  residual exposure is disk-only. Its redactions join the audit trail as
-  field `html`: the surgery on the store is reported. The document URL is scanned high-confidence only:
+  that ships. Every redacted field (agent-visible text and the stored raw
+  HTML) is redacted in a high-confidence pass applied twice: the second pass
+  closes the common overlap-tail case (a span starting inside an earlier
+  replacement); a greedy span can still swallow a scheme prefix, so a
+  credential glued directly to a long token can survive into the stored
+  HTML — the raw HTML is never served to agents, so the residual exposure is
+  disk-only. Its redactions join the audit trail as field `html`: the
+  surgery on the store is reported, and the trail lists only the spans the
+  text actually lost (a match folded into an overlapping one is not claimed). The document URL is scanned high-confidence only:
   it is identity (redaction is impossible) and medium shapes are ordinary in
   it (git SHAs in GitHub paths). The post-redirect `final_url` carries the
   same identity role: scanned high-confidence only, and a credential-bearing

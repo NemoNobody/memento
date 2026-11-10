@@ -112,7 +112,27 @@ Fetch guard triage and fetch v1 fixes:
 - Render env-proxy hardening: the proxy Go's environment machinery produced
   is validated as a parsed struct — a malformed env proxy normalized so the
   credentials hide in the path is refused, and no `@` ever reaches obscura's
-  argv (`/proc`-visible).
+  argv (`/proc`-visible): the `@`/`%40` path check guards both the config and
+  the env branch, and the SSRF pre-check is documented as guarding the
+  requested URL only (obscura follows redirects itself — run it behind a
+  proxy for per-hop policy).
+- `add` never erases a stored `source` with an empty one (the notes rule):
+  the qualifier is not kept in history on the touch path, so the wipe would
+  be irreversible; a correction replaces source only when one is given.
+- The guard's `redactions` audit lists only the spans the text actually lost
+  (a match folded into an overlapping one is no longer reported), and the
+  double redaction pass now covers every agent-visible field, not just the
+  stored HTML.
+- SSRF tunnels: the NAT64 well-known prefix (`64:ff9b::/96`) is decoded to
+  its embedded IPv4 like 6to4 and Teredo already were.
+- `memento keys` shape errors answer before any store contact: a prefix that
+  normalizes to empty (" " or "*") with no `--match` is a caller error, not
+  a wrapped "the store is unreachable" advisory. `memento fetch --project`
+  and `memento docs --project` are trimmed like every other edge, `memento
+  status` lists the render env overrides (`MEMENTO_FETCH_RENDER`,
+  `MEMENTO_FETCH_OBSCURA_PATH`, `MEMENTO_FETCH_OBSCURA_STEALTH`), and
+  `memento prune` on legacy keys reports the actually removed count instead
+  of a pre-read guess.
 
 - Default fetch User-Agent is a desktop Chrome string (sites 403 known bot
   UAs; override with `fetch_user_agent`/`MEMENTO_FETCH_USER_AGENT`).
