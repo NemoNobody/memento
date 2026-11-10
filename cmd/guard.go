@@ -53,7 +53,7 @@ func guardCheck(level string, allowed bool, fields ...guardField) error {
 	}
 
 	var b strings.Builder
-	b.WriteString("secret-guard: probable secret(s) detected; the fact was NOT stored.\n")
+	b.WriteString("secret-guard: probable secret(s) detected; the write was NOT stored.\n")
 	for _, fd := range findings {
 		b.WriteString("  - field ")
 		b.WriteString(fd.Field)
@@ -71,7 +71,7 @@ func guardCheck(level string, allowed bool, fields ...guardField) error {
 		b.WriteString("show it to the user and re-run with --allow-secret (CLI) or ")
 		b.WriteString("confirm_secret=true (MCP) only after their explicit approval.")
 	} else {
-		b.WriteString("Remove the secret from the fact and store it without it; ")
+		b.WriteString("Remove the secret from the text and retry the write; ")
 		b.WriteString("this mode (secret_guard=reject) has no confirmation flag.")
 	}
 	return errors.New(b.String())

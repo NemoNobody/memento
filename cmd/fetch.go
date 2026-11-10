@@ -331,6 +331,10 @@ func guardFetch(doc *model.Doc, level string, allowed bool) ([]model.Redaction, 
 		doc.Images[i].Alt = redact("image "+strconv.Itoa(i)+" alt", doc.Images[i].Alt)
 		doc.Images[i].Title = redact("image "+strconv.Itoa(i)+" title", doc.Images[i].Title)
 		content = append(content,
+			// The href joins the content scan: a medium shape left in a stored
+			// image URL must be visible through GuardMediumIgnored, not silent
+			// (and a high shape surviving the redact above is still refused).
+			guardField{Name: "image " + strconv.Itoa(i) + " url", Text: doc.Images[i].URL},
 			guardField{Name: "image " + strconv.Itoa(i) + " alt", Text: doc.Images[i].Alt},
 			guardField{Name: "image " + strconv.Itoa(i) + " title", Text: doc.Images[i].Title})
 	}
@@ -369,6 +373,13 @@ func guardFetch(doc *model.Doc, level string, allowed bool) ([]model.Redaction, 
 // medium-shape noise is the content the user asked to read.
 func isAPIContentType(ct string) bool {
 	media := strings.ToLower(strings.TrimSpace(strings.Split(ct, ";")[0]))
+	// XHTML is documentation, not an API payload: FetchPage parses it on the
+	// HTML doc route, and the guard route must agree with the parser — the
+	// "+xml" suffix would otherwise refuse medium shapes (asset hashes,
+	// quoted SHAs) on pages that were already parsed as docs.
+	if media == "application/xhtml+xml" {
+		return false
+	}
 	switch media {
 	case "application/json", "application/xml", "text/xml":
 		return true

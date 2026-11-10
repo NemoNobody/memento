@@ -309,3 +309,42 @@ func TestRedactionMarkerIsStable(t *testing.T) {
 		}
 	}
 }
+
+// TestScanHashContextVocabulary (finding 106): the hint vocabulary must not
+// blanket-exempt whole habitats. "git" sat next to every hex-ish token in
+// any checkout context; "sum" fired inside ordinary prose. Both are out.
+func TestScanHashContextVocabulary(t *testing.T) {
+	for _, s := range []string{
+		"git " + sentinelHex40,
+		"the sum " + sentinelHex40,
+	} {
+		if got := Scan("value", s); len(got) == 0 {
+			t.Errorf("removed hint word must not exempt: %q -> %+v", s, got)
+		}
+	}
+}
+
+// TestInHashContextNoFabricatedBoundaries (finding 107): the window slice
+// must not manufacture word boundaries at its cut edges — a longer word
+// ("rehash") cut to a hint ("hash") is not a hash context, and neither is
+// "git" inside "gitignore". A clean hint word still exempts.
+func TestInHashContextNoFabricatedBoundaries(t *testing.T) {
+	// "rehash" cut by the window start: the slice would begin with "hash".
+	text := "rehash" + strings.Repeat(" ", hashHintWindow-4) + sentinelHex40
+	start := strings.Index(text, sentinelHex40)
+	if inHashContext(text, start, start+len(sentinelHex40)) {
+		t.Error("window-cut 'rehash' must not fabricate a 'hash' hint")
+	}
+	// Clean hint word, same distance: exempts.
+	text2 := "checksum" + strings.Repeat(" ", hashHintWindow-8) + sentinelHex40
+	start2 := strings.Index(text2, sentinelHex40)
+	if !inHashContext(text2, start2, start2+len(sentinelHex40)) {
+		t.Error("clean 'checksum' within the window must exempt")
+	}
+	// "git" inside "gitignore" is no hint (the word survives the window).
+	text3 := ".gitignore " + sentinelHex40
+	start3 := strings.Index(text3, sentinelHex40)
+	if inHashContext(text3, start3, start3+len(sentinelHex40)) {
+		t.Error("'git' inside 'gitignore' must not count as a hint")
+	}
+}

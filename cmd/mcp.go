@@ -1509,13 +1509,17 @@ type getDocInput struct {
 }
 
 type getDocOutput struct {
-	Found     bool                `json:"found" jsonschema:"false when no stored doc has this hash"`
-	Hash      string              `json:"hash,omitempty"`
-	URL       string              `json:"url,omitempty"`
-	Title     string              `json:"title,omitempty"`
-	Stale     bool                `json:"stale,omitempty" jsonschema:"past TTL: refresh with memento_fetch_doc before quoting"`
-	Truncated bool                `json:"truncated,omitempty" jsonschema:"extraction hit a limit: the stored text is a prefix"`
-	Sections  []docSectionOutline `json:"sections,omitempty" jsonschema:"outline: heading + length per section"`
+	Found     bool   `json:"found" jsonschema:"false when no stored doc has this hash"`
+	Hash      string `json:"hash,omitempty"`
+	URL       string `json:"url,omitempty"`
+	Title     string `json:"title,omitempty"`
+	Stale     bool   `json:"stale,omitempty" jsonschema:"past TTL: refresh with memento_get_doc before quoting"`
+	Truncated bool   `json:"truncated,omitempty" jsonschema:"extraction hit a limit: the stored text is a prefix"`
+	// GuardMediumIgnored surfaces the doc-route leniency recorded at fetch
+	// time: the leniency must be visible on every read path, not only the
+	// outline printed by memento_fetch_doc.
+	GuardMediumIgnored int                 `json:"guard_medium_ignored,omitempty" jsonschema:"medium-confidence shapes left in documentation content on purpose (documentation route only); high-confidence secrets are always redacted"`
+	Sections           []docSectionOutline `json:"sections,omitempty" jsonschema:"outline: heading + length per section"`
 
 	SectionText string `json:"section_text,omitempty" jsonschema:"the text of the requested section"`
 	FullText    string `json:"full_text,omitempty" jsonschema:"every section, delimited by headers (full=true)"`
@@ -1539,13 +1543,14 @@ func (s *mcpServer) getDoc(ctx context.Context, req *mcp.CallToolRequest, in get
 	}
 	now := time.Now().UTC()
 	out := getDocOutput{
-		Found:     true,
-		Hash:      doc.URLHash,
-		URL:       doc.URL,
-		Title:     doc.Title,
-		Stale:     doc.Stale(now),
-		Truncated: doc.Truncated,
-		Sections:  newDocOutline(doc),
+		Found:              true,
+		Hash:               doc.URLHash,
+		URL:                doc.URL,
+		Title:              doc.Title,
+		Stale:              doc.Stale(now),
+		Truncated:          doc.Truncated,
+		GuardMediumIgnored: doc.GuardMediumIgnored,
+		Sections:           newDocOutline(doc),
 	}
 	if in.Full {
 		var b strings.Builder

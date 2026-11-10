@@ -87,16 +87,23 @@ var patterns = []pattern{
 // hashHintWindow bytes of one of these words is a content fingerprint, not
 // a credential — the user writes the hash BECAUSE it identifies a file, and
 // refusing such facts loses the information the fact exists for. The
-// exemption never touches the deterministic vendor-shaped rules (a labeled
-// or prefixed secret stays a secret) and never touches assignments: a real
-// credential beside the word "commit" still meets the assignment rule.
-var hashContextHints = regexp.MustCompile(`(?i)\b(?:sha[0-9]{1,3}|md5|hash|digest|checksum|revision|rev|commit|hex|git|blob|tree|tag|sum)\b`)
+// vocabulary is deliberate: `git` and `sum` were removed — "git" sits next
+// to every git SHA-shaped token in any checkout context (exempting
+// everything near the word) and "sum"/"assume"/"custom" neighborhoods fire
+// on ordinary prose. The exemption never touches the deterministic
+// vendor-shaped rules (a labeled or prefixed secret stays a secret) and
+// never touches assignments: a real credential beside the word "commit"
+// still meets the assignment rule.
+var hashContextHints = regexp.MustCompile(`(?i)\b(?:sha[0-9]{1,3}|md5|hash|digest|checksum|revision|rev|commit|hex|blob|tree|tag)\b`)
 
 const hashHintWindow = 40
 
 // inHashContext reports whether the window around [start,end) carries a
-// hash-context hint. Byte windows are fine: the hint regex is ASCII and a
-// mis-cut boundary rune simply cannot match it.
+// hash-context hint. Hints are located inside the window, but each candidate
+// is boundary-checked against the FULL text: a slice would put \b at an
+// arbitrary byte cut and fabricate word boundaries — text "rehash XXXX"
+// sliced to "hash XXXX" answers "hash", "gitignore" answers "git". A
+// candidate adjacent to an ASCII word byte in the real text is not a hint.
 func inHashContext(text string, start, end int) bool {
 	lo := start - hashHintWindow
 	if lo < 0 {
@@ -106,7 +113,22 @@ func inHashContext(text string, start, end int) bool {
 	if hi > len(text) {
 		hi = len(text)
 	}
-	return hashContextHints.MatchString(text[lo:hi])
+	for _, loc := range hashContextHints.FindAllStringIndex(text[lo:hi], -1) {
+		s, e := lo+loc[0], lo+loc[1]
+		if s > 0 && isWordByte(text[s-1]) {
+			continue
+		}
+		if e < len(text) && isWordByte(text[e]) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// isWordByte matches Go regexp's \b definition (\w is ASCII [0-9A-Za-z_]).
+func isWordByte(b byte) bool {
+	return b == '_' || (b >= '0' && b <= '9') || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
 }
 
 // classifyAssignment implements the deterministic rule for credential
