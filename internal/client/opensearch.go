@@ -355,6 +355,9 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 		if resurrect {
 			observed := time.Now().UTC()
 			stated := *existing
+			// The touch doc moves category unconditionally (the write edge
+			// canonicalizes it); the journaled resurrect must state the same.
+			stated.Category = f.Category
 			if f.Notes != "" {
 				stated.Notes = f.Notes
 			}
@@ -413,6 +416,11 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 	// audit fiction. (The entry body is value/notes/source only — see
 	// journalAppend — so the merge stays three fields.)
 	stated := *f
+	// project is write-once (the correction script never moves it): the
+	// journal entry of a correction states the doc's project, not the
+	// request's — the CLI/MCP default "global" would otherwise journal a
+	// project the fact never had.
+	stated.Project = existing.Project
 	if stated.Source == "" {
 		stated.Source = existing.Source
 	}
@@ -562,8 +570,10 @@ func (c *Client) Get(ctx context.Context, key string) (*model.Fact, error) {
 	return &f, nil
 }
 
-// Search performs a keyword search, capped to limit hits (limit <= 0 uses the
-// server default of 10). Relevance order is OpenSearch's.
+// Search performs a keyword search, capped to limit hits. limit <= 0 means
+// "no caller cap": the size is then NavSizeCap (1000), not the server's
+// default of 10, which would silently truncate. Relevance order is
+// OpenSearch's.
 func (c *Client) Search(ctx context.Context, query string, project, category, status string, limit int) ([]model.Fact, SearchMeta, error) {
 	return c.search(ctx, buildSearchBody(query, project, category, status, limit))
 }

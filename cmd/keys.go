@@ -50,14 +50,16 @@ func KeysCmd() *cobra.Command {
 			if normPrefix == "" && keysFlags.match == "" {
 				fatalErr(errors.New("keys: provide a key prefix and/or --match"))
 			}
+			// Shape before store contact (the MCP keys contract): an invalid
+			// status must not pay for a client build and an index ensure.
+			status, serr := resolveStatus(keysFlags.status)
+			if serr != nil {
+				fatalErr(serr)
+			}
 			ctx := context.Background()
 			c, err := newClient()
 			if err != nil {
 				fatalErr(err)
-			}
-			status, serr := resolveStatus(keysFlags.status)
-			if serr != nil {
-				fatalErr(serr)
 			}
 			facts, meta, err := c.Keys(ctx, normPrefix, keysFlags.match, keysFlags.project, status)
 			if err != nil {

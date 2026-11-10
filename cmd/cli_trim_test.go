@@ -331,6 +331,29 @@ func TestCLITrimParity(t *testing.T) {
 	}
 }
 
+// TestCLIStatusAndLimitShapeBeforeStore pins the "shape before store contact"
+// contract on the CLI search/keys edges: an invalid --status or a negative
+// --limit is answered as a caller error with zero store requests (the MCP
+// edges validate the same way; a negative limit would otherwise read as
+// "no cap" and widen the page).
+func TestCLIStatusAndLimitShapeBeforeStore(t *testing.T) {
+	fake, calls := startTrimFake(t, true)
+	cases := [][]string{
+		{"search", "q", "--status", "bogus"},
+		{"search", "q", "--limit", "-1"},
+		{"keys", "k", "--status", "bogus"},
+	}
+	for _, args := range cases {
+		out, code := runCLISubprocess(t, fake.URL, args...)
+		if code == 0 {
+			t.Errorf("%v exited 0, want a shape refusal; output: %s", args, out)
+		}
+	}
+	if got := calls(); len(got) != 0 {
+		t.Errorf("the refused queries reached the store: %v", got)
+	}
+}
+
 // TestCLIKeysPaddedPrefixGuard pins the shape-error half of the keys edge:
 // a prefix that normalizes to "" (" " or "*") with no usable --match is a
 // caller error answered before any store contact (MCP returns the same

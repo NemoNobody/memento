@@ -129,11 +129,15 @@ Fetch guard triage and fetch v1 fixes:
   residual.
 - A correction journals the MERGED accepted state (the new value with the
   stored `source`/`notes` when the request left them empty): the journal
-  entry and the doc never disagree about the qualifiers. `memento keys "k *"
-  ` normalizes to `k` once (the guard-checked prefix is what the wire sees),
-  `memento_list` validates `status` before any store contact, and `memento
-  status`'s env list is now pinned against the loader's source (the
-  "kept in sync" comment is a test, not a promise).
+  entry and the doc never disagree about the qualifiers. The entry also
+  repeats the doc's write-once `project` (a correction with the default
+  `global` no longer journals a project the fact never had), and a
+  resurrected fact journals the canonicalized category the doc received.
+  `memento keys "k *"` normalizes to `k` once (the guard-checked prefix is
+  what the wire sees), `memento_list`/`memento_search`/`memento_keys` and the
+  CLI `search`/`keys` validate status (and `search --limit >= 0`) before any
+  store contact, and `memento status`'s env list is now pinned against the
+  loader's source (the "kept in sync" comment is a test, not a promise).
 - `memento keys` shape errors answer before any store contact: a prefix that
   normalizes to empty (" " or "*") with no `--match` is a caller error, not
   a wrapped "the store is unreachable" advisory. `memento fetch --project`

@@ -493,10 +493,6 @@ type searchInput struct {
 }
 
 func (s *mcpServer) search(ctx context.Context, req *mcp.CallToolRequest, in searchInput) (*mcp.CallToolResult, factsOutput, error) {
-	c, err := s.newClient(ctx)
-	if err != nil {
-		return nil, factsOutput{}, storeError("memento_search", err)
-	}
 	limit := in.Limit
 	if limit <= 0 {
 		limit = 10
@@ -513,6 +509,12 @@ func (s *mcpServer) search(ctx context.Context, req *mcp.CallToolRequest, in sea
 	status, serr := resolveStatus(in.Status)
 	if serr != nil {
 		return nil, factsOutput{}, serr
+	}
+	// Shape before store contact (the list/keys contract): an invalid status
+	// must not pay for a client build and an index ensure.
+	c, err := s.newClient(ctx)
+	if err != nil {
+		return nil, factsOutput{}, storeError("memento_search", err)
 	}
 	facts, meta, err := c.Search(ctx, in.Query, in.Project, in.Category, status, limit)
 	if err != nil {
@@ -946,13 +948,13 @@ func (s *mcpServer) keys(ctx context.Context, req *mcp.CallToolRequest, in keysI
 	if normPrefix == "" && in.Match == "" {
 		return nil, factsOutput{}, fmt.Errorf("memento_keys: provide a key prefix and/or a match pattern")
 	}
-	c, err := s.newClient(ctx)
-	if err != nil {
-		return nil, factsOutput{}, storeError("memento_keys", err)
-	}
 	status, serr := resolveStatus(in.Status)
 	if serr != nil {
 		return nil, factsOutput{}, serr
+	}
+	c, err := s.newClient(ctx)
+	if err != nil {
+		return nil, factsOutput{}, storeError("memento_keys", err)
 	}
 	facts, meta, err := c.Keys(ctx, normPrefix, in.Match, in.Project, status)
 	if err != nil {

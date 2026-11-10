@@ -474,6 +474,79 @@ func TestAddEmptySourcePreservesSource(t *testing.T) {
 	}
 }
 
+// TestAddCorrectionJournalsStoredProject pins the journal/projection agreement
+// on project: the correction script never moves project (write-once, like
+// birth authorship), so a correction whose request carries the default
+// "global" must journal the doc's project, not the request's.
+func TestAddCorrectionJournalsStoredProject(t *testing.T) {
+	var journalBody string
+	c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+		if r.Method == http.MethodPost && strings.HasPrefix(r.Path, "/memento-history-") && strings.HasSuffix(r.Path, "/_doc") {
+			journalBody = r.Body
+			return http.StatusOK, `{"_id":"journal-entry-1","result":"created"}`
+		}
+		if code, body := journalRoutesOK(r); code != http.StatusInternalServerError {
+			return code, body
+		}
+		switch {
+		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
+			return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
+				"fact_id":"existing-id","key":"k","value":"old","project":"dev-tools",
+				"category":"config","status":"verified",
+				"created_at":"2020-01-01T00:00:00Z","updated_at":"2020-01-01T00:00:00Z",
+				"observed_at":"2020-01-01T00:00:00Z"}}`
+		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+		}
+		return http.StatusInternalServerError, `{"status":500,"error":"unexpected"}`
+	})
+
+	// The request carries a fresh fact built with the CLI/MCP default project.
+	if _, err := c.Add(context.Background(), model.NewFact("k", "new value", "config", "global", "test:contract", "")); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if !strings.Contains(journalBody, `"project":"dev-tools"`) {
+		t.Errorf("journal entry must carry the doc's project: %s", journalBody)
+	}
+	if strings.Contains(journalBody, `"project":"global"`) {
+		t.Errorf("journal entry must not state the request's project: %s", journalBody)
+	}
+}
+
+// TestAddResurrectJournalsMovedCategory pins the resurrect path's agreement:
+// the touch doc moves category unconditionally (the write edge canonicalizes
+// it), so the journaled resurrection must state the new category too.
+func TestAddResurrectJournalsMovedCategory(t *testing.T) {
+	var journalBody string
+	c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+		if r.Method == http.MethodPost && strings.HasPrefix(r.Path, "/memento-history-") && strings.HasSuffix(r.Path, "/_doc") {
+			journalBody = r.Body
+			return http.StatusOK, `{"_id":"journal-entry-1","result":"created"}`
+		}
+		if code, body := journalRoutesOK(r); code != http.StatusInternalServerError {
+			return code, body
+		}
+		switch {
+		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
+			return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
+				"fact_id":"existing-id","key":"k","value":"same","project":"p",
+				"category":"location","status":"obsolete",
+				"created_at":"2020-01-01T00:00:00Z","updated_at":"2020-01-01T00:00:00Z",
+				"observed_at":"2020-01-01T00:00:00Z"}}`
+		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+		}
+		return http.StatusInternalServerError, `{"status":500,"error":"unexpected"}`
+	})
+
+	if _, err := c.Add(context.Background(), model.NewFact("k", "same", "config", "p", "test:contract", "")); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if !strings.Contains(journalBody, `"category":"config"`) {
+		t.Errorf("the journaled resurrect must state the category the doc received: %s", journalBody)
+	}
+}
+
 // TestAddSendsRefreshWaitForForNewFacts checks the same refresh guarantee on the
 // create path, where no previous document exists.
 func TestAddSendsRefreshWaitForForNewFacts(t *testing.T) {

@@ -74,10 +74,6 @@ func TestPermWarning(t *testing.T) {
 	}
 }
 
-// TestCollectStatusConfigChain is the credential-hijack boundary: the MCP
-// server resolves config through the NoCWD chain, so a cloned repo's
-// memento.conf in the editor's cwd cannot move the report (and its
-// credentialed request) to an attacker endpoint. The CLI keeps the cwd entry.
 // TestStatusEnvVarsMatchConfig pins the "kept in sync" claim of
 // statusEnvVars: every env variable config.LoadConfigFrom reads must be
 // listed in status (names only), and the list must not name a variable the
@@ -115,6 +111,10 @@ func TestStatusEnvVarsMatchConfig(t *testing.T) {
 	}
 }
 
+// TestCollectStatusConfigChain is the credential-hijack boundary: the MCP
+// server resolves config through the NoCWD chain, so a cloned repo's
+// memento.conf in the editor's cwd cannot move the report (and its
+// credentialed request) to an attacker endpoint. The CLI keeps the cwd entry.
 func TestCollectStatusConfigChain(t *testing.T) {
 	dir := t.TempDir()
 	hijack := `{"opensearch_url":"https://hijack.invalid:9999","opensearch_user":"u","opensearch_password":"p","allow_plaintext":true}`

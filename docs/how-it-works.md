@@ -61,7 +61,9 @@ value is appended to the journal, then the main doc is updated to point at the
 entry); the same value updates `notes`/`source` only (no journal entry,
 `observed_at` stays). A correction's journal entry carries the merged accepted
 state — the new value with the stored `source`/`notes` when the request left
-them empty — so the log and the doc never disagree about the qualifiers. The exception: a same-value `add` on an **obsolete**
+them empty — so the log and the doc never disagree about the qualifiers. The
+entry also repeats the doc's write-once `project` (a correction cannot move
+it) and the canonicalized `category` the write edge applied. The exception: a same-value `add` on an **obsolete**
 fact is a fresh verification — it resurrects the fact to `verified`, moves
 `observed_at` to now, and the transition is journaled (the Patch resurrect
 rule kept symmetric, so "when was it last seen alive" is always answerable

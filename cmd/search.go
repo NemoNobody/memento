@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -24,6 +25,16 @@ func SearchCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			query := args[0]
+			// Shape before store contact: an invalid status or a negative
+			// limit are the caller's problem. A negative limit would read as
+			// "no cap" (0 = up to 1000) and silently widen the page.
+			if searchFlags.limit < 0 {
+				fatalErr(fmt.Errorf("search: --limit must be >= 0, got %d (0 = up to 1000)", searchFlags.limit))
+			}
+			status, serr := resolveStatus(searchFlags.status)
+			if serr != nil {
+				fatalErr(serr)
+			}
 			ctx := context.Background()
 			c, err := newClient()
 			if err != nil {
@@ -32,10 +43,6 @@ func SearchCmd() *cobra.Command {
 			// Write edges store the lowercase canonical category; the term
 			// filter is case-sensitive and whitespace-exact, so canonicalize
 			// the filter the same way (search -c " Config" must match "config").
-			status, serr := resolveStatus(searchFlags.status)
-			if serr != nil {
-				fatalErr(serr)
-			}
 			facts, meta, err := c.Search(ctx, query, strings.TrimSpace(searchFlags.project), strings.ToLower(strings.TrimSpace(searchFlags.category)), status, searchFlags.limit)
 			if err != nil {
 				fatalErr(err)
