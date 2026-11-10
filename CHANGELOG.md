@@ -138,6 +138,9 @@ Fetch guard triage and fetch v1 fixes:
   CLI `search`/`keys` validate status (and `search --limit >= 0`) before any
   store contact, and `memento status`'s env list is now pinned against the
   loader's source (the "kept in sync" comment is a test, not a promise).
+  `memento_patch` answers its shape errors (nothing to change, a bogus
+  `status`, a `reason` without `status=obsolete`) before any store contact
+  too — one exported validator, one contract on both edges.
 - `memento keys` shape errors answer before any store contact: a prefix that
   normalizes to empty (" " or "*") with no `--match` is a caller error, not
   a wrapped "the store is unreachable" advisory. `memento fetch --project`

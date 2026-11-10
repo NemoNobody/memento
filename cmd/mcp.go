@@ -815,6 +815,20 @@ func (s *mcpServer) patch(ctx context.Context, req *mcp.CallToolRequest, in patc
 		return nil, patchOutput{}, errors.New("memento_patch: key is required")
 	}
 	in.Key = strings.TrimSpace(in.Key)
+	// Shape first: a malformed patch is the caller's problem, answered before
+	// config, guard and any store contact (the list/search/keys contract).
+	fields := client.PatchFields{
+		Value:       in.Value,
+		Summary:     in.Summary,
+		Notes:       in.Notes,
+		NotesAppend: in.NotesAppend,
+		Source:      in.Source,
+		Status:      in.Status,
+		Reason:      in.Reason,
+	}
+	if err := client.ValidatePatchFields(fields); err != nil {
+		return nil, patchOutput{}, err
+	}
 	cfg, cerr := s.loadConfig()
 	if cerr != nil {
 		return nil, patchOutput{}, storeError("memento_patch", cerr)
@@ -836,15 +850,7 @@ func (s *mcpServer) patch(ctx context.Context, req *mcp.CallToolRequest, in patc
 	if err != nil {
 		return nil, patchOutput{}, storeError("memento_patch", err)
 	}
-	res, err := c.Patch(ctx, in.Key, client.PatchFields{
-		Value:       in.Value,
-		Summary:     in.Summary,
-		Notes:       in.Notes,
-		NotesAppend: in.NotesAppend,
-		Source:      in.Source,
-		Status:      in.Status,
-		Reason:      in.Reason,
-	})
+	res, err := c.Patch(ctx, in.Key, fields)
 	if err != nil {
 		return nil, patchOutput{}, storeError("memento_patch", err)
 	}

@@ -722,6 +722,11 @@ func TestMCPServerM1ValidationOffline(t *testing.T) {
 		// index: the fact path gates it exactly like the fetch path.
 		{"memento_add", map[string]any{"key": "k", "value": "v", "category": "config", "project": "rel " + guardSentinel}, "secret-guard"},
 		{"memento_patch", map[string]any{"key": ""}, "key is required"},
+		// The patch shape (nothing-to-change, bogus status, orphan reason) is
+		// validated before config/guard/store: a shape error must never arrive
+		// wrapped in the availability advice (round-8 parity with list/keys).
+		{"memento_patch", map[string]any{"key": "k", "status": "bogus"}, "status must be verified|obsolete"},
+		{"memento_patch", map[string]any{"key": "k", "reason": "gone"}, "reason is only accepted"},
 		{"memento_get", map[string]any{"key": "k", "keys": []any{"k"}}, "exactly one"},
 		{"memento_get", map[string]any{}, "exactly one"},
 	} {

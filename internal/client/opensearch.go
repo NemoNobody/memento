@@ -774,6 +774,25 @@ ctx._source.updated_at = params.updated_at;
 ctx._source.updated_by = params.updated_by;
 `
 
+// ValidatePatchFields is the shape contract of a partial update, exported so
+// the MCP edge can refuse a malformed patch before any store contact (the
+// same "shape before availability" rule as list/search/keys: a bogus status
+// must not pay for an index ensure, and on an unreachable store the shape
+// error would drown in the "do not retry" advice).
+func ValidatePatchFields(p PatchFields) error {
+	if p.Value == "" && p.Summary == "" && p.Notes == "" && p.NotesAppend == "" &&
+		p.Source == "" && p.Status == "" && p.Reason == "" {
+		return fmt.Errorf("patch: nothing to change (provide value, summary, notes, notes_append, source, status, or reason)")
+	}
+	if p.Reason != "" && p.Status != "obsolete" {
+		return fmt.Errorf("patch: reason is only accepted with status=obsolete")
+	}
+	if p.Status != "" && p.Status != "verified" && p.Status != "obsolete" {
+		return fmt.Errorf("patch: status must be verified|obsolete, got %q", p.Status)
+	}
+	return nil
+}
+
 // Patch applies a partial update to an existing fact. It exists so an agent
 // can extend qualifiers (append a dated note) or flip status without
 // re-sending — and re-paying context for — the whole value. Journal
@@ -790,15 +809,8 @@ ctx._source.updated_by = params.updated_by;
 // dead fact alive IS a fresh verification, and a fact that resurrects while
 // staying stale would contradict its own staleness signal.
 func (c *Client) Patch(ctx context.Context, key string, p PatchFields) (PatchResult, error) {
-	if p.Value == "" && p.Summary == "" && p.Notes == "" && p.NotesAppend == "" &&
-		p.Source == "" && p.Status == "" && p.Reason == "" {
-		return PatchResult{}, fmt.Errorf("patch: nothing to change (provide value, summary, notes, notes_append, source, status, or reason)")
-	}
-	if p.Reason != "" && p.Status != "obsolete" {
-		return PatchResult{}, fmt.Errorf("patch: reason is only accepted with status=obsolete")
-	}
-	if p.Status != "" && p.Status != "verified" && p.Status != "obsolete" {
-		return PatchResult{}, fmt.Errorf("patch: status must be verified|obsolete, got %q", p.Status)
+	if err := ValidatePatchFields(p); err != nil {
+		return PatchResult{}, err
 	}
 
 	existing, err := c.Get(ctx, key)
