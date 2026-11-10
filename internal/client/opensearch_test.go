@@ -384,8 +384,12 @@ func TestAddNewValueWritesCurrentRef(t *testing.T) {
 	if len(updates) != 1 {
 		t.Fatalf("correction script runs = %d, want 1", len(updates))
 	}
-	if !strings.Contains(updates[0].Body, `"current_ref":"journal-entry-1"`) {
-		t.Errorf("correction body = %s, want current_ref pointing at the journaled entry", updates[0].Body)
+	appends := journalAppends(fake)
+	if len(appends) != 1 {
+		t.Fatalf("journal appends = %d, want 1", len(appends))
+	}
+	if refID := appends[0].Path[strings.LastIndex(appends[0].Path, "/")+1:]; refID == "" || !strings.Contains(updates[0].Body, `"current_ref":"`+refID+`"`) {
+		t.Errorf("correction body = %s, want current_ref pointing at the journaled entry id %q", updates[0].Body, refID)
 	}
 }
 
@@ -558,7 +562,11 @@ func TestAddSameValueOnObsoleteJournalsResurrect(t *testing.T) {
 	if !strings.Contains(updates[0].Body, "observed_at") {
 		t.Errorf("update body = %.160s, want observed_at moved (fresh verification)", updates[0].Body)
 	}
-	if !strings.Contains(updates[0].Body, `"current_ref":"journal-entry-1"`) {
-		t.Errorf("update body = %.160s, want current_ref pointing at the resurrection entry", updates[0].Body)
+	appends := journalAppends(fake)
+	if len(appends) != 1 {
+		t.Fatalf("journal appends = %d, want 1", len(appends))
+	}
+	if refID := appends[0].Path[strings.LastIndex(appends[0].Path, "/")+1:]; refID == "" || !strings.Contains(updates[0].Body, `"current_ref":"`+refID+`"`) {
+		t.Errorf("update body = %.160s, want current_ref pointing at the resurrection entry id %q", updates[0].Body, refID)
 	}
 }

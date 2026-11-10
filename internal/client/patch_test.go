@@ -120,8 +120,8 @@ func TestPatchValueChangeJournalsAndClearsSummary(t *testing.T) {
 	if v, ok := params["observed_at"]; !ok || v == nil {
 		t.Error("params.observed_at must move on a value change")
 	}
-	if params["current_ref"] != "journal-entry-1" {
-		t.Errorf("current_ref = %v, want journal-entry-1", params["current_ref"])
+	if refID := appends[0].Path[strings.LastIndex(appends[0].Path, "/")+1:]; refID == "" || params["current_ref"] != refID {
+		t.Errorf("current_ref = %v, want the preallocated entry id %q", params["current_ref"], refID)
 	}
 }
 
@@ -207,6 +207,66 @@ func TestPatchObsoleteWithReasonJournals(t *testing.T) {
 	}
 	if !strings.Contains(appends[0].Body, "n\\nfile deleted") {
 		t.Errorf("journal entry must carry the folded reason: %s", appends[0].Body)
+	}
+}
+
+// TestPatchRefusedUpdateLeavesNoJournalEntry pins the journal contract the
+// live smoke broke: when the cluster refuses the scripted update (the
+// painless compile-error class, a shard refusing the write), the journal
+// must stay silent — an entry describing a state that never landed is an
+// audit lie. The doc-first order (entry built, id preallocated into
+// current_ref, entry indexed only after the update is accepted) is what
+// guarantees this; journal-first left phantom entries behind on every
+// refused patch.
+func TestPatchRefusedUpdateLeavesNoJournalEntry(t *testing.T) {
+	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
+		if code, body := journalRoutesOK(r); code != http.StatusInternalServerError {
+			return code, body
+		}
+		switch {
+		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
+			return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{"key":"k","value":"v","category":"config","project":"p","status":"verified"}}`
+		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+			return http.StatusBadRequest, `{"status":400,"error":{"type":"illegal_argument_exception","reason":"failed to execute script"}}`
+		}
+		return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Method + " " + r.Path + `"}`
+	})
+	if _, err := c.Patch(context.Background(), "k", PatchFields{Value: "new value"}); err == nil {
+		t.Fatal("refused update must report an error")
+	}
+	if appends := journalAppends(fake); len(appends) != 0 {
+		t.Errorf("a refused update must not journal, got %d appends: %s", len(appends), appends[0].Body)
+	}
+}
+
+// TestPatchJournalEntryLinkedByPreallocatedID pins the link that the
+// doc-first order needs: the update carries current_ref = the entry id,
+// and the entry is indexed under that same id (op_type=create), so the
+// doc->entry link survives even though the entry lands after the update.
+func TestPatchJournalEntryLinkedByPreallocatedID(t *testing.T) {
+	var body string
+	c, fake := newFakeClient(t, patchRespond(
+		`{"key":"k","value":"v","category":"config","project":"p","status":"verified"}`,
+		&body))
+	if _, err := c.Patch(context.Background(), "k", PatchFields{Value: "new value"}); err != nil {
+		t.Fatalf("Patch: %v", err)
+	}
+	params := patchParams(t, body)
+	ref, _ := params["current_ref"].(string)
+	if ref == "" {
+		t.Fatalf("current_ref must carry the preallocated entry id: %v", params["current_ref"])
+	}
+	appends := journalAppends(fake)
+	if len(appends) != 1 {
+		t.Fatalf("journal appends = %d, want 1", len(appends))
+	}
+	if appends[0].Path[strings.LastIndex(appends[0].Path, "/")+1:] != ref {
+		t.Errorf("journal entry must be indexed under current_ref id, path = %s, ref = %s", appends[0].Path, ref)
+	}
+	// Explicit-id append must be create-only (a retry collides, never
+	// duplicates): PUT /_doc/<id> IS the create API in OpenSearch REST.
+	if appends[0].Method != http.MethodPut && appends[0].Query.Get("op_type") != "create" {
+		t.Errorf("the entry must be an idempotent create: %s %s %v", appends[0].Method, appends[0].Path, appends[0].Query)
 	}
 }
 

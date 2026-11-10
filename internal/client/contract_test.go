@@ -293,8 +293,12 @@ func TestAddCorrectionUsesScriptedUpdate(t *testing.T) {
 	if params["value"] != "new value" {
 		t.Errorf("params.value = %v, want \"new value\"", params["value"])
 	}
-	if params["current_ref"] != "journal-entry-1" {
-		t.Errorf("params.current_ref = %v, want the journaled entry id", params["current_ref"])
+	appends := journalAppends(fake)
+	if len(appends) != 1 {
+		t.Fatalf("journal appends = %d, want 1", len(appends))
+	}
+	if refID := appends[0].Path[strings.LastIndex(appends[0].Path, "/")+1:]; refID == "" || params["current_ref"] != refID {
+		t.Errorf("params.current_ref = %v, want the preallocated id %q the entry is indexed under", params["current_ref"], refID)
 	}
 }
 
@@ -401,7 +405,7 @@ func TestAddEmptyNotesPreservesNotes(t *testing.T) {
 	if _, err := c2.Add(context.Background(), model.NewFact("k", "new value", "config", "p", "test:contract", "")); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	if !strings.Contains(updateBody, "params.notes != ''") {
+	if !strings.Contains(updateBody, `params.notes != \"\"`) {
 		t.Errorf("correction script must guard notes replacement: %s", updateBody)
 	}
 }
@@ -439,7 +443,7 @@ func TestAddEmptySourcePreservesSource(t *testing.T) {
 	updateBody = ""
 	var journalBody string
 	c2, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
-		if r.Method == http.MethodPost && strings.HasPrefix(r.Path, "/memento-history-") && strings.HasSuffix(r.Path, "/_doc") {
+		if (r.Method == http.MethodPost || r.Method == http.MethodPut) && strings.HasPrefix(r.Path, "/memento-history-") && strings.Contains(r.Path, "/_doc") {
 			journalBody = r.Body
 			return http.StatusOK, `{"_id":"journal-entry-1","result":"created"}`
 		}
@@ -462,7 +466,7 @@ func TestAddEmptySourcePreservesSource(t *testing.T) {
 	if _, err := c2.Add(context.Background(), model.NewFact("k", "new value", "config", "p", "", "")); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	if !strings.Contains(updateBody, "params.source != ''") {
+	if !strings.Contains(updateBody, `params.source != \"\"`) {
 		t.Errorf("correction script must guard source replacement: %s", updateBody)
 	}
 	// The journal entry is the accepted state: the new value with the stored
@@ -481,7 +485,7 @@ func TestAddEmptySourcePreservesSource(t *testing.T) {
 func TestAddCorrectionJournalsStoredProject(t *testing.T) {
 	var journalBody string
 	c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
-		if r.Method == http.MethodPost && strings.HasPrefix(r.Path, "/memento-history-") && strings.HasSuffix(r.Path, "/_doc") {
+		if (r.Method == http.MethodPost || r.Method == http.MethodPut) && strings.HasPrefix(r.Path, "/memento-history-") && strings.Contains(r.Path, "/_doc") {
 			journalBody = r.Body
 			return http.StatusOK, `{"_id":"journal-entry-1","result":"created"}`
 		}
@@ -519,7 +523,7 @@ func TestAddCorrectionJournalsStoredProject(t *testing.T) {
 func TestAddResurrectJournalsMovedCategory(t *testing.T) {
 	var journalBody string
 	c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
-		if r.Method == http.MethodPost && strings.HasPrefix(r.Path, "/memento-history-") && strings.HasSuffix(r.Path, "/_doc") {
+		if (r.Method == http.MethodPost || r.Method == http.MethodPut) && strings.HasPrefix(r.Path, "/memento-history-") && strings.Contains(r.Path, "/_doc") {
 			journalBody = r.Body
 			return http.StatusOK, `{"_id":"journal-entry-1","result":"created"}`
 		}
@@ -814,12 +818,12 @@ func TestObsoleteKeepsValueAndAppendsReason(t *testing.T) {
 	if v, has := params["observed_at"]; has && v != nil {
 		t.Error("obsolete must not touch observed_at")
 	}
-	if params["current_ref"] != "journal-entry-1" {
-		t.Errorf("current_ref = %v, want journal-entry-1: the transition must be journaled", params["current_ref"])
-	}
 	appends := journalAppends(fake)
 	if len(appends) != 1 {
 		t.Fatalf("journal appends = %d, want 1", len(appends))
+	}
+	if refID := appends[0].Path[strings.LastIndex(appends[0].Path, "/")+1:]; refID == "" || params["current_ref"] != refID {
+		t.Errorf("current_ref = %v, want the preallocated entry id %q the transition is journaled under", params["current_ref"], refID)
 	}
 	if !strings.Contains(appends[0].Body, "old note\\nfile deleted") {
 		t.Errorf("journal entry must carry the stated notes: %s", appends[0].Body)

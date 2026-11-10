@@ -15,6 +15,7 @@ import (
 	"github.com/NemoNobody/memento/internal/config"
 	"github.com/NemoNobody/memento/internal/model"
 
+	"github.com/google/uuid"
 	"github.com/opensearch-project/opensearch-go/v4"
 	"github.com/opensearch-project/opensearch-go/v4/opensearchapi"
 )
@@ -238,9 +239,9 @@ const addCorrectionScript = `
 ctx._source.value = params.value;
 ctx._source.category = params.category;
 ctx._source.observed_at = params.observed_at;
-if (params.source != null && params.source != '') { ctx._source.source = params.source; }
-if (params.notes != null && params.notes != '') { ctx._source.notes = params.notes; }
-ctx._source.status = 'verified';
+if (params.source != null && params.source != "") { ctx._source.source = params.source; }
+if (params.notes != null && params.notes != "") { ctx._source.notes = params.notes; }
+ctx._source.status = "verified";
 ctx._source.summary = params.summary;
 ctx._source.current_ref = params.current_ref;
 ctx._source.updated_by = params.updated_by;
@@ -346,6 +347,8 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 		// Only the explicit dead state resurrects (a status-less legacy doc
 		// is not "dead": it stays a plain touch).
 		resurrect := existing.Status == "obsolete"
+		var entry *model.JournalEntry
+		var ref string
 		doc := map[string]interface{}{
 			"category":   f.Category,
 			"status":     "verified",
@@ -366,10 +369,10 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 			}
 			stated.Status = "verified"
 			stated.ObservedAt = observed
-			ref, jErr := c.journalAppend(ctx, &stated, existing.FactID, observed)
-			if jErr != nil {
-				return AddResult{}, jErr
-			}
+			// Doc-first: the entry is built and its id preallocated here, the
+			// entry itself is indexed only after the update is accepted.
+			entry = c.newJournalEntryFor(ctx, &stated, existing.FactID, observed)
+			ref = uuid.New().String()
 			doc["observed_at"] = observed.Format(time.RFC3339)
 			doc["current_ref"] = ref
 		}
@@ -394,6 +397,11 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 		})
 		if err != nil {
 			return AddResult{}, wrapWriteError("add fact", err)
+		}
+		if entry != nil {
+			if _, jErr := c.appendJournalID(ctx, entry, ref, ""); jErr != nil {
+				return AddResult{Changed: true}, fmt.Errorf("add: resurrection accepted, the journal entry lagged: %w", jErr)
+			}
 		}
 		// Same value: notes/source moved, observed_at must not (the
 		// observation is old), the journal is untouched — the resurrection
@@ -427,10 +435,8 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 	if stated.Notes == "" {
 		stated.Notes = existing.Notes
 	}
-	ref, err := c.journalAppend(ctx, &stated, existing.FactID, f.ObservedAt)
-	if err != nil {
-		return AddResult{}, err
-	}
+	entry := c.newJournalEntryFor(ctx, &stated, existing.FactID, f.ObservedAt)
+	ref := uuid.New().String()
 
 	body, _ := json.Marshal(map[string]interface{}{
 		"script": map[string]interface{}{
@@ -456,7 +462,12 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 		Params:     opensearchapi.UpdateParams{Refresh: "wait_for"},
 	})
 	if err != nil {
-		return AddResult{Changed: true}, wrapWriteError("add fact", err)
+		// Nothing was accepted: no journal entry, Changed stays false (the
+		// doc-first order is what makes this answer truthful).
+		return AddResult{}, wrapWriteError("add fact", err)
+	}
+	if _, jErr := c.appendJournalID(ctx, entry, ref, ""); jErr != nil {
+		return AddResult{Changed: true, PreviousSummary: existing.Summary}, fmt.Errorf("add: correction accepted, the journal entry lagged: %w", jErr)
 	}
 	// The value was accepted as a new version (journal entry + correction):
 	// changed=true, and the summary the correction is replacing is reported
@@ -465,18 +476,33 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 }
 
 // journalAppend appends the journal entry for an accepted fact value and
-// returns the entry id. The caller links the fact to it: the correction
-// script carries current_ref, the create path links in a follow-up update.
+// returns the entry id. The create path uses it (the fact is already in the
+// index when the birth entry is written; the link follows in a separate
+// update). The correction/patch/obsolete paths do NOT: they must keep the
+// journal free of refused writes — see newJournalEntryFor.
 // The entry carries its own author labels: "who wrote this version" is a
 // per-entry fact of the log; factID is the identity the entry belongs to
 // (the doc's fact_id, which survives key renames).
 func (c *Client) journalAppend(ctx context.Context, f *model.Fact, factID string, ts time.Time) (string, error) {
+	return c.AppendJournal(ctx, c.newJournalEntryFor(ctx, f, factID, ts))
+}
+
+// newJournalEntryFor builds — without writing — the entry for a state the
+// caller is about to accept. The scripted write paths preallocate the entry
+// id, carry it into the update as current_ref, and index the entry under
+// that id only after the update is accepted: a refused update (the cluster
+// vetoes the script, a shard refuses the write) must leave no journal
+// trace — an entry for a state that never landed is an audit lie. The
+// residual the other way (update accepted, entry write lost) leaves the doc
+// right and the log lagging one entry: current_ref dangles, the fact keeps
+// working.
+func (c *Client) newJournalEntryFor(ctx context.Context, f *model.Fact, factID string, ts time.Time) *model.JournalEntry {
 	if ts.IsZero() {
 		ts = time.Now().UTC()
 	}
 	e := model.NewJournalEntry(f.Key, factID, f.Project, f.Category, model.OpWrite, f.Value, f.Notes, f.Source, ts)
 	c.resolveAuthor(ctx).applyTo(e)
-	return c.AppendJournal(ctx, e)
+	return e
 }
 
 // linkCurrentRef points a fact at its journal entry. Used on the create path
@@ -652,8 +678,8 @@ func appendNote(base, line string) string {
 // patchScript), and status/current_ref/updated_* land in the same write.
 const obsoleteScript = `
 if (params.reason_append != null) {
-  String n = ctx._source.notes == null ? '' : ctx._source.notes.toString();
-  ctx._source.notes = n.isEmpty() ? params.reason_append : n + '\n' + params.reason_append;
+  String n = ctx._source.notes == null ? "" : ctx._source.notes.toString();
+  ctx._source.notes = n.isEmpty() ? params.reason_append : n + params.nsep + params.reason_append;
 }
 ctx._source.status = params.status;
 ctx._source.current_ref = params.current_ref;
@@ -687,14 +713,14 @@ func (c *Client) Obsolete(ctx context.Context, key, reason string) error {
 	// stays truthful about the events even then).
 	notes := appendNote(existing.Notes, reason)
 	currentRef := existing.CurrentRef
+	var entry *model.JournalEntry
 	if existing.Status != "obsolete" {
 		stated := *existing
 		stated.Notes = notes
-		ref, jErr := c.journalAppend(ctx, &stated, existing.FactID, time.Now().UTC())
-		if jErr != nil {
-			return jErr
-		}
-		currentRef = ref
+		// Doc-first: the entry is built and its id preallocated here, the
+		// entry itself is indexed only after the transition is accepted.
+		entry = c.newJournalEntryFor(ctx, &stated, existing.FactID, time.Now().UTC())
+		currentRef = uuid.New().String()
 	}
 	params := map[string]interface{}{
 		"reason_append": nil,
@@ -702,6 +728,10 @@ func (c *Client) Obsolete(ctx context.Context, key, reason string) error {
 		"current_ref":   currentRef,
 		"updated_at":    time.Now().UTC().Format(time.RFC3339),
 		"updated_by":    c.resolveAuthor(ctx).Author,
+		// The newline separator is a param, never "\n" in the script source:
+		// painless string literals on this cluster process no escapes beyond
+		// \\ and \" and refuse the script at compile time otherwise.
+		"nsep": "\n",
 	}
 	if reason != "" {
 		params["reason_append"] = reason
@@ -724,6 +754,11 @@ func (c *Client) Obsolete(ctx context.Context, key, reason string) error {
 			return fmt.Errorf("obsolete %w: %q", ErrNotFound, key)
 		}
 		return wrapWriteError("obsolete fact", err)
+	}
+	if entry != nil {
+		if _, jErr := c.appendJournalID(ctx, entry, currentRef, ""); jErr != nil {
+			return fmt.Errorf("obsolete: the transition was accepted, the journal entry lagged: %w", jErr)
+		}
 	}
 	return nil
 }
@@ -759,12 +794,12 @@ if (params.value != null) { ctx._source.value = params.value; }
 if (params.summary != null) { ctx._source.summary = params.summary; }
 if (params.notes != null) { ctx._source.notes = params.notes; }
 if (params.notes_append != null) {
-  String n = ctx._source.notes == null ? '' : ctx._source.notes.toString();
-  ctx._source.notes = n.isEmpty() ? params.notes_append : n + '\n' + params.notes_append;
+  String n = ctx._source.notes == null ? "" : ctx._source.notes.toString();
+  ctx._source.notes = n.isEmpty() ? params.notes_append : n + params.nsep + params.notes_append;
 }
 if (params.reason_append != null) {
-  String n = ctx._source.notes == null ? '' : ctx._source.notes.toString();
-  ctx._source.notes = n.isEmpty() ? params.reason_append : n + '\n' + params.reason_append;
+  String n = ctx._source.notes == null ? "" : ctx._source.notes.toString();
+  ctx._source.notes = n.isEmpty() ? params.reason_append : n + params.nsep + params.reason_append;
 }
 if (params.source != null) { ctx._source.source = params.source; }
 if (params.status != null) { ctx._source.status = params.status; }
@@ -870,6 +905,7 @@ func (c *Client) Patch(ctx context.Context, key string, p PatchFields) (PatchRes
 
 	now := time.Now().UTC()
 	currentRef := existing.CurrentRef
+	var entry *model.JournalEntry
 	if valueChanged || statusChanged {
 		stated := *existing
 		if valueChanged {
@@ -883,11 +919,10 @@ func (c *Client) Patch(ctx context.Context, key string, p PatchFields) (PatchRes
 		if p.Source != "" {
 			stated.Source = p.Source
 		}
-		ref, jErr := c.journalAppend(ctx, &stated, existing.FactID, now)
-		if jErr != nil {
-			return PatchResult{}, jErr
-		}
-		currentRef = ref
+		// Doc-first: the entry is built and its id preallocated here, the
+		// entry itself is indexed only after the update is accepted.
+		entry = c.newJournalEntryFor(ctx, &stated, existing.FactID, now)
+		currentRef = uuid.New().String()
 	}
 
 	newStatus := existing.Status
@@ -907,6 +942,9 @@ func (c *Client) Patch(ctx context.Context, key string, p PatchFields) (PatchRes
 		"current_ref":   nil,
 		"updated_at":    now.Format(time.RFC3339),
 		"updated_by":    c.resolveAuthor(ctx).Author,
+		// Notes-line separator is data, not source: painless string literals
+		// refuse "\n" at compile time (only \\ and \" escapes are valid).
+		"nsep": "\n",
 	}
 	if valueChanged {
 		params["value"] = p.Value
@@ -961,6 +999,11 @@ func (c *Client) Patch(ctx context.Context, key string, p PatchFields) (PatchRes
 			return PatchResult{}, fmt.Errorf("patch %w: %q", ErrNotFound, key)
 		}
 		return PatchResult{}, wrapWriteError("patch fact", err)
+	}
+	if entry != nil {
+		if _, jErr := c.appendJournalID(ctx, entry, currentRef, ""); jErr != nil {
+			return PatchResult{Changed: valueChanged || statusChanged, Status: newStatus}, fmt.Errorf("patch: accepted, the journal entry lagged: %w", jErr)
+		}
 	}
 	return PatchResult{Changed: valueChanged || statusChanged, Status: newStatus}, nil
 }

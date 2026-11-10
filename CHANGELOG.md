@@ -9,8 +9,12 @@ History journal: the in-doc `history` array is replaced by an append-only
 journal of dated indices (`<index>-history-<period-date>`, monthly by default;
 `history_index_period` config, `MEMENTO_HISTORY_PERIOD` env).
 
-- Every accepted value is journaled before the fact doc is updated; the fact
-  carries `current_ref` to its journal entry. The journal is write-forever
+- Doc-first journaling: the fact doc update lands first, the journal entry
+  is appended only once the cluster accepted the write — a refused update
+  leaves no journal trace (the entry id is preallocated and carried into the
+  update as `current_ref`). Script sources stay escape-free to match the
+  cluster painless dialect (separators arrive as params; a lint test pins
+  it). The journal is write-forever
   (entries are never rewritten, no CAS); `history_limit` is now only the
   default `--keep` for the manual `memento prune`.
 - New commands: `memento journal <key> [--limit N]`, `memento history-info

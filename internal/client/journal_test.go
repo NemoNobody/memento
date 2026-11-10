@@ -33,7 +33,9 @@ func journalInfraOK(r recordedRequest) (int, string) {
 // route": the caller's own respond takes over.
 func journalRoutesOK(r recordedRequest) (int, string) {
 	switch {
-	case r.Method == http.MethodPost && strings.HasPrefix(r.Path, "/memento-history-") && strings.HasSuffix(r.Path, "/_doc"):
+	case r.Method == http.MethodPost && strings.HasPrefix(r.Path, "/memento-history-") && strings.Contains(r.Path, "/_doc"):
+		// auto-id appends (POST /_doc) and preallocated-id appends
+		// (POST /_doc/<id>, op_type=create — the doc-first write paths)
 		return http.StatusOK, `{"_id":"journal-entry-1","result":"created"}`
 	case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-"):
 		// deterministic-id appends (migration): PUT /<index>/_doc/<id>
@@ -47,14 +49,18 @@ func journalRoutesOK(r recordedRequest) (int, string) {
 // journalAppends returns the POST writes to ANY journal dated index.
 // Pinning one month name flakes when a test run crosses the month boundary:
 // the write lands in the next period's index.
+// journalAppends returns writes to ANY journal dated index: POST /_doc
+// (auto id) and PUT /_doc/<id> (deterministic id — migration and the
+// doc-first write paths). Pinning one month name flakes when a test run
+// crosses the month boundary: the write lands in the next period's index.
 func journalAppends(fake *fakeOpenSearch) []recordedRequest {
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	var out []recordedRequest
 	for _, r := range fake.requests {
-		if r.Method == http.MethodPost &&
+		if (r.Method == http.MethodPost || r.Method == http.MethodPut) &&
 			strings.HasPrefix(r.Path, "/memento-history-") &&
-			strings.HasSuffix(r.Path, "/_doc") {
+			strings.Contains(r.Path, "/_doc") {
 			out = append(out, r)
 		}
 	}
@@ -224,8 +230,12 @@ func TestPlanJournalPrune(t *testing.T) {
 	}
 }
 
-func TestAddCorrectionAppendsJournalBeforeMain(t *testing.T) {
-	var journalID = "j-42"
+// TestAddCorrectionUpdatesMainBeforeJournaling pins the doc-first order:
+// the scripted update lands first, the journal entry is indexed only after
+// it was accepted — a refused update must leave no journal trace (the
+// journal is a history of accepted state; phantom entries are an audit lie).
+// The doc->entry link survives via the preallocated entry id.
+func TestAddCorrectionUpdatesMainBeforeJournaling(t *testing.T) {
 	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
 		if code, body := journalInfraOK(r); code != http.StatusInternalServerError {
 			return code, body
@@ -234,8 +244,8 @@ func TestAddCorrectionAppendsJournalBeforeMain(t *testing.T) {
 		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
 			return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
 				"key":"k","value":"v1","category":"config","status":"verified"}}`
-		case r.Method == http.MethodPost && strings.HasPrefix(r.Path, "/memento-history-"):
-			return http.StatusOK, `{"_id":"` + journalID + `","result":"created"}`
+		case (r.Method == http.MethodPost || r.Method == http.MethodPut) && strings.HasPrefix(r.Path, "/memento-history-"):
+			return http.StatusOK, `{"_id":"ignored","result":"created"}`
 		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
 			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
 		}
@@ -268,18 +278,21 @@ func TestAddCorrectionAppendsJournalBeforeMain(t *testing.T) {
 	if len(updates) != 1 {
 		t.Fatalf("main updates = %d, want 1", len(updates))
 	}
-	if !strings.Contains(updates[0].Body, journalID) {
-		t.Errorf("main update must set current_ref=%q, body=%s", journalID, updates[0].Body)
+	// The link: the update carries current_ref = the preallocated id, and
+	// the entry is indexed under that same id (op_type=create).
+	id := appends[0].Path[strings.LastIndex(appends[0].Path, "/")+1:]
+	if id == "" || !strings.Contains(updates[0].Body, id) {
+		t.Errorf("main update must set current_ref to the entry id %q, body=%s", id, updates[0].Body)
 	}
 	if strings.Contains(updates[0].Body, "history.add") {
 		t.Error("main script must not append to the in-doc array anymore (the journal is the history)")
 	}
 
-	// Order: the journal append precedes the main write.
+	// Order: the main write precedes the journal append.
 	appendedIdx, updatedIdx := -1, -1
 	fake.mu.Lock()
 	for i, r := range fake.requests {
-		if r.Method == http.MethodPost && strings.HasPrefix(r.Path, "/memento-history-") {
+		if (r.Method == http.MethodPost || r.Method == http.MethodPut) && strings.HasPrefix(r.Path, "/memento-history-") {
 			appendedIdx = i
 		}
 		if r.Method == http.MethodPost && r.Path == "/memento/_update/k" {
@@ -287,8 +300,8 @@ func TestAddCorrectionAppendsJournalBeforeMain(t *testing.T) {
 		}
 	}
 	fake.mu.Unlock()
-	if appendedIdx < 0 || updatedIdx < 0 || appendedIdx > updatedIdx {
-		t.Errorf("journal append (idx %d) must precede the main write (idx %d)", appendedIdx, updatedIdx)
+	if appendedIdx < 0 || updatedIdx < 0 || appendedIdx < updatedIdx {
+		t.Errorf("journal append (idx %d) must follow the main write (idx %d)", appendedIdx, updatedIdx)
 	}
 }
 
@@ -620,7 +633,7 @@ func TestAddCorrectionJournalsDocFactID(t *testing.T) {
 	if _, err := c.Add(context.Background(), f); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	writes := fake.requestsFor(http.MethodPost, "/memento-history-2026.11/_doc")
+	writes := journalAppends(fake)
 	if len(writes) != 1 {
 		t.Fatalf("journal appends = %d, want 1", len(writes))
 	}

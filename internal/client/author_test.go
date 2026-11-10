@@ -138,7 +138,7 @@ func TestAddCorrectionCarriesUpdatedBy(t *testing.T) {
 	var updateBody, journalBody string
 	c, _ := newFakeClientCfg(t, func(cfg *config.Config) { cfg.Author = "bob" },
 		func(r recordedRequest) (int, string) {
-			if r.Method == http.MethodPost && strings.HasPrefix(r.Path, "/memento-history-") && strings.HasSuffix(r.Path, "/_doc") {
+			if (r.Method == http.MethodPost || r.Method == http.MethodPut) && strings.HasPrefix(r.Path, "/memento-history-") && strings.Contains(r.Path, "/_doc") {
 				journalBody = r.Body
 				return http.StatusOK, `{"_id":"j1","result":"created"}`
 			}
