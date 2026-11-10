@@ -73,14 +73,16 @@ func TestKeyringServiceAndAccount(t *testing.T) {
 		t.Errorf("service = %q, want memento", KeyringService)
 	}
 	cases := map[string]string{
-		"https://127.0.0.1:9200":   "127.0.0.1:9200",
-		"https://os.internal":      "os.internal",
-		"http://search.lan:8080/x": "search.lan:8080",
-		"not a url":                "not a url",
+		"https://127.0.0.1:9200":              "127.0.0.1:9200",
+		"https://os.internal":                 "os.internal",
+		"http://search.lan:8080/x":            "search.lan:8080",
+		"not a url":                           "not a url",
+		"https://admin:hunter2@os.test:9200":  "os.test:9200",
+		"https://admin:hunter2@os%2test:9200": "<url with user info>", // unparseable: the account name must not echo the password
 	}
 	for in, want := range cases {
-		if got := keyringAccount(in); got != want {
-			t.Errorf("keyringAccount(%q) = %q, want %q", in, got, want)
+		if got := KeyringAccount(in); got != want {
+			t.Errorf("KeyringAccount(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

@@ -38,19 +38,10 @@ keyring entry; the stored value is never printed.`,
 	return cmd
 }
 
-// accountFor derives the keyring account (host[:port]) from a URL.
-func accountFor(rawURL string) string {
-	u, err := url.Parse(rawURL)
-	if err != nil || u.Host == "" {
-		if strings.Contains(rawURL, "@") {
-			// An unparseable url with credentials must never be echoed back:
-			// the echo would print the password to the terminal and history.
-			return "<url with user info>"
-		}
-		return rawURL
-	}
-	return u.Host
-}
+// accountFor derives the keyring account (host[:port]) from a URL. Thin
+// alias for config.KeyringAccount: the CLI and the config loader must never
+// drift on which keyring entry a password lives under.
+func accountFor(rawURL string) string { return config.KeyringAccount(rawURL) }
 
 // refuseUserinfo rejects a url that carries credentials: the prompt, the
 // "stored: account=..." line and creds status all quote the target, so a

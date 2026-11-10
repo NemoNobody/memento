@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/NemoNobody/memento/internal/keyring"
@@ -260,8 +261,9 @@ func LoadConfig() (*Config, error) {
 // MEMENTO_DOCS_TTL_DAYS, MEMENTO_FETCH_HOSTS (comma-separated),
 // MEMENTO_FETCH_USER_AGENT, MEMENTO_FETCH_PROXY_URL,
 // MEMENTO_FETCH_PROXY_FALLBACK, MEMENTO_FETCH_RESPECT_ROBOTS,
-// MEMENTO_FETCH_ALLOW_PRIVATE, MEMENTO_LOCAL_REPO_ROOTS (comma-separated),
-// MEMENTO_REPO_SCAN_DEPTH.
+// MEMENTO_FETCH_ALLOW_PRIVATE, MEMENTO_FETCH_RENDER,
+// MEMENTO_FETCH_OBSCURA_PATH, MEMENTO_FETCH_OBSCURA_STEALTH,
+// MEMENTO_LOCAL_REPO_ROOTS (comma-separated), MEMENTO_REPO_SCAN_DEPTH.
 func LoadConfigFrom(explicitPath string) (*Config, error) {
 	return loadConfig(explicitPath, FindConfigPath)
 }
@@ -406,7 +408,14 @@ func loadConfig(explicitPath string, finder func() string) (*Config, error) {
 		cfg.DocsTTLDays = n
 	}
 	if v := os.Getenv("MEMENTO_FETCH_HOSTS"); v != "" {
-		cfg.FetchAllowHosts = splitHosts(v)
+		hosts := splitHosts(v)
+		// A set-but-empty value (e.g. ",") must not silently delete the
+		// file's allowlist: an empty allowlist means "any public host", so
+		// the SSRF scope would widen without anyone noticing.
+		if len(hosts) == 0 {
+			return nil, fmt.Errorf("MEMENTO_FETCH_HOSTS is set but names no hosts: separate them with commas, or unset the variable to keep the config file's fetch_allow_hosts")
+		}
+		cfg.FetchAllowHosts = hosts
 	}
 	if v := os.Getenv("MEMENTO_FETCH_USER_AGENT"); v != "" {
 		cfg.FetchUserAgent = v
@@ -479,9 +488,20 @@ func loadConfig(explicitPath string, finder func() string) (*Config, error) {
 		// fetch path refuses them for the same reason (NormalizeURL).
 		return nil, fmt.Errorf("opensearch_url carries user info; put the user in opensearch_user and the password in the keyring/env (url: %s)", RedactURL(cfg.OpenSearchURL))
 	}
+	if u.Host == "" {
+		// "https://" parses fine and fails loudly only at request time;
+		// refusing at load keeps the failure where the typo was made.
+		return nil, fmt.Errorf("opensearch_url has no host (url: %s): expected scheme://host:port", RedactURL(cfg.OpenSearchURL))
+	}
 	resolvePassword(cfg)
 	if err := ValidateProxyURL(cfg.FetchProxyURL); err != nil {
 		return nil, fmt.Errorf("fetch_proxy_url: %w", err)
+	}
+	// Consumers treat docs_ttl_days as "if > 0, expire after N days", so a
+	// negative value would mean the exact opposite of the intended effect:
+	// docs never expire. Reject it at the edge, for file and env alike.
+	if cfg.DocsTTLDays < 0 {
+		return nil, fmt.Errorf("docs_ttl_days must be 0 or greater, got %d", cfg.DocsTTLDays)
 	}
 	return cfg, nil
 }
@@ -552,7 +572,7 @@ func resolvePassword(cfg *Config) {
 		cfg.PasswordSource = "env"
 		return
 	}
-	if pw, err := keyring.Get(KeyringService, keyringAccount(cfg.OpenSearchURL)); err == nil && pw != "" {
+	if pw, err := keyring.Get(KeyringService, KeyringAccount(cfg.OpenSearchURL)); err == nil && pw != "" {
 		cfg.OpenSearchPassword = pw
 		cfg.PasswordSource = "keyring"
 		return
@@ -569,11 +589,19 @@ func resolvePassword(cfg *Config) {
 	cfg.PasswordSource = "none"
 }
 
-// keyringAccount derives the keyring account (host[:port]) from the URL so
-// one keyring serves several OpenSearch deployments.
-func keyringAccount(rawURL string) string {
+// KeyringAccount derives the keyring account (host[:port]) from the URL so
+// one keyring serves several OpenSearch deployments. Exported so `memento
+// creds` and the config loader cannot drift apart on which entry a password
+// lives under. An unparseable URL that carries user info is never echoed
+// back as the account name (creds prints "account=..."); config load
+// refuses such URLs before it gets here, so the placeholder is only for
+// the CLI path.
+func KeyringAccount(rawURL string) string {
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Host == "" {
+		if strings.Contains(rawURL, "@") {
+			return "<url with user info>"
+		}
 		return rawURL
 	}
 	return u.Host
@@ -815,8 +843,10 @@ func normalizeRender(v string) (string, error) {
 const LabelMaxRunes = 200
 
 // NormalizeLabel canonicalizes an authorship label (author, model, host,
-// session): trim, drop control bytes (they would forge terminal output in
-// listings), and cap the length. A label that is blank after normalization
+// session): trim, drop invisible and control characters (Cc and Cf: C0/C1
+// controls, DEL, zero-width spaces, bidi overrides — exactly the bytes that
+// would forge terminal output in listings, which is why this function
+// exists), and cap the length. A label that is blank after normalization
 // is an error, not an empty string: a blank label silently falls back to
 // the next chain link (the OS user), and "the config said nothing" reads
 // as "the config said this" in a shared store's audit metadata.
@@ -825,7 +855,7 @@ func NormalizeLabel(v string) (string, error) {
 		return "", nil
 	}
 	s := strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
+		if unicode.Is(unicode.Cc, r) || unicode.Is(unicode.Cf, r) {
 			return -1
 		}
 		return r

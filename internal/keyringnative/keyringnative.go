@@ -37,6 +37,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"time"
 
 	dbus "github.com/godbus/dbus/v5"
@@ -399,29 +400,40 @@ func (c *client) pickCollection(write bool) (dbus.ObjectPath, error) {
 // all matches: leaving a stale duplicate makes Get read whichever item the
 // provider lists first — typically the oldest, i.e. the pre-rotation password.
 func (c *client) deleteItems(coll dbus.ObjectPath, attrs map[string]string) (int, error) {
+	return c.deleteItemsExcept(coll, attrs, "")
+}
+
+// deleteItemsExcept is deleteItems with one item spared (the freshly
+// created one during an upsert sweep).
+func (c *client) deleteItemsExcept(coll dbus.ObjectPath, attrs map[string]string, keep dbus.ObjectPath) (int, error) {
 	items, err := c.searchItems(coll, attrs)
 	if err != nil {
 		return 0, err
 	}
+	removed := 0
 	for _, p := range items {
+		if p == keep {
+			continue
+		}
 		var prompt dbus.ObjectPath
 		deleteCtx, cancelDelete := context.WithTimeout(context.Background(), rpcTimeout)
 		err := c.rpcCall(deleteCtx, c.conn.Object(busName, p), ifaceItem+".Delete").Store(&prompt)
 		cancelDelete()
 		if err != nil {
-			return 0, fmt.Errorf("delete entry: %w", err)
+			return removed, fmt.Errorf("delete entry: %w", err)
 		}
 		if prompt != "/" {
 			dismissed, _, err := c.handlePrompt(prompt)
 			if err != nil {
-				return 0, err
+				return removed, err
 			}
 			if dismissed {
-				return 0, errors.New("the keyring dialog was cancelled (delete)")
+				return removed, errors.New("the keyring dialog was cancelled (delete)")
 			}
 		}
+		removed++
 	}
-	return len(items), nil
+	return removed, nil
 }
 
 // Get returns the secret stored for (service, user). Read-only: it never
@@ -443,6 +455,13 @@ func Get(service, user string) (string, error) {
 	}
 	if len(items) == 0 {
 		return "", ErrNotFound
+	}
+	if len(items) > 1 {
+		// A duplicate set (foreign writer, or a crash between an older
+		// create and its sweep) must not make reads provider-dependent:
+		// the paths are sorted so every call sees the same item, and the
+		// next Set's sweep removes the rest.
+		sort.Slice(items, func(i, j int) bool { return items[i] < items[j] })
 	}
 	if err := c.unlock(items[0]); err != nil {
 		return "", err
@@ -473,12 +492,13 @@ func Set(service, user, value string) error {
 	if err := c.unlock(coll); err != nil {
 		return err
 	}
-	// Upsert: clear every existing item for these attributes first (the
-	// zalando pattern). CreateItem appends, and a wallet with two items for
-	// one (service, user) makes Get return a provider-chosen one.
-	if _, err := c.deleteItems(coll, attributes(service, user)); err != nil {
-		return err
-	}
+	// Upsert, create-then-delete (the zalando order flipped): deleting all
+	// matches first would destroy the old secret for good when creation
+	// then fails (cancelled prompt, RPC drop, timeout), while creating
+	// first keeps at least one working item at every moment. A crash
+	// between create and the sweep leaves a duplicate; Get then picks
+	// deterministically and the next Set's sweep cleans up (CreateItem
+	// never deduplicates).
 	props := map[string]dbus.Variant{
 		ifaceItem + ".Label":      dbus.MakeVariant(appCollectionLabel + " API key for " + user),
 		ifaceItem + ".Attributes": dbus.MakeVariant(attributes(service, user)),
@@ -498,6 +518,11 @@ func Set(service, user, value string) error {
 		if dismissed {
 			return errors.New("the keyring dialog was cancelled (store)")
 		}
+	}
+	// Sweep the superseded entries. The secret is already stored: a failed
+	// sweep is reported honestly but must not claim the write itself failed.
+	if _, err := c.deleteItemsExcept(coll, attributes(service, user), item); err != nil {
+		return fmt.Errorf("stored, but removing the superseded entries failed (Get stays deterministic; a later Set retries the sweep): %w", err)
 	}
 	return nil
 }

@@ -1102,11 +1102,10 @@ func (s *mcpServer) list(ctx context.Context, req *mcp.CallToolRequest, in listI
 }
 
 type keysInput struct {
-	Prefix         string `json:"prefix,omitempty" jsonschema:"key prefix, e.g. 'proj:foo:loc:'; trailing * allowed"`
-	Match          string `json:"match,omitempty" jsonschema:"key substring; * and ? work as wildcards"`
-	Project        string `json:"project,omitempty" jsonschema:"limit to this project (default: all projects)"`
-	Status         string `json:"status,omitempty" jsonschema:"limit results to this status: verified (default), obsolete, or any"`
-	IncludeHistory bool   `json:"include_history,omitempty" jsonschema:"include the full history chain (default: current value only)"`
+	Prefix  string `json:"prefix,omitempty" jsonschema:"key prefix, e.g. 'proj:foo:loc:'; trailing * allowed"`
+	Match   string `json:"match,omitempty" jsonschema:"key substring; * and ? work as wildcards"`
+	Project string `json:"project,omitempty" jsonschema:"limit to this project (default: all projects)"`
+	Status  string `json:"status,omitempty" jsonschema:"limit results to this status: verified (default), obsolete, or any"`
 }
 
 // keys is the key-level navigation tool: prefix/match on the key field, with
@@ -1144,8 +1143,10 @@ func (s *mcpServer) keys(ctx context.Context, req *mcp.CallToolRequest, in keysI
 	}
 	// Keys is key-level navigation: the rows are scanned, not read — the
 	// compact view is always the right shape here (no parameter: the full
-	// value of a key-matched fact is a memento_get away).
-	return nil, factsOutput{Count: len(facts), Truncated: meta.Total > client.NavSizeCap, Skipped: meta.Skipped, Facts: newFactViews(facts, in.IncludeHistory, true)}, nil
+	// value of a key-matched fact is a memento_get away, the history is a
+	// memento_journal away; an include_history knob would be a no-op in
+	// compact rows, so the schema does not offer it).
+	return nil, factsOutput{Count: len(facts), Truncated: meta.Total > client.NavSizeCap, Skipped: meta.Skipped, Facts: newFactViews(facts, false, true)}, nil
 }
 
 type obsoleteInput struct {
