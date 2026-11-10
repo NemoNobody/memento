@@ -70,8 +70,8 @@ A host outside fetch_allow_hosts is rejected before the request is made.`,
 				fatalErr(err)
 			}
 			doc, cached, err := c.FetchDoc(ctx, rawURL, fetchFlags.project, fetchFlags.refresh,
-				func(d *model.Doc) error {
-					// The guard runs after extraction, before the store write:
+				func(d *model.Doc) ([]model.Redaction, error) {
+					// The guard runs after extraction, before the doc is finalized:
 					// page text is untrusted input and can carry credential-like
 					// strings; the store is plaintext.
 					return guardFetch(d, cfg.SecretGuard, fetchFlags.allowSecret)
@@ -208,37 +208,67 @@ func DocsCmd() *cobra.Command {
 }
 
 // guardFetch enforces the secret guard on a fetched page before the store
-// write, in two modes matched to what the field is used for:
+// write. The policy is fixed by level x confidence (security posture, not
+// per-request):
 //
-//   - The text the agent reads (title, sections, image alt/title) is scanned
-//     with the full pattern set and the write is refused on a finding: page
-//     text is untrusted input and the store is plaintext.
-//   - The stored raw HTML is never served to agents, and the generic shapes
-//     (long hex/base64/opaque) fire on ordinary markup (asset hashes, inline
-//     data: images), so rejecting on them made normal pages uncacheable.
-//     High-confidence credential shapes are redacted inside the stored HTML
-//     instead: the plaintext store stays clean without false positives.
-func guardFetch(doc *model.Doc, level string, allowed bool) error {
-	if level != config.GuardAllow {
-		doc.HTML, _ = secretguard.Redact("html", doc.HTML)
+//   - high-confidence shapes in the agent-visible fields (title, section
+//     text/headings, image alt/title) are REDACTED in place and the page is
+//     stored: the secret never enters the plaintext store (the red line is
+//     kept by the redaction), and the documentation page is saved. The
+//     stored raw HTML is redacted the same way (agents never read it).
+//   - medium-confidence findings in the agent-visible fields REFUSE the
+//     write: these shapes fire on ordinary content (git SHAs, asset hashes,
+//     config names), so silent redaction would mangle real documentation.
+//     At secret_guard=ask a finding can be confirmed as a false positive
+//     (--allow-secret / confirm_secret); at reject there is no bypass.
+//   - allow: no scan at all (the operator opted out).
+//
+// Deliberate tradeoff (documented in README): high-confidence secrets end up
+// stored redacted — the redaction must therefore out-cover a reject. Medium
+// findings inside the stored HTML are left alone (agents never read it).
+func guardFetch(doc *model.Doc, level string, allowed bool) ([]model.Redaction, error) {
+	if level == config.GuardAllow {
+		return nil, nil
 	}
+	var redactions []model.Redaction
+	// The stored raw HTML: high-confidence shapes only, as before — the
+	// generic shapes fire on ordinary markup and must not mangle pages.
+	doc.HTML, _ = secretguard.Redact("html", doc.HTML)
+
+	redact := func(field, text string) string {
+		red, findings := secretguard.Redact(field, text)
+		for _, f := range findings {
+			redactions = append(redactions, model.Redaction{Field: field, Pattern: f.Pattern, Chars: f.Length})
+		}
+		return red
+	}
+	doc.Title = redact("title", doc.Title)
 	fields := []guardField{
-		{Name: "title", Text: doc.Title},
 		{Name: "url", Text: doc.URL},
 		{Name: "project", Text: doc.Project},
+		{Name: "title", Text: doc.Title},
 	}
-	for i, s := range doc.Sections {
-		// Headings are echoed by the outline path, so they are scanned too.
+	for i := range doc.Sections {
+		doc.Sections[i].Heading = redact("section "+strconv.Itoa(i)+" heading", doc.Sections[i].Heading)
+		doc.Sections[i].Text = redact("section "+strconv.Itoa(i), doc.Sections[i].Text)
 		fields = append(fields,
-			guardField{Name: "section " + strconv.Itoa(i) + " heading", Text: s.Heading},
-			guardField{Name: "section " + strconv.Itoa(i), Text: s.Text})
+			guardField{Name: "section " + strconv.Itoa(i) + " heading", Text: doc.Sections[i].Heading},
+			guardField{Name: "section " + strconv.Itoa(i), Text: doc.Sections[i].Text})
 	}
-	for i, img := range doc.Images {
+	for i := range doc.Images {
+		doc.Images[i].Alt = redact("image "+strconv.Itoa(i)+" alt", doc.Images[i].Alt)
+		doc.Images[i].Title = redact("image "+strconv.Itoa(i)+" title", doc.Images[i].Title)
 		fields = append(fields,
-			guardField{Name: "image " + strconv.Itoa(i) + " alt", Text: img.Alt},
-			guardField{Name: "image " + strconv.Itoa(i) + " title", Text: img.Title})
+			guardField{Name: "image " + strconv.Itoa(i) + " alt", Text: doc.Images[i].Alt},
+			guardField{Name: "image " + strconv.Itoa(i) + " title", Text: doc.Images[i].Title})
 	}
-	return guardCheck(level, allowed, fields...)
+
+	// The post-redaction scan sees only medium shapes (the high spans are
+	// already markers): refuse per the ask/reject policy.
+	if err := guardCheck(level, allowed, fields...); err != nil {
+		return nil, err
+	}
+	return redactions, nil
 }
 
 // printDocOutline renders the title + section table: the context-cheap view an
@@ -273,6 +303,20 @@ func printDocOutline(w io.Writer, doc *model.Doc, cached bool, now time.Time) er
 	}
 	if doc.Truncated {
 		b.WriteString("truncated: true (extraction hit a limit; the stored text is a prefix)\n")
+	}
+	if len(doc.Redactions) > 0 {
+		b.WriteString("redacted: ")
+		b.WriteString(strconv.Itoa(len(doc.Redactions)))
+		b.WriteString(" high-confidence credential span(s) were redacted out of the stored snapshot (the page is stored; pattern/field/size listed, no preview)\n")
+		for _, r := range doc.Redactions {
+			b.WriteString("  - ")
+			b.WriteString(r.Pattern)
+			b.WriteString(" in ")
+			b.WriteString(r.Field)
+			b.WriteString(" (")
+			b.WriteString(strconv.Itoa(r.Chars))
+			b.WriteString(" chars)\n")
+		}
 	}
 	b.WriteString("sections:\n")
 	for _, s := range doc.Sections {

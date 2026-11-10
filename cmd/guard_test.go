@@ -80,7 +80,7 @@ func TestGuardFetchRedactsStoredHTML(t *testing.T) {
 		Sections: []model.Section{{Order: 0, Heading: "H", Text: "clean text"}},
 		HTML:     `<script>const k = "` + guardSentinel + `";</script><p>prose</p>`,
 	}
-	if err := guardFetch(doc, config.GuardReject, false); err != nil {
+	if _, err := guardFetch(doc, config.GuardReject, false); err != nil {
 		t.Fatalf("html secret must be redacted, not reject the write: %v", err)
 	}
 	if strings.Contains(doc.HTML, guardSentinel) {
@@ -93,20 +93,45 @@ func TestGuardFetchRedactsStoredHTML(t *testing.T) {
 		t.Errorf("redaction destroyed the surrounding content: %s", doc.HTML)
 	}
 
-	// Generic shapes (data: images, asset hashes) must survive untouched:
-	// redacting them was the false positive that made normal pages unusable.
+	// Generic shapes (data: images, asset hashes) must survive untouched in
+	// the HTML: redacting them was the false positive that made normal pages
+	// unusable (and they are medium: never redacted, only refused in the
+	// agent-visible text).
 	doc.HTML = `<img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABGdCCgQAUQIAAAAAAAAAAAAAAAAABgUAAEg="><p>prose</p>`
-	if err := guardFetch(doc, config.GuardReject, false); err != nil {
+	if _, err := guardFetch(doc, config.GuardReject, false); err != nil {
 		t.Fatalf("data-uri image must not be redacted: %v", err)
 	}
 	if !strings.Contains(doc.HTML, "iVBORw0KGgo") {
 		t.Errorf("generic base64 blob was redacted: %s", doc.HTML)
 	}
 
-	// A secret in the extracted text (what the agent reads) still refuses.
+	// A high-confidence secret in the extracted text (what the agent reads)
+	// is redacted IN PLACE and the page is stored: the red line is kept by
+	// the redaction, the documentation is saved, the answer reports it.
 	doc.HTML = "<html><body><p>plain prose</p></body></html>"
 	doc.Sections = []model.Section{{Order: 0, Heading: "H", Text: "the key is " + guardSentinel}}
-	if err := guardFetch(doc, config.GuardReject, false); err == nil {
-		t.Fatal("secret in section text must reject the write")
+	redactions, err := guardFetch(doc, config.GuardReject, false)
+	if err != nil {
+		t.Fatalf("high-confidence shape in text must be redacted, not reject: %v", err)
+	}
+	if strings.Contains(doc.Sections[0].Text, guardSentinel) {
+		t.Errorf("the secret survived the section redaction: %s", doc.Sections[0].Text)
+	}
+	if len(redactions) == 0 {
+		t.Error("the redaction must be reported (field/pattern/chars)")
+	}
+
+	// A medium shape in the agent-visible text refuses at reject, and the
+	// confirmation flag does NOT bypass there.
+	doc.Sections = []model.Section{{Order: 0, Heading: "H", Text: "commit 0123456789abcdef0123456789abcdef01234567"}}
+	if _, err := guardFetch(doc, config.GuardReject, true); err == nil {
+		t.Fatal("secret_guard=reject has no confirmation bypass for medium findings")
+	}
+	// At ask the finding is confirmable (the operator saw the masked shape).
+	if _, err := guardFetch(doc, config.GuardAsk, false); err == nil {
+		t.Fatal("unconfirmed medium finding at ask must refuse")
+	}
+	if _, err := guardFetch(doc, config.GuardAsk, true); err != nil {
+		t.Fatalf("confirmed medium finding at ask must proceed: %v", err)
 	}
 }

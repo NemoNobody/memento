@@ -262,7 +262,13 @@ shapes: vendor token
 prefixes (`AKIA…`, `ghp_…`, `xox…`, `sk-…`, JWT, PEM headers), `Bearer`
 headers, `password = …` assignments, and long opaque strings (hex/base64).
 
-The level is `secret_guard` in the config (env `MEMENTO_SECRET_GUARD`):
+The level is `secret_guard` in the config (env `MEMENTO_SECRET_GUARD`). Every
+finding carries a confidence level — `high` for deterministic credential
+shapes (vendor prefixes, PEM key blocks, `Bearer` headers, basic-auth URLs,
+assignments whose right-hand side is 20+ characters spanning 3+ character
+classes) and `medium` for the generic shapes that also fire on ordinary
+content (long hex/base64 like git SHAs and asset hashes, weak assignments
+such as `password = someVarName`):
 
 | Level | Behavior |
 |-------|----------|
@@ -279,11 +285,22 @@ Guarantees and limits:
   context. Echoing it would leak the secret a second time.
 - Detection is regex-based best effort: a secret without a recognizable shape
   passes. A false positive is possible too — a 40-character git SHA in notes
-  matches `long-hex`; at `ask` the confirmation flag is the escape hatch.
-- The fetched-page path scans the extracted text with the full set (a finding
-  rejects/asks like above) and redacts high-confidence credential shapes
-  inside the stored raw HTML: the generic shapes fire on ordinary markup
-  (asset hashes, inline data: images), and the HTML is never served to agents.
+  matches `long-hex` (medium); at `ask` the confirmation flag is the escape
+  hatch.
+- The fetched-page path uses the confidence split as policy: high-confidence
+  shapes in the agent-visible fields (title, section text/headings, image
+  alt/title) and in the stored raw HTML are REDACTED in place (`[memento-
+  redacted:pattern]`) and the page is stored — the answer lists `redactions`
+  (field/pattern/size, never a preview). Medium findings in the agent-visible
+  text REFUSE the write (they fire on ordinary documentation too; silent
+  redaction would mangle it): at `ask` a finding can be confirmed, at
+  `reject` there is no bypass. Redaction runs before the stored `size` and
+  `content_hash` are computed, so the metadata describes exactly the text
+  that ships.
+- Deliberate tradeoff: a high-confidence secret on a fetched page ends up
+  stored in redacted form — the redaction must therefore out-cover a reject.
+  For the shared plaintext docs store this is the accepted product decision:
+  the secret never ships to agents, the documentation survives.
 
 ## Auth
 

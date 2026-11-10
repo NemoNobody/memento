@@ -1135,9 +1135,21 @@ type fetchDocOutput struct {
 	Truncated bool                `json:"truncated,omitempty" jsonschema:"extraction hit a limit: the stored text is a prefix"`
 	Sections  []docSectionOutline `json:"sections,omitempty" jsonschema:"outline: pull a section with memento_get_doc(hash, section)"`
 
+	// Redactions: high-confidence credential spans edited out of the stored
+	// snapshot (pattern/field/size, no preview): the secret never entered the
+	// store, and the answer is transparent about the surgery.
+	Redactions []redactionView `json:"redactions,omitempty" jsonschema:"credential spans redacted out of the stored snapshot (no preview)"`
+	Warning    string          `json:"warning,omitempty" jsonschema:"set when redactions happened: the stored text is edited, quote from it with that in mind"`
+
 	// GitHub local-clone resolution: the answer is a file on this machine.
 	Local bool   `json:"local,omitempty" jsonschema:"true when the url resolved to a file in a local git clone: Path is the file; nothing was fetched"`
 	Path  string `json:"path,omitempty" jsonschema:"local clone file path when local=true"`
+}
+
+type redactionView struct {
+	Field   string `json:"field" jsonschema:"doc field the span was redacted from"`
+	Pattern string `json:"pattern" jsonschema:"detector pattern name"`
+	Chars   int    `json:"chars" jsonschema:"length of the redacted span"`
 }
 
 func (s *mcpServer) fetchDoc(ctx context.Context, req *mcp.CallToolRequest, in fetchDocInput) (*mcp.CallToolResult, fetchDocOutput, error) {
@@ -1166,8 +1178,8 @@ func (s *mcpServer) fetchDoc(ctx context.Context, req *mcp.CallToolRequest, in f
 		return nil, fetchDocOutput{}, storeError("memento_fetch_doc", err)
 	}
 	doc, cached, err := c.FetchDoc(ctx, rawURL, in.Project, in.Refresh,
-		func(d *model.Doc) error {
-			// Guard after extraction, before the store write.
+		func(d *model.Doc) ([]model.Redaction, error) {
+			// Guard after extraction, before the doc is finalized.
 			return guardFetch(d, cfg.SecretGuard, in.ConfirmSecret)
 		})
 	if err != nil {
@@ -1185,6 +1197,13 @@ func (s *mcpServer) fetchDoc(ctx context.Context, req *mcp.CallToolRequest, in f
 		Cached:    cached,
 		Truncated: doc.Truncated,
 		Sections:  newDocOutline(doc),
+	}
+	if len(doc.Redactions) > 0 {
+		out.Redactions = make([]redactionView, 0, len(doc.Redactions))
+		for _, r := range doc.Redactions {
+			out.Redactions = append(out.Redactions, redactionView{Field: r.Field, Pattern: r.Pattern, Chars: r.Chars})
+		}
+		out.Warning = fmt.Sprintf("%d high-confidence credential span(s) were redacted out of the stored snapshot; the page is stored edited (the secret never entered the store)", len(doc.Redactions))
 	}
 	return nil, out, nil
 }

@@ -34,6 +34,22 @@ const (
 	PeriodYear    = "year"
 )
 
+// Fetch render backends (config fetch_render): what happens when a plain
+// HTTP fetch is refused by bot protection. A backend typo would silently
+// disable the fallback the operator believes is active, so load rejects
+// anything outside this set loudly.
+const (
+	RenderOff     = "off"     // plain HTTP only: a blocked fetch is final
+	RenderObscura = "obscura" // fallback: the external obscura browser-render binary
+)
+
+// DefaultFetchUserAgent is a current desktop Chrome UA. Sites that gate on
+// User-Agent sniffing (a bare Go UA reads as a bot to commodity WAFs) let it
+// through; the fetch itself stays uncredentialed (no cookies, only
+// Accept/UA), so the identity is a generic browser, not the user's real
+// fingerprint. The value is config (fetch_user_agent), never personal.
+const DefaultFetchUserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
+
 // Config holds configuration for the memento CLI.
 type Config struct {
 	OpenSearchURL      string `json:"opensearch_url"`
@@ -106,6 +122,25 @@ type Config struct {
 	// FetchProxyFallback retries a failed/timed-out direct fetch through the
 	// proxy. Off by default: fallback is an explicit operator choice.
 	FetchProxyFallback bool `json:"fetch_proxy_fallback"`
+
+	// FetchRender selects the fallback backend when a plain fetch is refused
+	// by bot protection: "off" (default) ends with the error; "obscura" runs
+	// the external obscura binary (real browser engine, JS executes, Chrome
+	// TLS-fingerprint under --stealth). Opt-in by design: obscura is a
+	// separate third-party download that executes untrusted page JS
+	// in-process, so installing and enabling it is the operator's call.
+	FetchRender string `json:"fetch_render"`
+
+	// FetchObscuraPath is the obscura binary: an absolute path, or a name
+	// resolved through PATH (default "obscura"). obscura and obscura-worker
+	// must stay in one directory (upstream layout).
+	FetchObscuraPath string `json:"fetch_obscura_path"`
+
+	// FetchObscuraStealth passes --stealth to obscura (Chrome TLS/HTTP2
+	// fingerprint, browser header hints). On by default: stealth is the
+	// point of the renderer. It requires upstream's -stealth build; the
+	// plain build rejects the flag, and the chain surfaces that error.
+	FetchObscuraStealth bool `json:"fetch_obscura_stealth"`
 
 	// LocalRepoRoots are directories scanned for local git clones: GitHub
 	// URLs that match a clone (with a matching ref) are answered with a local
@@ -184,7 +219,13 @@ func DefaultConfig() *Config {
 		FetchTimeoutSeconds: 30,
 		FetchMaxBytes:       2_000_000,
 		DocsTTLDays:         90,
-		FetchUserAgent:      "memento/fetch (+OpenSearch docs cache)",
+		// A browser-shaped UA by default: several documentation sites 403
+		// known bot strings. The fetch still identifies itself honestly in
+		// robots handling; this is a UA, not a fingerprint.
+		FetchUserAgent:      DefaultFetchUserAgent,
+		FetchRender:         RenderOff,
+		FetchObscuraPath:    "obscura",
+		FetchObscuraStealth: true,
 		LocalRepoScanDepth:  2,
 		// A ~500-token fact is where a listing stops being skimmable; a
 		// ~100-token summary is the table-of-contents budget (about 10x
@@ -369,6 +410,23 @@ func loadConfig(explicitPath string, finder func() string) (*Config, error) {
 	if v := os.Getenv("MEMENTO_FETCH_USER_AGENT"); v != "" {
 		cfg.FetchUserAgent = v
 	}
+	if v := os.Getenv("MEMENTO_FETCH_RENDER"); v != "" {
+		r, err := normalizeRender(v)
+		if err != nil {
+			return nil, fmt.Errorf("MEMENTO_FETCH_RENDER: %w", err)
+		}
+		cfg.FetchRender = r
+	}
+	if v := os.Getenv("MEMENTO_FETCH_OBSCURA_PATH"); v != "" {
+		cfg.FetchObscuraPath = v
+	}
+	if v := os.Getenv("MEMENTO_FETCH_OBSCURA_STEALTH"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("MEMENTO_FETCH_OBSCURA_STEALTH: %w", err)
+		}
+		cfg.FetchObscuraStealth = b
+	}
 	if v := os.Getenv("MEMENTO_FETCH_RESPECT_ROBOTS"); v != "" {
 		b, err := strconv.ParseBool(v)
 		if err != nil {
@@ -490,6 +548,9 @@ type fileConfig struct {
 	DocsTTLDays         *int     `json:"docs_ttl_days"`
 	FetchAllowHosts     []string `json:"fetch_allow_hosts"`
 	FetchUserAgent      string   `json:"fetch_user_agent"`
+	FetchRender         string   `json:"fetch_render"`
+	FetchObscuraPath    string   `json:"fetch_obscura_path"`
+	FetchObscuraStealth *bool    `json:"fetch_obscura_stealth"`
 	FetchRespectRobots  *bool    `json:"fetch_respect_robots"`
 	FetchProxyURL       string   `json:"fetch_proxy_url"`
 	FetchProxyFallback  *bool    `json:"fetch_proxy_fallback"`
@@ -594,6 +655,19 @@ func loadFile(cfg *Config, path string) error {
 	if c.FetchUserAgent != "" {
 		cfg.FetchUserAgent = c.FetchUserAgent
 	}
+	if c.FetchRender != "" {
+		r, err := normalizeRender(c.FetchRender)
+		if err != nil {
+			return fmt.Errorf("fetch_render: %w", err)
+		}
+		cfg.FetchRender = r
+	}
+	if c.FetchObscuraPath != "" {
+		cfg.FetchObscuraPath = c.FetchObscuraPath
+	}
+	if c.FetchObscuraStealth != nil {
+		cfg.FetchObscuraStealth = *c.FetchObscuraStealth
+	}
 	if c.FetchRespectRobots != nil {
 		cfg.FetchRespectRobots = *c.FetchRespectRobots
 	}
@@ -670,6 +744,18 @@ func normalizeGuard(v string) (string, error) {
 		return g, nil
 	}
 	return "", fmt.Errorf("must be one of reject|ask|allow, got %q", v)
+}
+
+// normalizeRender maps the render backend to its canonical form, rejecting
+// typos loudly (the normalizeGuard rule): silently ignoring "obscure" would
+// run plain fetches while the operator believes pages are JS-rendered.
+func normalizeRender(v string) (string, error) {
+	r := strings.ToLower(strings.TrimSpace(v))
+	switch r {
+	case RenderOff, RenderObscura:
+		return r, nil
+	}
+	return "", fmt.Errorf("must be one of off|obscura, got %q", v)
 }
 
 // LabelMaxRunes caps every authorship label. They land in stored documents

@@ -20,6 +20,15 @@ type ImageRef struct {
 	Title string `json:"title,omitempty"`
 }
 
+// Redaction records one credential span edited out of a stored snapshot:
+// pattern name and size only, never the matched text (the secret must not
+// travel back into agent context).
+type Redaction struct {
+	Field   string `json:"field" jsonschema:"doc field the span was redacted from"`
+	Pattern string `json:"pattern" jsonschema:"detector pattern name"`
+	Chars   int    `json:"chars" jsonschema:"length of the redacted span"`
+}
+
 // Doc is one fetched web page snapshot: the raw body plus extracted,
 // section-split text.
 //
@@ -65,6 +74,11 @@ type Doc struct {
 
 	Sections []Section  `json:"sections"`
 	Images   []ImageRef `json:"images,omitempty"`
+
+	// Redactions is the audit trail of the write-time secret guard: what was
+	// edited out of the agent-visible fields (high-confidence shapes only).
+	// The stored HTML is redacted too; it is never served to agents.
+	Redactions []Redaction `json:"redactions,omitempty"`
 }
 
 // Stale reports whether the doc is past its TTL and must be re-fetched before

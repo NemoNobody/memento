@@ -2,6 +2,9 @@ package client
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/NemoNobody/memento/internal/config"
+	"github.com/NemoNobody/memento/internal/model"
 )
 
 // writeBody serves a fixture body; a write failure means the page never
@@ -187,7 +191,7 @@ func TestNormalizeURLBlocksNonPublic(t *testing.T) {
 
 func TestFetchRefusesLoopbackByDefault(t *testing.T) {
 	ft := newFetchTarget(t)
-	if _, err := FetchPage(context.Background(), config.DefaultConfig(), ft.srv.URL+"/page"); err == nil ||
+	if _, err := FetchPage(context.Background(), config.DefaultConfig(), ft.srv.URL+"/page", nil); err == nil ||
 		!strings.Contains(err.Error(), "non-public") {
 		t.Errorf("loopback target must be refused by default, got: %v", err)
 	}
@@ -239,8 +243,9 @@ func TestHostAllowed(t *testing.T) {
 
 // fetchTarget is the document server the fetch tests point at.
 type fetchTarget struct {
-	srv *httptest.Server
-	ua  string // User-Agent seen on the last request
+	srv    *httptest.Server
+	ua     string // User-Agent seen on the last request
+	rlHits int    // requests to /ratelimit (429-then-200 counter)
 }
 
 func newFetchTarget(t *testing.T) *fetchTarget {
@@ -268,6 +273,19 @@ func newFetchTarget(t *testing.T) *fetchTarget {
 	})
 	mux.HandleFunc("/blocked", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
+	})
+	mux.HandleFunc("/ratelimit", func(w http.ResponseWriter, r *http.Request) {
+		ft.rlHits++
+		if ft.rlHits == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		writeBody(t, w, "<html><body><h1>Limited</h1><p>now served</p></body></html>")
+	})
+	mux.HandleFunc("/markdown", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+		writeBody(t, w, "# Head\n\nSome *markdown* prose.\n")
 	})
 	mux.HandleFunc("/missing", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
@@ -298,7 +316,7 @@ func TestFetchPageHTML(t *testing.T) {
 	cfg.FetchAllowPrivate = true
 	cfg.FetchUserAgent = "unit-agent"
 
-	doc, err := FetchPage(context.Background(), cfg, ft.srv.URL+"/page")
+	doc, err := FetchPage(context.Background(), cfg, ft.srv.URL+"/page", nil)
 	if err != nil {
 		t.Fatalf("FetchPage: %v", err)
 	}
@@ -341,7 +359,7 @@ func TestFetchPagePlainTextAndRejects(t *testing.T) {
 	cfg.FetchAllowPrivate = true
 	ctx := context.Background()
 
-	doc, err := FetchPage(ctx, cfg, ft.srv.URL+"/plain")
+	doc, err := FetchPage(ctx, cfg, ft.srv.URL+"/plain", nil)
 	if err != nil {
 		t.Fatalf("text/plain fetch: %v", err)
 	}
@@ -349,7 +367,7 @@ func TestFetchPagePlainTextAndRejects(t *testing.T) {
 		t.Errorf("plain sections = %+v", doc.Sections)
 	}
 
-	if _, err := FetchPage(ctx, cfg, ft.srv.URL+"/json"); err == nil ||
+	if _, err := FetchPage(ctx, cfg, ft.srv.URL+"/json", nil); err == nil ||
 		!strings.Contains(err.Error(), "not supported") {
 		t.Errorf("json content type must be rejected with an explicit error, got: %v", err)
 	}
@@ -358,7 +376,7 @@ func TestFetchPagePlainTextAndRejects(t *testing.T) {
 
 	oversize.FetchAllowPrivate = true
 	oversize.FetchMaxBytes = 100
-	if _, err := FetchPage(ctx, oversize, ft.srv.URL+"/big"); err == nil ||
+	if _, err := FetchPage(ctx, oversize, ft.srv.URL+"/big", nil); err == nil ||
 		!strings.Contains(err.Error(), "exceeds fetch_max_bytes") {
 		t.Errorf("oversize body must fail with an explicit cap error, got: %v", err)
 	}
@@ -368,7 +386,7 @@ func TestFetchPageRedirect(t *testing.T) {
 	ft := newFetchTarget(t)
 	cfg := config.DefaultConfig()
 	cfg.FetchAllowPrivate = true
-	doc, err := FetchPage(context.Background(), cfg, ft.srv.URL+"/redirect")
+	doc, err := FetchPage(context.Background(), cfg, ft.srv.URL+"/redirect", nil)
 	if err != nil {
 		t.Fatalf("redirect fetch: %v", err)
 	}
@@ -388,7 +406,7 @@ func TestFetchPageProxyFallback(t *testing.T) {
 	fb.FetchAllowPrivate = true
 	fb.FetchProxyURL = proxy.URL
 	fb.FetchProxyFallback = true
-	doc, err := FetchPage(ctx, fb, ft.srv.URL+"/blocked")
+	doc, err := FetchPage(ctx, fb, ft.srv.URL+"/blocked", nil)
 	if err != nil {
 		t.Fatalf("403 with fallback: %v", err)
 	}
@@ -399,8 +417,18 @@ func TestFetchPageProxyFallback(t *testing.T) {
 		t.Errorf("sections from proxy: %+v", doc.Sections)
 	}
 
+	// 429 is an IP ban too: the proxy is a different IP (and the polite
+	// direct retry has already spent its single attempt on the target).
+	doc, err = FetchPage(ctx, fb, ft.srv.URL+"/ratelimit", nil)
+	if err != nil {
+		t.Fatalf("429 with fallback: %v", err)
+	}
+	if doc.Via != ViaProxy {
+		t.Errorf("429 via = %q, want proxy", doc.Via)
+	}
+
 	// 404 is not an IP ban: no retry through the proxy.
-	if _, err := FetchPage(ctx, fb, ft.srv.URL+"/missing"); err == nil ||
+	if _, err := FetchPage(ctx, fb, ft.srv.URL+"/missing", nil); err == nil ||
 		!strings.Contains(err.Error(), "HTTP 404") {
 		t.Errorf("404 must be final, got: %v", err)
 	}
@@ -410,11 +438,83 @@ func TestFetchPageProxyFallback(t *testing.T) {
 
 	only.FetchAllowPrivate = true
 	only.FetchProxyURL = proxy.URL
-	doc, err = FetchPage(ctx, only, ft.srv.URL+"/missing")
+	doc, err = FetchPage(ctx, only, ft.srv.URL+"/missing", nil)
 	if err != nil {
 		t.Fatalf("proxy-only mode: %v", err)
 	}
 	if doc.Via != ViaProxy {
 		t.Errorf("via = %q, want proxy", doc.Via)
+	}
+}
+
+// TestFetchPage429PoliteRetry: without a proxy the client gets exactly one
+// polite retry after a short pause (no hammering; Retry-After is not
+// honored — documented). The second attempt serves the page.
+func TestFetchPage429PoliteRetry(t *testing.T) {
+	ft := newFetchTarget(t)
+	cfg := config.DefaultConfig()
+	cfg.FetchAllowPrivate = true
+
+	doc, err := FetchPage(context.Background(), cfg, ft.srv.URL+"/ratelimit", nil)
+	if err != nil {
+		t.Fatalf("429 polite retry: %v", err)
+	}
+	if ft.rlHits != 2 {
+		t.Errorf("attempts = %d, want exactly 2 (one polite retry)", ft.rlHits)
+	}
+	if doc.Via != ViaDirect {
+		t.Errorf("via = %q, want direct", doc.Via)
+	}
+}
+
+// TestFetchPageMarkdown: text/markdown arrives as plain extracted text —
+// documentation endpoints (raw READMEs) are documentation too.
+func TestFetchPageMarkdown(t *testing.T) {
+	ft := newFetchTarget(t)
+	cfg := config.DefaultConfig()
+	cfg.FetchAllowPrivate = true
+
+	doc, err := FetchPage(context.Background(), cfg, ft.srv.URL+"/markdown", nil)
+	if err != nil {
+		t.Fatalf("markdown fetch: %v", err)
+	}
+	if len(doc.Sections) == 0 || !strings.Contains(doc.Sections[0].Text, "*markdown* prose") {
+		t.Errorf("sections = %+v", doc.Sections)
+	}
+}
+
+// TestFetchPageHook: the pre-store hook runs after extraction and BEFORE
+// finalization — size and content_hash describe the stored (redacted) text,
+// and a hook error rejects the page.
+func TestFetchPageHook(t *testing.T) {
+	ft := newFetchTarget(t)
+	cfg := config.DefaultConfig()
+	cfg.FetchAllowPrivate = true
+
+	hook := func(d *model.Doc) ([]model.Redaction, error) {
+		d.Sections[0].Text = "red"
+		return []model.Redaction{{Field: "section 0", Pattern: "aws-access-key", Chars: 20}}, nil
+	}
+	doc, err := FetchPage(context.Background(), cfg, ft.srv.URL+"/page", hook)
+	if err != nil {
+		t.Fatalf("hooked fetch: %v", err)
+	}
+	if doc.Size != 3+len("Second paragraph.") {
+		t.Errorf("size = %d, want it computed from the redacted text", doc.Size)
+	}
+	if len(doc.Redactions) != 1 || doc.Redactions[0].Pattern != "aws-access-key" {
+		t.Errorf("redactions not carried: %+v", doc.Redactions)
+	}
+	sum := sha256.Sum256([]byte("red\nSecond paragraph.\n"))
+	if doc.ContentHash != hex.EncodeToString(sum[:]) {
+		t.Errorf("content_hash must be over the final text: %s", doc.ContentHash)
+	}
+
+	reject := func(d *model.Doc) ([]model.Redaction, error) {
+		return nil, errors.New("guard: medium finding")
+	}
+	if _, err := FetchPage(context.Background(), cfg, ft.srv.URL+"/page", reject); err == nil ||
+		!strings.Contains(err.Error(), "medium finding") {
+		t.Errorf("hook rejection must propagate: %v", err)
 	}
 }

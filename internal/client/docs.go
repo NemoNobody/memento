@@ -229,7 +229,7 @@ func (c *Client) tagDocProject(ctx context.Context, hash, project string) error 
 // itself (normalize, allowlist) belongs to the callers: bad input is rejected
 // before the store is touched at all.
 func (c *Client) FetchDoc(ctx context.Context, rawURL, project string, refresh bool,
-	beforeStore func(*model.Doc) error) (doc *model.Doc, cached bool, err error) {
+	hook func(*model.Doc) ([]model.Redaction, error)) (doc *model.Doc, cached bool, err error) {
 	if err := c.EnsureDocsIndex(ctx); err != nil {
 		return nil, false, err
 	}
@@ -254,17 +254,17 @@ func (c *Client) FetchDoc(ctx context.Context, rawURL, project string, refresh b
 			return nil, false, fmt.Errorf("fetch doc: %w", err)
 		}
 	}
-	doc, err = FetchPage(ctx, c.cfg, rawURL)
+	// The project tag is part of the doc the guard inspects: the hook must
+	// see it, and the hook runs before the doc is finalized (see FetchPage).
+	doc, err = FetchPage(ctx, c.cfg, rawURL, func(d *model.Doc) ([]model.Redaction, error) {
+		d.Project = project
+		if hook == nil {
+			return nil, nil
+		}
+		return hook(d)
+	})
 	if err != nil {
 		return nil, false, err
-	}
-	// The project tag is part of the doc the guard inspects: it must be set
-	// before the pre-store hook, never after.
-	doc.Project = project
-	if beforeStore != nil {
-		if err := beforeStore(doc); err != nil {
-			return nil, false, err
-		}
 	}
 	if err := c.PutDoc(ctx, doc); err != nil {
 		return nil, false, err

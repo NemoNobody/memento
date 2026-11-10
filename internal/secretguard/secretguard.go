@@ -20,40 +20,99 @@ type Finding struct {
 	Pattern string // human-readable name of the matched pattern
 	Length  int    // length of the matched text
 	Masked  string // preview: at most the first 4 characters, the rest is '*'
+	// Confidence drives the policy: high shapes are credential-specific and
+	// deterministic (vendor prefixes, key blocks, strong assignments) — safe
+	// to act on (redact). medium covers the generic shapes (long hex/base64,
+	// weak assignments) that fire on ordinary content too — never redacted
+	// (a page must not be destroyed by a false positive), only refused
+	// (confirmable at secret_guard=ask).
+	Confidence string
 
 	start int
 	end   int
 }
 
-// pattern is a named detector. generic marks the credential shapes that
-// also fire on ordinary content (asset hashes, inline data: images, minified
-// bundles); high-confidence patterns match credential shapes rare enough in
-// legitimate text to act on.
+// Confidence levels.
+const (
+	ConfHigh   = "high"
+	ConfMedium = "medium"
+)
+
+// pattern is a named detector. confidence is ConfHigh for credential shapes
+// rare enough in legitimate text to act on, ConfMedium for the generic
+// shapes that also fire on ordinary content (asset hashes, inline data:
+// images, minified bundles). dynamic marks the one rule whose level is
+// computed per match (credential-assignment: the shape is common, the
+// entropy of the value decides).
 type pattern struct {
-	name    string
-	re      *regexp.Regexp
-	generic bool
+	name       string
+	re         *regexp.Regexp
+	confidence string
+	dynamic    bool
 }
 
-// patterns is the best-effort set: known vendor prefixes first (high
-// confidence), then generic shapes (long hex/base64, credential assignments)
-// that trade false positives for coverage.
+// patterns is the best-effort set: known vendor prefixes first (they close
+// the false-negative class of all-hex-32-style keys — the prefix names the
+// vendor), then generic shapes that trade false positives for coverage.
 var patterns = []pattern{
-	{"aws-access-key", regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`), false},
-	{"github-token", regexp.MustCompile(`\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36}\b`), false},
-	{"github-fine-grained-token", regexp.MustCompile(`\bgithub_pat_[A-Za-z0-9_]{22,}\b`), false},
-	{"gitlab-token", regexp.MustCompile(`\bglpat-[A-Za-z0-9_\-]{20}\b`), false},
-	{"slack-token", regexp.MustCompile(`\bxox[baprs][A-Za-z0-9-]{12,}\b`), false},
-	{"google-api-key", regexp.MustCompile(`\bAIza[0-9A-Za-z_\-]{35}\b`), false},
-	{"openai-key", regexp.MustCompile(`\bsk-[A-Za-z0-9_\-]{20,}\b`), false},
-	{"stripe-key", regexp.MustCompile(`\b[sp]k_(?:live|test)_[A-Za-z0-9]{20,}\b`), false},
-	{"jwt", regexp.MustCompile(`\beyJ[A-Za-z0-9_\-]{10,}`), false},
-	{"private-key-pem", regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`), false},
-	{"bearer-header", regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._\-]{16,}`), false},
-	{"credential-assignment", regexp.MustCompile(`(?i)\b(?:password|passwd|secret|token|api[_-]?key|access[_-]?key|secret[_-]?key)\b\s*[:=]\s*[^\s"']{6,}`), false},
-	{"long-hex", regexp.MustCompile(`\b[0-9a-fA-F]{32,}\b`), true},
-	{"long-base64", regexp.MustCompile(`[A-Za-z0-9+/]{40,}=`), true},
-	{"long-opaque-token", regexp.MustCompile(`[A-Za-z0-9+/]{48,}`), true},
+	{"aws-access-key", regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`), ConfHigh, false},
+	{"github-token", regexp.MustCompile(`\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36}\b`), ConfHigh, false},
+	{"github-fine-grained-token", regexp.MustCompile(`\bgithub_pat_[A-Za-z0-9_]{22,}\b`), ConfHigh, false},
+	{"gitlab-token", regexp.MustCompile(`\bglpat-[A-Za-z0-9_\-]{20}\b`), ConfHigh, false},
+	{"slack-token", regexp.MustCompile(`\bxox[baprs][A-Za-z0-9-]{12,}\b`), ConfHigh, false},
+	{"google-api-key", regexp.MustCompile(`\bAIza[0-9A-Za-z_\-]{35}\b`), ConfHigh, false},
+	{"openai-key", regexp.MustCompile(`\bsk-[A-Za-z0-9_\-]{20,}\b`), ConfHigh, false},
+	{"stripe-key", regexp.MustCompile(`\b[sp]k_(?:live|test)_[A-Za-z0-9]{20,}\b`), ConfHigh, false},
+	{"jwt", regexp.MustCompile(`\beyJ[A-Za-z0-9_\-]{10,}`), ConfHigh, false},
+	{"private-key-pem", regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`), ConfHigh, false},
+	{"bearer-header", regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._\-]{16,}`), ConfHigh, false},
+	{"basic-auth-url", regexp.MustCompile(`(?i)\bhttps?://[^\s/@:]+:[^\s@]+@[^\s/]+`), ConfHigh, false},
+	{"credential-assignment", regexp.MustCompile(`(?i)\b(?:password|passwd|secret|token|api[_-]?key|access[_-]?key|secret[_-]?key)\b\s*[:=]\s*[^\s"']{6,}`), ConfMedium, true},
+	{"long-hex", regexp.MustCompile(`\b[0-9a-fA-F]{32,}\b`), ConfMedium, false},
+	{"long-base64", regexp.MustCompile(`[A-Za-z0-9+/]{40,}=`), ConfMedium, false},
+	{"long-opaque-token", regexp.MustCompile(`[A-Za-z0-9+/]{48,}`), ConfMedium, false},
+}
+
+// classifyAssignment implements the deterministic rule for credential
+// assignments (the Shannon-score false positives it replaces): the matched
+// span is split at the assignment operator, and the right-hand side is
+// high-confidence only when it looks like a generated secret: 20+ characters
+// spanning at least 3 character classes (upper/lower/digit/symbol). A short
+// or low-entropy right-hand side (an identifier, a config name) is medium:
+// assignments to variables are ordinary code text.
+func classifyAssignment(match string) string {
+	idx := strings.IndexAny(match, "=:")
+	if idx < 0 {
+		return ConfMedium
+	}
+	rhs := strings.TrimSpace(match[idx+1:])
+	r := []rune(rhs)
+	if len(r) < 20 {
+		return ConfMedium
+	}
+	var upper, lower, digit, symbol bool
+	for _, c := range r {
+		switch {
+		case c >= 'A' && c <= 'Z':
+			upper = true
+		case c >= 'a' && c <= 'z':
+			lower = true
+		case c >= '0' && c <= '9':
+			digit = true
+		default:
+			symbol = true
+		}
+	}
+	n := 0
+	for _, b := range []bool{upper, lower, digit, symbol} {
+		if b {
+			n++
+		}
+	}
+	if n >= 3 {
+		return ConfHigh
+	}
+	return ConfMedium
 }
 
 // Scan reports credential-like spans in text, attributed to field. Detections
@@ -64,11 +123,12 @@ func Scan(field, text string) []Finding {
 }
 
 // Redact replaces high-confidence credential-like spans with a marker and
-// returns the rewritten text with the findings. Generic shapes are skipped:
-// in markup they match ordinary content (asset hashes, inline data: images),
-// and a fetched page must not be destroyed by a false positive. This is the
-// mode for the stored raw HTML, which agents never read: redacting on write
-// keeps the plaintext store clean without making normal pages uncacheable.
+// returns the rewritten text with the findings. Medium-confidence shapes are
+// skipped: in markup they match ordinary content (asset hashes, inline
+// data: images), and a fetched page must not be destroyed by a false
+// positive. This is the mode for agent-visible doc fields and for the stored
+// raw HTML, which agents never read: redacting on write keeps the plaintext
+// store clean without making normal pages uncacheable.
 func Redact(field, text string) (string, []Finding) {
 	findings := scan(field, text, true)
 	if len(findings) == 0 {
@@ -92,12 +152,14 @@ func Redact(field, text string) (string, []Finding) {
 	return b.String(), findings
 }
 
-// scan is Scan with the pattern-set switch: highOnly drops the generic
-// shapes. Findings are masked previews only (see the package doc).
+// scan is Scan with the pattern-set switch: highOnly drops the
+// medium-confidence shapes (Redact's set). Findings are masked previews only
+// (see the package doc).
 func scan(field, text string, highOnly bool) []Finding {
 	var out []Finding
 	for _, p := range patterns {
-		if highOnly && p.generic {
+		conf := p.confidence
+		if highOnly && conf != ConfHigh {
 			continue
 		}
 		for _, loc := range p.re.FindAllStringIndex(text, -1) {
@@ -105,13 +167,18 @@ func scan(field, text string, highOnly bool) []Finding {
 			if covered(out, start, end) {
 				continue
 			}
+			level := conf
+			if p.dynamic {
+				level = classifyAssignment(text[start:end])
+			}
 			out = append(out, Finding{
-				Field:   field,
-				Pattern: p.name,
-				Length:  end - start,
-				Masked:  mask(text[start:end]),
-				start:   start,
-				end:     end,
+				Field:      field,
+				Pattern:    p.name,
+				Length:     end - start,
+				Masked:     mask(text[start:end]),
+				Confidence: level,
+				start:      start,
+				end:        end,
 			})
 		}
 	}

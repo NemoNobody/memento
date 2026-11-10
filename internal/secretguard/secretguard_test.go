@@ -120,3 +120,77 @@ func TestScanNeverEchoesSecret(t *testing.T) {
 		}
 	}
 }
+
+// TestConfidenceRules pins the deterministic triage (the Shannon-score
+// replacement): vendor prefixes, key blocks, basic-auth URLs and strong
+// assignments are high (redactable); the generic shapes and weak assignments
+// are medium (refuse only, never mangle content).
+func TestConfidenceRules(t *testing.T) {
+	cases := []struct {
+		name string
+		text string
+		pat  string
+		conf string
+	}{
+		{"prefix-aws", "key is " + sentinelAWS, "aws-access-key", ConfHigh},
+		{"basic-auth", "connect https://admin:Su1perS3cret!@wiki.internal/x", "basic-auth-url", ConfHigh},
+		{"assignment-strong", "api_key: A1b2C3d4E5f6G7h8I9j0Kl", "credential-assignment", ConfHigh},
+		{"assignment-symbol-class", "password = Xk9#mQ2$vL7@pR4!tW8&nZ5", "credential-assignment", ConfHigh},
+		{"assignment-identifier", "password = someVeryLongVarNameForAuth", "credential-assignment", ConfMedium},
+		{"assignment-short", "login with password = Sup3rS3cret!", "credential-assignment", ConfMedium},
+		{"hex32", "commit " + strings.Repeat("a", 32), "long-hex", ConfMedium},
+		{"opaque", strings.Repeat("k", 48), "long-opaque-token", ConfMedium},
+		{"pem", "rotate it: -----BEGIN OPENSSH PRIVATE KEY-----\nabc", "private-key-pem", ConfHigh},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var hit *Finding
+			fs := Scan("value", tc.text)
+			for i := range fs {
+				if fs[i].Pattern == tc.pat {
+					hit = &fs[i]
+				}
+			}
+			if hit == nil {
+				t.Fatalf("pattern %q not found in %+v", tc.pat, fs)
+			}
+			if hit.Confidence != tc.conf {
+				t.Errorf("confidence = %q, want %q", hit.Confidence, tc.conf)
+			}
+		})
+	}
+}
+
+// TestRedactSkipsMedium: redaction is reserved for the high shapes. A git
+// SHA (long-hex) inside fetched text must survive intact — mangling real
+// documentation on a medium hit is worse than refusing it.
+func TestRedactSkipsMedium(t *testing.T) {
+	text := "commit " + sentinelHex40 + " is the base"
+	out, findings := Redact("section 0", text)
+	if out != text {
+		t.Errorf("medium shape was redacted: %q", out)
+	}
+	if len(findings) != 0 {
+		t.Errorf("Redact must report only high findings, got %+v", findings)
+	}
+	out, findings = Redact("section 0", "the key is "+sentinelAWS)
+	if strings.Contains(out, sentinelAWS) || len(findings) != 1 {
+		t.Errorf("high shape must be redacted: %q %+v", out, findings)
+	}
+}
+
+// TestHex32UnderPrefix: an AWS key is also a 20-char alnum blob; the vendor
+// prefix classifies it high — the generic-shape false-negative class
+// (all-hex-32 tokens that ARE keys) closes through the prefix list.
+func TestHex32UnderPrefix(t *testing.T) {
+	fs := Scan("value", sentinelAWS)
+	high := false
+	for _, f := range fs {
+		if f.Confidence == ConfHigh {
+			high = true
+		}
+	}
+	if !high {
+		t.Errorf("AWS key must be high-confidence via the prefix: %+v", fs)
+	}
+}

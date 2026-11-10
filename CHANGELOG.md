@@ -69,6 +69,29 @@ MCP ergonomics (context economy, partial updates, batch):
   binary, not the repo on disk); `version` renamed to `opensearch_version`.
   **Breaking** for clients reading `version`.
 - 15 MCP tools.
+
+Fetch guard triage and fetch v1 fixes:
+- The secret guard now grades findings: `high` (vendor prefixes, PEM blocks,
+  basic-auth URLs, `Bearer`, assignments with a 20+ char multi-class secret) vs
+  `medium` (long hex/base64, weak assignments like `password = someVarName`).
+  On fetched pages: high-confidence shapes in agent-visible fields and the
+  stored HTML are REDACTED in place (marker `[memento-redacted:pattern]`) and
+  the page is stored — the answer lists `redactions` (field/pattern/size, no
+  preview) plus a `warning`; redaction runs before `size`/`content_hash`, so
+  metadata matches the stored text. Medium findings in visible text refuse the
+  write (confirmable at `ask`, no bypass at `reject`) — silent redaction would
+  mangle real documentation. The same graded set scans fact writes.
+- Default fetch User-Agent is a desktop Chrome string (sites 403 known bot
+  UAs; override with `fetch_user_agent`/`MEMENTO_FETCH_USER_AGENT`).
+- 429 is treated as an IP ban: with `fetch_proxy_fallback` the proxy is a new
+  IP; without a proxy, one polite retry after a short pause. `Retry-After` is
+  not honored (a hostile server could park the client).
+- `text/markdown` / `text/x-markdown` responses extract as plain text (raw
+  README endpoints are documentation); the request Accept advertises it.
+- New config: `fetch_render` (`off`|`obscura`, default `off`),
+  `fetch_obscura_path` (default `obscura`), `fetch_obscura_stealth`
+  (default `true`); env `MEMENTO_FETCH_RENDER`, `MEMENTO_FETCH_OBSCURA_PATH`,
+  `MEMENTO_FETCH_OBSCURA_STEALTH`. See JS rendering below.
 - Docs: least-privilege store user guide for clusters with the security
   plugin (role/user/role-mapping recipes; the app role cannot delete the
   facts index; `indices:admin/get` + per-pattern create/settings/update

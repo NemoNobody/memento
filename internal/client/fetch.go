@@ -36,6 +36,7 @@ const (
 var ipBlockStatuses = map[int]bool{
 	http.StatusForbidden:           true, // 403
 	http.StatusUnprocessableEntity: true, // 422
+	http.StatusTooManyRequests:     true, // 429: the proxy path is a new IP; without a proxy one polite retry
 }
 
 // blockedIP reports addresses a fetch must never connect to. Fetch follows
@@ -369,7 +370,7 @@ func fetchHTTP(ctx context.Context, cfg *config.Config, normalizedURL string) (c
 		if err != nil {
 			return "", nil, "", 0, fmt.Errorf("fetch: new request: %w", err)
 		}
-		req.Header.Set("Accept", "text/html, text/plain;q=0.8")
+		req.Header.Set("Accept", "text/html, text/plain;q=0.8, text/markdown;q=0.6")
 		ua := cfg.FetchUserAgent
 		if ua == "" {
 			ua = "memento/fetch (+OpenSearch docs cache)"
@@ -411,6 +412,21 @@ func fetchHTTP(ctx context.Context, cfg *config.Config, normalizedURL string) (c
 	if err == nil {
 		return ct, body, final, ViaDirect, nil
 	}
+	// 429 without a proxy means a rate limit on this IP: one polite retry
+	// (a single short pause, no hammering). Retry-After is deliberately not
+	// honored: a hostile server could park the client for hours — the
+	// documented tradeoff.
+	if status == http.StatusTooManyRequests && proxy == nil {
+		select {
+		case <-ctx.Done():
+			return "", nil, final, ViaDirect, err
+		case <-time.After(2 * time.Second):
+		}
+		ct, body, final, status, err = attempt(nil)
+		if err == nil {
+			return ct, body, final, ViaDirect, nil
+		}
+	}
 	// Fallback triggers: no HTTP response at all (network failure, timeout,
 	// redirect limit — status 0), or an IP-ban status. Any real status is
 	// final: 404/401 are not IP bans, and oversize (under a 200) is a property
@@ -435,9 +451,18 @@ func fetchHTTP(ctx context.Context, cfg *config.Config, normalizedURL string) (c
 // path of memento serves it (context economy — raw pages are curl's job).
 //
 // content-type routing: HTML goes through section+image extraction,
-// text/plain is chunked directly; anything else (PDF, images, JSON feeds) is
-// rejected — silent garbage extraction is worse than an explicit error.
-func FetchPage(ctx context.Context, cfg *config.Config, normalizedURL string) (*model.Doc, error) {
+// text/plain and markdown are chunked directly; anything else (PDF, images,
+// JSON feeds) is rejected — silent garbage extraction is worse than an
+// explicit error.
+//
+// hook runs after extraction and BEFORE the document is finalized
+// (size/content_hash computed from the final, possibly redacted text): the
+// write-time secret guard rewrites agent-visible fields here, so the stored
+// metadata describes exactly what the agent-visible content is. A hook
+// error rejects the page (the guard's policy lives in the caller; the
+// client only owns the timing).
+func FetchPage(ctx context.Context, cfg *config.Config, normalizedURL string,
+	hook func(*model.Doc) ([]model.Redaction, error)) (*model.Doc, error) {
 	if err := CheckRobots(ctx, cfg, normalizedURL); err != nil {
 		return nil, err
 	}
@@ -453,10 +478,10 @@ func FetchPage(ctx context.Context, cfg *config.Config, normalizedURL string) (*
 	switch media {
 	case "text/html", "application/xhtml+xml", "":
 		sections, images, truncated = ExtractSections(string(body))
-	case "text/plain":
+	case "text/plain", "text/markdown", "text/x-markdown":
 		sections, truncated = ExtractPlainText(string(body))
 	default:
-		return nil, fmt.Errorf("fetch: content type %q is not supported (text/html, text/plain only)", media)
+		return nil, fmt.Errorf("fetch: content type %q is not supported (text/html, text/plain, text/markdown only)", media)
 	}
 	if len(sections) == 0 {
 		return nil, fmt.Errorf("fetch %s: no readable text extracted (content type %q)", normalizedURL, media)
@@ -466,34 +491,45 @@ func FetchPage(ctx context.Context, cfg *config.Config, normalizedURL string) (*
 	if title == "" {
 		title = normalizedURL
 	}
-	size := 0
-	sum := sha256.New()
-	for i := range sections {
-		sections[i].Order = i
-		size += len([]rune(sections[i].Text))
-		sum.Write([]byte(sections[i].Text))
-		sum.Write([]byte{'\n'})
-	}
 	images = resolveImageRefs(images, finalURL)
 
 	host, _ := os.Hostname()
 	now := time.Now().UTC()
 	doc := &model.Doc{
-		URL:         normalizedURL,
-		URLHash:     URLHash(normalizedURL),
-		FinalURL:    finalURL,
-		ContentHash: hex.EncodeToString(sum.Sum(nil)),
-		Title:       title,
-		FetchedAt:   now,
-		Size:        size,
-		SizeRaw:     len(body),
-		Truncated:   truncated,
-		FetchedBy:   host,
-		Via:         via,
-		HTML:        string(body),
-		Sections:    sections,
-		Images:      images,
+		URL:       normalizedURL,
+		URLHash:   URLHash(normalizedURL),
+		FinalURL:  finalURL,
+		Title:     title,
+		FetchedAt: now,
+		SizeRaw:   len(body),
+		Truncated: truncated,
+		FetchedBy: host,
+		Via:       via,
+		HTML:      string(body),
+		Sections:  sections,
+		Images:    images,
 	}
+	if hook != nil {
+		redactions, herr := hook(doc)
+		if herr != nil {
+			return nil, herr
+		}
+		doc.Redactions = redactions
+	}
+
+	// Finalize after the hook: size and content_hash describe the text that
+	// will actually be stored (a redacted span must not be counted as if it
+	// shipped whole).
+	size := 0
+	sum := sha256.New()
+	for i := range doc.Sections {
+		doc.Sections[i].Order = i
+		size += len([]rune(doc.Sections[i].Text))
+		sum.Write([]byte(doc.Sections[i].Text))
+		sum.Write([]byte{'\n'})
+	}
+	doc.Size = size
+	doc.ContentHash = hex.EncodeToString(sum.Sum(nil))
 	if cfg.DocsTTLDays > 0 {
 		doc.ExpiresAt = now.AddDate(0, 0, cfg.DocsTTLDays)
 	}
