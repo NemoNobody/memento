@@ -303,7 +303,7 @@ func printStatus(w io.Writer, rep statusReport) error {
 		b.WriteString("\n")
 	}
 	if rep.URL == "" {
-		b.WriteString("status: NOT AVAILABLE\n  ")
+		b.WriteString("status: NOT AVAILABLE\n  error: ")
 		b.WriteString(rep.Error)
 		b.WriteString("\n  hint: ")
 		b.WriteString(rep.Hint)

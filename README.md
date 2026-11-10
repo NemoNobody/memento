@@ -140,8 +140,8 @@ memento docs "example"
 | Command | Description |
 |---------|-------------|
 | `memento add <key> <value> <category> [--project <p>] [--source <s>] [--notes <n>] [--summary <s>] [--allow-secret]` | Add or correct a fact (prints `added`/`updated`/`touched (same value)`; the accepted value is appended to the journal; values over `summary_min_len` require `--summary`) |
-| `memento get <key> [--history]` | Get a fact by key (history is off by default; `--history` prints the legacy in-doc array — journal-era history lives in `memento journal`) |
-| `memento search <query> [--project <p>] [--category <c>] [--status <s>] [--limit N]` | Full-text search over values, notes and summaries (`--status any` disables the status filter; `--limit 0` = up to 1000) |
+| `memento get <key> [--history]` | Get a fact by key (history is off by default; `--history` prints the legacy in-doc chain, or the newest journal entries for journal-era facts — the full journal is one `memento journal` away) |
+| `memento search <query> [--project <p>] [--category <c>] [--status <s>] [--limit N]` | Full-text search over values, notes and summaries (`--status any` disables the status filter; `--limit 0` = up to 1000, larger values are clamped to it) |
 | `memento keys [prefix] [--match <s>] [--project <p>] [--status <s>]` | Find facts by key: prefix and/or substring (`*`, `?` wildcards in `--match`), across projects |
 | `memento list <project> [--prefix <p>]` | List all facts for a project, optionally narrowed to a key prefix (trailing `*` allowed) |
 | `memento journal <key> [--limit N]` | Read the journal: the append-only history of a key, newest first |
@@ -155,6 +155,10 @@ memento docs "example"
 | `memento doc <hash> [n\|--section N] [--full]` | Read a stored document: the outline (default), section `n`, or every section with `--full` |
 | `memento docs <query> [--limit N] [-p <p>]` | BM25 search over stored documents (the extracted sections, never the raw page) |
 | `memento mcp` | Run as an MCP server over stdio |
+
+Exit codes: `0` success, `1` any error, `3` the named key does not exist
+(`get`/`obsolete`/`prune`) — scripts can tell a missing fact from an
+unreachable store without parsing stderr.
 
 Key convention: the key names a **stable subject**, not its current value —
 `demo:api:port`, not `demo:api:v1`. Re-using the same key with a new value is a

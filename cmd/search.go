@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/NemoNobody/memento/internal/client"
 	"github.com/spf13/cobra"
 )
 
@@ -26,19 +27,27 @@ func SearchCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			query := args[0]
-			// Shape before store contact: an invalid status, a negative limit
-			// or an empty query are the caller's problem. A negative limit
-			// would read as "no cap" (0 = up to 1000) and silently widen the
-			// page; an empty query answers a silent zero (navigation is what
-			// list/keys are for — the search_docs edge refuses the same input).
+			// Shape before store contact: an empty query, an invalid status or
+			// a negative limit are the caller's problem. A negative limit would
+			// read as "no cap" (0 = up to 1000) and silently widen the page; an
+			// empty query answers a silent zero (navigation is what list/keys
+			// are for — the search_docs edge refuses the same input).
 			if strings.TrimSpace(query) == "" {
 				fatalErr(errors.New("query is required"))
 			}
-			// Shape before store contact: an invalid status or a negative
-			// limit are the caller's problem. A negative limit would read as
-			// "no cap" (0 = up to 1000) and silently widen the page.
 			if searchFlags.limit < 0 {
 				fatalErr(fmt.Errorf("search: --limit must be >= 0, got %d (0 = up to 1000)", searchFlags.limit))
+			}
+			if searchFlags.limit > client.NavSizeCap {
+				// Clamp instead of forwarding: beyond the navigation cap the
+				// cluster answers a raw 400 about result windows; the cap is the
+				// honest ceiling of one page (the truncation note below says so),
+				// and the stderr note keeps the caller from believing a capped
+				// page was complete.
+				searchFlags.limit = client.NavSizeCap
+				if err := writeLine(os.Stderr, "note: --limit clamped to "+strconv.Itoa(client.NavSizeCap)+" (the navigation cap of one page)"); err != nil {
+					fatalErr(err)
+				}
 			}
 			status, serr := resolveStatus(searchFlags.status)
 			if serr != nil {

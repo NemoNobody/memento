@@ -3,11 +3,12 @@ package cmd
 import (
 	"context"
 	"errors"
-	"github.com/NemoNobody/memento/internal/config"
-	"github.com/spf13/cobra"
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/NemoNobody/memento/internal/config"
+	"github.com/spf13/cobra"
 )
 
 var obsoleteFlags struct {
@@ -45,7 +46,7 @@ func ObsoleteCmd() *cobra.Command {
 				fatalErr(err)
 			}
 			if err := c.Obsolete(ctx, key, reason); err != nil {
-				fatalErr(err)
+				fatalIfNotFound(err)
 			}
 			if err := writeLine(os.Stdout, "obsolete: key="+strconv.Quote(key)); err != nil {
 				fatalErr(err)

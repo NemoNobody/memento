@@ -101,7 +101,7 @@ their approval.`,
 			}
 			removed, err := c.Prune(ctx, key, keep)
 			if err != nil {
-				fatalErr(err)
+				fatalIfNotFound(err)
 			}
 			line := "pruned key " + strconv.Quote(key) + ": dropped " + strconv.Itoa(removed) +
 				" history entries, kept the newest " + strconv.Itoa(keep)

@@ -18,7 +18,13 @@ func ListCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list <project>",
 		Short: "List all facts for a project",
-		Args:  cobra.ExactArgs(1),
+		Long: `List the facts of one project, sorted by key (stable navigation order).
+
+The MCP memento_list defaults to updated_at desc instead — "what moved
+since the last session" — with sort: "key" for this CLI's order; the
+asymmetry is deliberate per audience, do not expect one to match the
+other by default.`,
+		Args: cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			// Project labels are stored trimmed (write edges); the term
 			// filter is whitespace-exact, so trim the query too.
