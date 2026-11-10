@@ -41,7 +41,7 @@ func TestScanKnownShapes(t *testing.T) {
 		{"pem", "rotate it: -----BEGIN OPENSSH PRIVATE KEY-----\nabc", "private-key-pem"},
 		{"bearer", "send Authorization: Bearer eyJ0eXAi.aaaaaaaaaaaaaaaaaaaaaa", "bearer-header"},
 		{"assignment", "login with password = Sup3rS3cret!", "credential-assignment"},
-		{"hex40", "commit " + sentinelHex40, "long-hex"},
+		{"hex40", "value " + sentinelHex40, "long-hex"},
 		{"base64", "value " + strings.Repeat("aB3xYw9", 6) + "=", "long-base64"},
 		{"opaque", strings.Repeat("k", 48), "long-opaque-token"},
 	}
@@ -138,7 +138,7 @@ func TestConfidenceRules(t *testing.T) {
 		{"assignment-symbol-class", "password = Xk9#mQ2$vL7@pR4!tW8&nZ5", "credential-assignment", ConfHigh},
 		{"assignment-identifier", "password = someVeryLongVarNameForAuth", "credential-assignment", ConfMedium},
 		{"assignment-short", "login with password = Sup3rS3cret!", "credential-assignment", ConfMedium},
-		{"hex32", "commit " + strings.Repeat("a", 32), "long-hex", ConfMedium},
+		{"hex32", "value " + strings.Repeat("a", 32), "long-hex", ConfMedium},
 		{"opaque", strings.Repeat("k", 48), "long-opaque-token", ConfMedium},
 		{"pem", "rotate it: -----BEGIN OPENSSH PRIVATE KEY-----\nabc", "private-key-pem", ConfHigh},
 	}
@@ -158,6 +158,31 @@ func TestConfidenceRules(t *testing.T) {
 				t.Errorf("confidence = %q, want %q", hit.Confidence, tc.conf)
 			}
 		})
+	}
+}
+
+// TestScanHashContextExemption: the technical-hash habitat (usage report
+// P1: HF revisions, sha256 digests, SRI attributes) must not block
+// technical facts — a token named by a neighboring word is a content
+// fingerprint. The exemption is local: an unnamed shape (no hint inside the
+// window) and a credential assignment (never exempt) stay detected.
+func TestScanHashContextExemption(t *testing.T) {
+	clean := []string{
+		"model revision " + sentinelHex40 + " (sha256: " + strings.Repeat("aB3xYw9", 6) + ")",
+		"commit " + sentinelHex40,
+		"checksum 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+		"integrity=\"sha384-" + strings.Repeat("k9Qd", 24) + "=\"",
+	}
+	for _, s := range clean {
+		if got := Scan("value", s); len(got) != 0 {
+			t.Errorf("named hash must be exempt: %q -> %+v", s, got)
+		}
+	}
+	if got := Scan("value", "value "+sentinelHex40); len(got) == 0 {
+		t.Error("unnamed long-hex must stay detected")
+	}
+	if got := Scan("value", "commit note: api_key = "+strings.Repeat("k9QdLm2Zx7", 3)+"ab"); len(got) == 0 {
+		t.Error("assignment beside a hint word must stay detected")
 	}
 }
 

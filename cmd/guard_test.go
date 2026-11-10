@@ -122,8 +122,10 @@ func TestGuardFetchRedactsStoredHTML(t *testing.T) {
 	}
 
 	// A medium shape in the agent-visible text refuses at reject, and the
-	// confirmation flag does NOT bypass there.
-	doc.Sections = []model.Section{{Order: 0, Heading: "H", Text: "commit 0123456789abcdef0123456789abcdef01234567"}}
+	// confirmation flag does NOT bypass there. The habitat is neutral ("value
+	// "): a named hash beside a hint word is exempt by design (long-hex
+	// ctxExempt), so the test must use an unnamed opaque blob.
+	doc.Sections = []model.Section{{Order: 0, Heading: "H", Text: "value " + strings.Repeat("k", 48)}}
 	if _, err := guardFetch(doc, config.GuardReject, true); err == nil {
 		t.Fatal("secret_guard=reject has no confirmation bypass for medium findings")
 	}
@@ -151,8 +153,9 @@ func TestGuardFetchURLIsHighOnly(t *testing.T) {
 	if _, err := guardFetch(doc, config.GuardReject, false); err != nil {
 		t.Fatalf("medium shape in the URL must not reject: %v", err)
 	}
-	// The same shape in the agent-visible text does refuse (control).
-	doc.Sections = []model.Section{{Order: 0, Heading: "H", Text: "commit 0123456789abcdef0123456789abcdef01234567"}}
+	// The same shape in the agent-visible text does refuse (control). Neutral
+	// habitat: named-hash contexts are exempt for the generic shapes.
+	doc.Sections = []model.Section{{Order: 0, Heading: "H", Text: "value " + strings.Repeat("k", 48)}}
 	if _, err := guardFetch(doc, config.GuardReject, false); err == nil {
 		t.Fatal("medium shape in visible text must refuse at reject")
 	}

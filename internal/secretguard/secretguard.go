@@ -43,40 +43,70 @@ const (
 // shapes that also fire on ordinary content (asset hashes, inline data:
 // images, minified bundles). dynamic marks the one rule whose level is
 // computed per match (credential-assignment: the shape is common, the
-// entropy of the value decides).
+// entropy of the value decides). ctxExempt marks the generic token shapes:
+// a match next to a word that NAMES it (sha256:, revision, commit...) is a
+// content fingerprint, not a credential — see hashContextHints.
 type pattern struct {
 	name       string
 	re         *regexp.Regexp
 	confidence string
 	dynamic    bool
+	ctxExempt  bool
 }
 
 // patterns is the best-effort set: known vendor prefixes first (they close
 // the false-negative class of all-hex-32-style keys — the prefix names the
 // vendor), then generic shapes that trade false positives for coverage.
 var patterns = []pattern{
-	{"aws-access-key", regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`), ConfHigh, false},
-	{"github-token", regexp.MustCompile(`\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36}\b`), ConfHigh, false},
-	{"github-fine-grained-token", regexp.MustCompile(`\bgithub_pat_[A-Za-z0-9_]{22,}\b`), ConfHigh, false},
-	{"gitlab-token", regexp.MustCompile(`\bglpat-[A-Za-z0-9_\-]{20}\b`), ConfHigh, false},
-	{"slack-token", regexp.MustCompile(`\bxox[baprs][A-Za-z0-9-]{12,}\b`), ConfHigh, false},
-	{"google-api-key", regexp.MustCompile(`\bAIza[0-9A-Za-z_\-]{35}\b`), ConfHigh, false},
-	{"openai-key", regexp.MustCompile(`\bsk-[A-Za-z0-9_\-]{20,}\b`), ConfHigh, false},
-	{"stripe-key", regexp.MustCompile(`\b[sp]k_(?:live|test)_[A-Za-z0-9]{20,}\b`), ConfHigh, false},
-	{"jwt", regexp.MustCompile(`\beyJ[A-Za-z0-9_\-]{10,}`), ConfHigh, false},
-	{"private-key-pem", regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`), ConfHigh, false},
-	{"bearer-header", regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._\-]{16,}`), ConfHigh, false},
-	{"basic-auth-url", regexp.MustCompile(`(?i)\bhttps?://[^\s/@:]+:[^\s@]+@[^\s/]+`), ConfHigh, false},
+	{"aws-access-key", regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`), ConfHigh, false, false},
+	{"github-token", regexp.MustCompile(`\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36}\b`), ConfHigh, false, false},
+	{"github-fine-grained-token", regexp.MustCompile(`\bgithub_pat_[A-Za-z0-9_]{22,}\b`), ConfHigh, false, false},
+	{"gitlab-token", regexp.MustCompile(`\bglpat-[A-Za-z0-9_\-]{20}\b`), ConfHigh, false, false},
+	{"slack-token", regexp.MustCompile(`\bxox[baprs][A-Za-z0-9-]{12,}\b`), ConfHigh, false, false},
+	{"google-api-key", regexp.MustCompile(`\bAIza[0-9A-Za-z_\-]{35}\b`), ConfHigh, false, false},
+	{"openai-key", regexp.MustCompile(`\bsk-[A-Za-z0-9_\-]{20,}\b`), ConfHigh, false, false},
+	{"stripe-key", regexp.MustCompile(`\b[sp]k_(?:live|test)_[A-Za-z0-9]{20,}\b`), ConfHigh, false, false},
+	{"jwt", regexp.MustCompile(`\beyJ[A-Za-z0-9_\-]{10,}`), ConfHigh, false, false},
+	{"private-key-pem", regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`), ConfHigh, false, false},
+	{"bearer-header", regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._\-]{16,}`), ConfHigh, false, false},
+	{"basic-auth-url", regexp.MustCompile(`(?i)\bhttps?://[^\s/@:]+:[^\s@]+@[^\s/]+`), ConfHigh, false, false},
 	// The assignment rule tolerates the JSON/YAML habitat (quoted keys and
 	// quoted values: "api_key": "S3cr3t") and refuses a right-hand side that
 	// starts with '[' — the redaction marker. Without that exclusion the
 	// post-redaction guard scan fires on its own marker (an infinite
 	// self-reject: the redacted text "secret = [memento-redacted:...]" reads
 	// as a fresh assignment).
-	{"credential-assignment", regexp.MustCompile(`(?i)\b(?:password|passwd|secret|token|api[_-]?key|access[_-]?key|secret[_-]?key)\b["']?\s*[:=]\s*["']?[^\s"'\[]{6,}`), ConfMedium, true},
-	{"long-hex", regexp.MustCompile(`\b[0-9a-fA-F]{32,}\b`), ConfMedium, false},
-	{"long-base64", regexp.MustCompile(`[A-Za-z0-9+/]{40,}=`), ConfMedium, false},
-	{"long-opaque-token", regexp.MustCompile(`[A-Za-z0-9+/]{48,}`), ConfMedium, false},
+	{"credential-assignment", regexp.MustCompile(`(?i)\b(?:password|passwd|secret|token|api[_-]?key|access[_-]?key|secret[_-]?key)\b["']?\s*[:=]\s*["']?[^\s"'\[]{6,}`), ConfMedium, true, false},
+	{"long-hex", regexp.MustCompile(`\b[0-9a-fA-F]{32,}\b`), ConfMedium, false, true},
+	{"long-base64", regexp.MustCompile(`[A-Za-z0-9+/]{40,}=`), ConfMedium, false, true},
+	{"long-opaque-token", regexp.MustCompile(`[A-Za-z0-9+/]{48,}`), ConfMedium, false, true},
+}
+
+// hashContextHints names the technical-hash habitat: git SHAs, file digests,
+// model revisions, SRI attributes. A generic token shape within
+// hashHintWindow bytes of one of these words is a content fingerprint, not
+// a credential — the user writes the hash BECAUSE it identifies a file, and
+// refusing such facts loses the information the fact exists for. The
+// exemption never touches the deterministic vendor-shaped rules (a labeled
+// or prefixed secret stays a secret) and never touches assignments: a real
+// credential beside the word "commit" still meets the assignment rule.
+var hashContextHints = regexp.MustCompile(`(?i)\b(?:sha[0-9]{1,3}|md5|hash|digest|checksum|revision|rev|commit|hex|git|blob|tree|tag|sum)\b`)
+
+const hashHintWindow = 40
+
+// inHashContext reports whether the window around [start,end) carries a
+// hash-context hint. Byte windows are fine: the hint regex is ASCII and a
+// mis-cut boundary rune simply cannot match it.
+func inHashContext(text string, start, end int) bool {
+	lo := start - hashHintWindow
+	if lo < 0 {
+		lo = 0
+	}
+	hi := end + hashHintWindow
+	if hi > len(text) {
+		hi = len(text)
+	}
+	return hashContextHints.MatchString(text[lo:hi])
 }
 
 // classifyAssignment implements the deterministic rule for credential
@@ -182,6 +212,9 @@ func scan(field, text string, highOnly bool) []Finding {
 			}
 			if highOnly && level != ConfHigh {
 				continue
+			}
+			if p.ctxExempt && inHashContext(text, start, end) {
+				continue // a named hash, not a credential (see hashContextHints)
 			}
 			if covered(out, start, end) {
 				continue
