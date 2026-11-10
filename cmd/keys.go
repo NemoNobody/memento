@@ -3,12 +3,13 @@ package cmd
 import (
 	"context"
 	"errors"
-	"github.com/NemoNobody/memento/internal/client"
-	"github.com/spf13/cobra"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/NemoNobody/memento/internal/client"
+	"github.com/spf13/cobra"
 )
 
 var keysFlags struct {
@@ -30,8 +31,14 @@ func KeysCmd() *cobra.Command {
 			if len(args) == 1 {
 				prefix = args[0]
 			}
-			// Validate before any store contact: a bad query is the caller's
-			// problem, not an availability problem.
+			// Normalize and validate before any store contact: a bad query is
+			// the caller's problem, not an availability problem. The match and
+			// project are trimmed at this edge too (the MCP keys tool does the
+			// same): store keys and project labels are trimmed, so a padded
+			// filter answers a silent zero, and a whitespace-only --match must
+			// mean "no filter" in the empty-query check, not "query given".
+			keysFlags.match = strings.TrimSpace(keysFlags.match)
+			keysFlags.project = strings.TrimSpace(keysFlags.project)
 			if prefix == "" && keysFlags.match == "" {
 				fatalErr(errors.New("keys: provide a key prefix and/or --match"))
 			}
@@ -47,9 +54,7 @@ func KeysCmd() *cobra.Command {
 			if serr != nil {
 				fatalErr(serr)
 			}
-			// Store keys and project labels are trimmed edges; a padded
-			// filter answers a silent zero (the MCP edges trim the same way).
-			facts, meta, err := c.Keys(ctx, prefix, strings.TrimSpace(keysFlags.match), strings.TrimSpace(keysFlags.project), status)
+			facts, meta, err := c.Keys(ctx, prefix, keysFlags.match, keysFlags.project, status)
 			if err != nil {
 				fatalErr(err)
 			}
