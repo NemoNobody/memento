@@ -32,6 +32,14 @@ func writeBody(t *testing.T, w http.ResponseWriter, body string) {
 // target is the proxy (loopback proxies are legit), so the public-address
 // guard must not fire on it. Without a proxy the guard must still block
 // loopback targets at dial time.
+//
+// Note on the stdlib proxy cache: http.ProxyFromEnvironment parses the env
+// once per process, so t.Setenv here populates a cache that later tests in
+// this package inherit. The direct-path leg below still passes because
+// httpproxy bypasses loopback targets by default — not because the cache is
+// empty. A future non-loopback direct-path test in this package must not
+// trust the ambient env: pass the proxy decision explicitly (as the render
+// path does with renderEgressProxyWith) or run in a fresh process.
 func TestFetchEnvProxySkipsDialGuard(t *testing.T) {
 	cfg := &config.Config{FetchTimeoutSeconds: 5}
 
@@ -148,6 +156,8 @@ func TestBlockedHostGuard(t *testing.T) {
 		// Tunnels that embed an IPv4: the embedded address is what counts.
 		"2002:c0a8:0132::1",                       // 6to4 → 192.168.1.50
 		"2001:0000:0000:0000:0000:0000:3f57:fecd", // Teredo → 192.168.1.50
+		"64:ff9b::c0a8:0132",                      // NAT64 well-known → 192.168.1.50
+		"64:ff9b::7f00:1",                         // NAT64 well-known → 127.0.0.1
 	} {
 		if !blockedHost(h) {
 			t.Errorf("blockedHost(%q) = false, want blocked", h)
@@ -159,6 +169,7 @@ func TestBlockedHostGuard(t *testing.T) {
 		"100.63.0.1", "100.128.0.1", "192.0.1.1", "198.17.0.1", // just outside the ranges
 		"2002:8888:8888::1",                       // 6to4 → 136.136.136.136 (public)
 		"2001:0000:0000:0000:0000:0000:8888:8888", // Teredo → 119.119.119.119
+		"64:ff9b::808:808",                        // NAT64 well-known → 8.8.8.8 (public)
 	} {
 		if blockedHost(h) {
 			t.Errorf("blockedHost(%q) = true, want allowed", h)

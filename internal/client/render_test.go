@@ -478,8 +478,9 @@ func TestBlockedInList(t *testing.T) {
 
 // TestRenderProxyAtInvariant pins the strict argv invariant: no '@' reaches
 // the renderer argv from EITHER branch — not from a config proxy with an
-// '@' in the path, nor from an env proxy whose credential is '%40'-encoded
-// (it decodes to '@' inside the parsed Path).
+// '@' in the path, nor from either branch with a '%40'-encoded credential
+// (it decodes to '@' inside the Path). The check is symmetric: the same
+// decoded-form rule guards the config string and the env struct.
 func TestRenderProxyAtInvariant(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.FetchProxyURL = "http://proxy.corp:3128/tok=sk_live_51Hb@x"
@@ -487,10 +488,25 @@ func TestRenderProxyAtInvariant(t *testing.T) {
 	if _, err := renderEgressProxyWith(cfg, "https://example.com/x", noEnv); err == nil {
 		t.Error("config proxy with '@' in the path must be refused (argv is visible in /proc)")
 	}
+	// The config branch must catch the encoded form too (the round-4 fix
+	// covered env only — the same artifact, the same invariant).
+	cfg2 := config.DefaultConfig()
+	cfg2.FetchProxyURL = "http://p:3128/k%40user:sekret"
+	if _, err := renderEgressProxyWith(cfg2, "https://example.com/x", noEnv); err == nil {
+		t.Error("'%40'-encoded config proxy credential must be refused")
+	}
 	pct := func(*http.Request) (*url.URL, error) {
 		return url.Parse("http://p:3128/k%40user:sekret")
 	}
 	if _, err := renderEgressProxyWith(config.DefaultConfig(), "https://example.com/x", pct); err == nil {
 		t.Error("'%40'-encoded env proxy credential must be refused")
+	}
+	// The invariant must not become over-blocking: a plain path segment is
+	// a legitimate proxy base path.
+	cfg3 := config.DefaultConfig()
+	cfg3.FetchProxyURL = "http://proxy.corp:3128/corp-base"
+	got, err := renderEgressProxyWith(cfg3, "https://example.com/x", noEnv)
+	if err != nil || got != cfg3.FetchProxyURL {
+		t.Errorf("clean config proxy: got %q, err %v; want it forwarded", got, err)
 	}
 }

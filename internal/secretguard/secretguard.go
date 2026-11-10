@@ -133,9 +133,12 @@ func Scan(field, text string) []Finding {
 }
 
 // Redact replaces high-confidence credential-like spans with a marker and
-// returns the rewritten text with the findings. Medium-confidence shapes are
-// skipped: in markup they match ordinary content (asset hashes, inline
-// data: images), and a fetched page must not be destroyed by a false
+// returns the rewritten text with the findings it ACTUALLY applied. Findings
+// folded into an earlier span are dropped from the returned list: the audit
+// line (field, pattern, chars) must describe a span the text really lost — a
+// reported redaction that never landed is an audit lie. Medium-confidence
+// shapes are skipped: in markup they match ordinary content (asset hashes,
+// inline data: images), and a fetched page must not be destroyed by a false
 // positive. This is the mode for agent-visible doc fields and for the stored
 // raw HTML, which agents never read: redacting on write keeps the plaintext
 // store clean without making normal pages uncacheable.
@@ -148,6 +151,7 @@ func Redact(field, text string) (string, []Finding) {
 	var b strings.Builder
 	b.Grow(len(text))
 	last := 0
+	applied := make([]Finding, 0, len(findings))
 	for _, f := range findings {
 		if f.start < last {
 			continue // a folded overlap: the earlier span already replaced it
@@ -157,9 +161,10 @@ func Redact(field, text string) (string, []Finding) {
 		b.WriteString(f.Pattern)
 		b.WriteString("]")
 		last = f.end
+		applied = append(applied, f)
 	}
 	b.WriteString(text[last:])
-	return b.String(), findings
+	return b.String(), applied
 }
 
 // scan is Scan with the pattern-set switch: highOnly keeps the

@@ -210,11 +210,15 @@ func renderEgressProxyWith(cfg *config.Config, rawURL string, envProxy func(*htt
 	if verr := config.ValidateProxyURL(proxy); verr != nil {
 		return "", fmt.Errorf("%v; refusing to render direct", verr)
 	}
-	if strings.Contains(proxy, "@") {
-		// The final string is what lands in the renderer argv. User info is
-		// refused upstream (both branches); a literal '@' left in the path is
-		// a credential-shaped artifact — the argv invariant is kept strictly:
-		// no '@' reaches the subprocess, for env or config proxies.
+	// The final string is what lands in the renderer argv. User info is
+	// refused upstream (both branches); a credential-shaped artifact left in
+	// the path is refused as well, in both forms: a literal '@' in the string,
+	// and the decoded form ('%40' hides '@' from a literal check while any
+	// consumer that decodes the path sees '@' — the env branch already checks
+	// the decoded Path of the parsed struct, so the config branch must not be
+	// looser). The invariant is kept strictly: no '@' reaches the subprocess.
+	if u, perr := url.Parse(proxy); perr != nil || strings.Contains(proxy, "@") ||
+		(u != nil && strings.Contains(u.Path, "@")) {
 		return "", fmt.Errorf("the proxy URL carries an '@' in its path; refusing to render direct (argv is visible in /proc)")
 	}
 	return proxy, nil
@@ -224,11 +228,16 @@ func renderEgressProxyWith(cfg *config.Config, rawURL string, envProxy func(*htt
 // plain transport refuses non-public dial addresses (guardedDialContext),
 // and a host refused that way fails as a network error — which makes it
 // render-eligible. obscura resolves and dials on its own, so without this
-// pre-check the render would be the SSRF bypass (DNS rebinding, a 302 to
-// loopback, RFC1918 or 169.254.169.254). Direct renders resolve the target
+// pre-check the render would be the SSRF bypass (DNS rebinding, RFC1918 or
+// 169.254.169.254 as the requested host). Direct renders resolve the target
 // through the same blockedIP rule and refuse a non-public answer. With a
 // proxy the proxy is the egress and enforces the policy (the documented
 // model), so memento does not resolve the name locally.
+//
+// The gate guards the REQUESTED URL only — obscura follows redirects on its
+// own, so a 302 to loopback or the metadata address is not re-checked here
+// (documented v1 limit; docs/setup.md §8: run the renderer behind a proxy to
+// get the policy enforced on every hop).
 //
 // Known limitation (documented): obscura dials after this check, so a
 // DNS-rebinding window between the resolution here and obscura's own dial

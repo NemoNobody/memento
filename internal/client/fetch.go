@@ -117,7 +117,8 @@ func blockedIP(ip net.IP) bool {
 		return inReservedV4(v4)
 	}
 	// 6to4 (2002::/16) embeds the IPv4 in bytes 2..5; Teredo (2001:0::/32)
-	// stores the peer v4 one-complemented in the last four bytes.
+	// stores the peer v4 one-complemented in the last four bytes; the NAT64
+	// well-known prefix (64:ff9b::/96) carries the v4 in the last four bytes.
 	if b := ip.To16(); b != nil {
 		if b[0] == 0x20 && b[1] == 0x02 {
 			return blockedIP(net.IP(append([]byte(nil), b[2:6]...)))
@@ -125,6 +126,10 @@ func blockedIP(ip net.IP) bool {
 		if b[0] == 0x20 && b[1] == 0x01 && b[2] == 0x00 && b[3] == 0x00 {
 			v4 := net.IP{^b[12], ^b[13], ^b[14], ^b[15]}
 			return blockedIP(v4)
+		}
+		if b[0] == 0x00 && b[1] == 0x64 && b[2] == 0xff && b[3] == 0x9b &&
+			b[4] == 0x00 && b[5] == 0x00 {
+			return blockedIP(net.IP(append([]byte(nil), b[12:16]...)))
 		}
 	}
 	return false

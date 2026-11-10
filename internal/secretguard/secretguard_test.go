@@ -179,6 +179,36 @@ func TestRedactSkipsMedium(t *testing.T) {
 	}
 }
 
+// TestRedactReportsOnlyApplied: the findings list is an audit trail (the
+// store records field/pattern/chars per redaction), so it must describe the
+// spans the text actually lost — never a match the fold skipped (the
+// round-5 audit-lie class: a reported redaction that never landed).
+// The invariant is pinned directly: every reported finding's marker is in
+// the output, and the reported spans are disjoint and in order.
+func TestRedactReportsOnlyApplied(t *testing.T) {
+	text := "token eyJabcdefghijk http://user:pass@host and key " + sentinelAWS
+	out, applied := Redact("section 0", text)
+	if len(applied) == 0 {
+		t.Fatalf("expected high findings, got none")
+	}
+	prevEnd := 0
+	for _, f := range applied {
+		marker := "[memento-redacted:" + f.Pattern + "]"
+		if !strings.Contains(out, marker) {
+			t.Errorf("reported %q but no marker for it in %q", f.Pattern, out)
+		}
+		if f.start < prevEnd || f.end <= f.start {
+			t.Errorf("reported spans must be disjoint and ordered: %+v", applied)
+		}
+		prevEnd = f.end
+	}
+	// Scanned findings may exceed applied ones (fold skips): the contract is
+	// applied ⊆ scanned, never the reverse.
+	if scanned := len(Scan("section 0", text)); scanned < len(applied) {
+		t.Errorf("scan=%d < applied=%d", scanned, len(applied))
+	}
+}
+
 // TestHex32UnderPrefix: an AWS key is also a 20-char alnum blob; the vendor
 // prefix classifies it high — the generic-shape false-negative class
 // (all-hex-32 tokens that ARE keys) closes through the prefix list.
