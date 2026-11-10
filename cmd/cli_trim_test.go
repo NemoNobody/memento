@@ -3,12 +3,14 @@ package cmd
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -19,6 +21,44 @@ type recordedCall struct {
 	body   string
 }
 
+// cliTrimBuild is the module-root build directory for the CLI subprocess
+// tests: the binary is built ONCE per test run (not per subtest — ten `go
+// build` invocations are ten times the CI cost of the whole point), into a
+// pid-scoped temp dir removed by TestMain via cleanupCLITrimBuild.
+var (
+	cliTrimBuildOnce sync.Once
+	cliTrimBuildDir  string
+	cliTrimBuildErr  error
+)
+
+func cleanupCLITrimBuild() {
+	if cliTrimBuildDir != "" {
+		_ = os.RemoveAll(cliTrimBuildDir)
+	}
+}
+
+func cliTrimBinary(t *testing.T) string {
+	t.Helper()
+	cliTrimBuildOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "memento-cli-trim-")
+		if err != nil {
+			cliTrimBuildErr = err
+			return
+		}
+		cliTrimBuildDir = dir
+		exe := filepath.Join(dir, "memento-under-test")
+		build := exec.Command("go", "build", "-o", exe, ".")
+		build.Dir = projectRoot(t)
+		if out, err := build.CombinedOutput(); err != nil {
+			cliTrimBuildErr = fmt.Errorf("%v: %s", err, out)
+		}
+	})
+	if cliTrimBuildErr != nil {
+		t.Fatalf("build memento for CLI test: %v", cliTrimBuildErr)
+	}
+	return filepath.Join(cliTrimBuildDir, "memento-under-test")
+}
+
 // trimFacts is the source served for document GETs when found=true: a minimal
 // but complete fact, keyed exactly like the padded test key's trimmed form.
 const trimFacts = `{"key":"k","value":"v1","category":"config","project":"global","status":"verified"}`
@@ -26,18 +66,35 @@ const trimFacts = `{"key":"k","value":"v1","category":"config","project":"global
 // startTrimFake runs a stand-in OpenSearch that records every request and
 // answers the few shapes the CLI edges exercise: index HEAD, document GET
 // (found or missing), search (empty page), and index/update writes.
-func startTrimFake(t *testing.T, found bool) (*httptest.Server, *[]recordedCall) {
+// The recording carries a mutex: the handler runs on the server's goroutine,
+// and the reads after the subprocess exits must not depend on OS-level
+// ordering accidents.
+func startTrimFake(t *testing.T, found bool) (*httptest.Server, func() []recordedCall) {
 	t.Helper()
+	var mu sync.Mutex
 	var calls []recordedCall
+	snapshot := func() []recordedCall {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]recordedCall(nil), calls...)
+	}
 
 	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body bytes.Buffer
 		_, _ = body.ReadFrom(r.Body)
 		_ = r.Body.Close()
+		mu.Lock()
 		calls = append(calls, recordedCall{method: r.Method, path: r.URL.Path, body: body.String()})
+		mu.Unlock()
 
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case r.URL.Path == "/page":
+			// A routable page for the CLI fetch edge (the same fake plays the
+			// OpenSearch store and the target host: nothing leaves the box).
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = w.Write([]byte(`<html><head><title>Doc Page</title></head>` +
+				`<body><h1>Heading</h1><p>Some documentation text for the trim test.</p></body></html>`))
 		case r.Method == http.MethodHead:
 			w.WriteHeader(http.StatusOK)
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/_doc/"):
@@ -54,7 +111,7 @@ func startTrimFake(t *testing.T, found bool) (*httptest.Server, *[]recordedCall)
 		}
 	}))
 	t.Cleanup(fake.Close)
-	return fake, &calls
+	return fake, snapshot
 }
 
 // runCLISubprocess executes the built binary as the real CLI (the test binary
@@ -63,29 +120,29 @@ func startTrimFake(t *testing.T, found bool) (*httptest.Server, *[]recordedCall)
 // leak into the child.
 func runCLISubprocess(t *testing.T, fakeURL string, args ...string) (string, int) {
 	t.Helper()
+	return runCLISubprocessEnv(t, fakeURL, nil, args...)
+}
 
-	// The CLI edges talk to a store; `make ci` builds ./memento before `make
-	// test`, and `make test` alone may not have. Build once, lazily.
-	exe := filepath.Join(t.TempDir(), "memento-under-test")
-	build := exec.Command("go", "build", "-o", exe, ".")
-	build.Dir = projectRoot(t)
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build memento for CLI test: %v: %s", err, out)
-	}
+func runCLISubprocessEnv(t *testing.T, fakeURL string, extraEnv []string, args ...string) (string, int) {
+	t.Helper()
+
+	// The CLI edges talk to a store; the binary is built once per run (see
+	// cliTrimBinary), so the whole table costs a single `go build`.
+	exe := cliTrimBinary(t)
 
 	dir := t.TempDir()
 	cmd := exec.Command(exe, args...)
 	cmd.Dir = dir
 	// t.TempDir HOME: no user ~/.memento.conf; MEMENTO_CONF="" blocks the
 	// cwd config; the env endpoint/password pin the fake exactly.
-	env := childEnv([]string{
+	env := childEnv(append([]string{
 		"HOME=" + dir,
 		"MEMENTO_CONF=",
 		"MEMENTO_ALLOW_PLAINTEXT=1",
 		"OPENSEARCH_URL=" + fakeURL,
 		"OPENSEARCH_USER=testuser",
 		"OPENSEARCH_PASSWORD=testpw",
-	})
+	}, extraEnv...))
 	cmd.Env = env
 	var out bytes.Buffer
 	cmd.Stdout = &out
@@ -125,6 +182,8 @@ func TestCLITrimParity(t *testing.T) {
 	cases := []struct {
 		name    string
 		args    []string
+		env     []string
+		prefix  string // prepended to args after the fake URL is known (fetch targets the fake host)
 		found   bool
 		wantOut []string // substrings that must appear in the CLI output
 		wantReq []string // substrings that must appear in some request path/body
@@ -158,14 +217,16 @@ func TestCLITrimParity(t *testing.T) {
 			args:    []string{"prune", " k "},
 			found:   true,
 			wantOut: []string{`key "k"`},
-			deny:    []string{"\"key\":\" k \""},
+			wantReq: []string{"_doc/k"},
+			deny:    []string{"%20k", "k%20", `" k "`},
 		},
 		{
 			name:    "journal",
 			args:    []string{"journal", " k "},
 			found:   true,
 			wantOut: []string{`journal for "k"`},
-			deny:    []string{"\"key\":\" k \""},
+			wantReq: []string{`"fact_key":"k"`},
+			deny:    []string{`" k "`, "journal for \" k\""},
 		},
 		{
 			name:    "list-project",
@@ -189,6 +250,26 @@ func TestCLITrimParity(t *testing.T) {
 			deny:    []string{`"key":"* k *"`, `"project":" proj "`},
 		},
 		{
+			name:    "docs-project",
+			args:    []string{"docs", "q", "--project", " proj "},
+			found:   true,
+			wantReq: []string{`"project":"proj"`},
+			deny:    []string{`"project":" proj "`},
+		},
+		{
+			// fetch stores the tag in the doc; the MCP fetchDoc edge trims it,
+			// and the docs term filter is exact on spaces — a padded CLI tag
+			// would make the MCP search_docs edge miss the CLI's own doc.
+			// FetchAllowPrivate lets the fetch target the local fake host.
+			name:    "fetch-project",
+			prefix:  "/page",
+			args:    []string{"--project", " proj "},
+			env:     []string{"MEMENTO_FETCH_ALLOW_PRIVATE=1"},
+			found:   true,
+			wantReq: []string{`"project":"proj"`},
+			deny:    []string{`"project":" proj "`},
+		},
+		{
 			// Whitespace-only --match/--project mean "no filter given"
 			// exactly like the MCP keys edge: the prefix still defines the
 			// query, the padded filters must vanish (not reach the store as
@@ -205,9 +286,13 @@ func TestCLITrimParity(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			fake, calls := startTrimFake(t, tc.found)
-			out, code := runCLISubprocess(t, fake.URL, tc.args...)
+			args := tc.args
+			if tc.prefix != "" {
+				args = append([]string{"fetch", fake.URL + tc.prefix}, args...)
+			}
+			out, code := runCLISubprocessEnv(t, fake.URL, tc.env, args...)
 			if code != 0 {
-				t.Fatalf("%v exited %d, want 0; output: %s", tc.args, code, out)
+				t.Fatalf("%v exited %d, want 0; output: %s", args, code, out)
 			}
 
 			for _, want := range tc.wantOut {
@@ -218,7 +303,7 @@ func TestCLITrimParity(t *testing.T) {
 
 			// The echo/quotes above prove the trimmed form reached the user;
 			// the deny set proves the padded form never reached the store.
-			for _, c := range *calls {
+			for _, c := range calls() {
 				line := c.method + " " + c.path + " " + c.body
 				for _, bad := range tc.deny {
 					if strings.Contains(line, bad) {
@@ -228,7 +313,7 @@ func TestCLITrimParity(t *testing.T) {
 			}
 			for _, want := range tc.wantReq {
 				found := false
-				for _, c := range *calls {
+				for _, c := range calls() {
 					if strings.Contains(c.path, want) || strings.Contains(c.body, want) {
 						found = true
 						break
@@ -236,13 +321,37 @@ func TestCLITrimParity(t *testing.T) {
 				}
 				if !found {
 					var seen []string
-					for _, c := range *calls {
+					for _, c := range calls() {
 						seen = append(seen, c.method+" "+c.path)
 					}
 					t.Errorf("no request contains %q; requests were: %v", want, seen)
 				}
 			}
 		})
+	}
+}
+
+// TestCLIKeysPaddedPrefixGuard pins the shape-error half of the keys edge:
+// a prefix that normalizes to "" (" " or "*") with no usable --match is a
+// caller error answered before any store contact (MCP returns the same
+// contract instead of a store-wrapped "do not retry" advisory).
+func TestCLIKeysPaddedPrefixGuard(t *testing.T) {
+	fake, calls := startTrimFake(t, true)
+	for _, args := range [][]string{
+		{"keys", " "},
+		{"keys", "*"},
+		{"keys", "  ", "--match", " "},
+	} {
+		out, code := runCLISubprocess(t, fake.URL, args...)
+		if code == 0 {
+			t.Errorf("%v exited 0, want a shape refusal; output: %s", args, out)
+		}
+		if !strings.Contains(out, "provide a key prefix") {
+			t.Errorf("%v output = %q, want the empty-query refusal", args, out)
+		}
+	}
+	if got := calls(); len(got) != 0 {
+		t.Errorf("the refused queries reached the store: %v", got)
 	}
 }
 
@@ -257,7 +366,7 @@ func TestCLITrimTabsNewline(t *testing.T) {
 	}
 
 	var sawGet bool
-	for _, c := range *calls {
+	for _, c := range calls() {
 		if c.method == http.MethodGet && strings.HasPrefix(c.path, "/memento/_doc/") {
 			sawGet = true
 			if got := strings.TrimPrefix(c.path, "/memento/_doc/"); got != "k" {

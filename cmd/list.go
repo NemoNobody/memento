@@ -3,14 +3,15 @@ package cmd
 import (
 	"context"
 	"errors"
-	"github.com/NemoNobody/memento/internal/client"
-	"github.com/NemoNobody/memento/internal/model"
-	"github.com/spf13/cobra"
 	"io"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/NemoNobody/memento/internal/client"
+	"github.com/NemoNobody/memento/internal/model"
+	"github.com/spf13/cobra"
 )
 
 func ListCmd() *cobra.Command {
@@ -58,6 +59,10 @@ func ListCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&listFlags.prefix, "prefix", "",
 		"keep only keys starting with this prefix (trailing * allowed), e.g. \"<project>:state:\"")
+	// Deliberate asymmetry with memento_list (which defaults to verified): the
+	// CLI list is the human's session-start view, and obsolete rows carry the
+	// death context. Pinned here so the difference is a choice, not drift.
+	cmd.Long = "List all facts for a project (every status, obsolete included;\nthe memento_list MCP tool defaults to verified-only)."
 	return cmd
 }
 

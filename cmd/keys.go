@@ -39,11 +39,16 @@ func KeysCmd() *cobra.Command {
 			// mean "no filter" in the empty-query check, not "query given".
 			keysFlags.match = strings.TrimSpace(keysFlags.match)
 			keysFlags.project = strings.TrimSpace(keysFlags.project)
-			if prefix == "" && keysFlags.match == "" {
-				fatalErr(errors.New("keys: provide a key prefix and/or --match"))
+			// The prefix normalizes before the empty-query check: a " " or "*"
+			// prefix normalizes to "" and must count as "no query", not slip
+			// through to the store's shape error (which reads like a failure
+			// of the store, not of the caller).
+			normPrefix, pErr := client.NormalizePrefix(prefix)
+			if pErr != nil {
+				fatalErr(pErr)
 			}
-			if _, err := client.NormalizePrefix(prefix); err != nil {
-				fatalErr(err)
+			if normPrefix == "" && keysFlags.match == "" {
+				fatalErr(errors.New("keys: provide a key prefix and/or --match"))
 			}
 			ctx := context.Background()
 			c, err := newClient()
@@ -54,7 +59,7 @@ func KeysCmd() *cobra.Command {
 			if serr != nil {
 				fatalErr(serr)
 			}
-			facts, meta, err := c.Keys(ctx, prefix, keysFlags.match, keysFlags.project, status)
+			facts, meta, err := c.Keys(ctx, normPrefix, keysFlags.match, keysFlags.project, status)
 			if err != nil {
 				fatalErr(err)
 			}

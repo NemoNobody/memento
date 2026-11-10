@@ -42,6 +42,7 @@ func TestMain(m *testing.M) {
 	keyring.Delete = func(string, string) error { return keyring.ErrNotFound }
 	code := m.Run()
 	keyring.Get, keyring.Set, keyring.Delete = get, set, del
+	cleanupCLITrimBuild() // the once-built CLI subprocess binary (cli_trim_test)
 	os.Exit(code)
 }
 

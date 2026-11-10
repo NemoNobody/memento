@@ -6,6 +6,33 @@ import (
 	"testing"
 )
 
+// TestMCPKeysShapeErrorsBeforeStore pins the keys guard shape: a prefix that
+// normalizes to "" (" ", "*") with no usable --match is a caller error, not
+// an availability error — no store contact, no "do not retry" advisory. A
+// padded prefix is a real query and must proceed (normalized), not refuse.
+func TestMCPKeysShapeErrorsBeforeStore(t *testing.T) {
+	s := &mcpServer{}
+	for _, prefix := range []string{"", " ", "*", "  *"} {
+		_, _, err := s.keys(context.Background(), nil, keysInput{Prefix: prefix, Match: " "})
+		if err == nil {
+			t.Errorf("prefix %q with a whitespace-only match: want the empty-query refusal", prefix)
+			continue
+		}
+		if !strings.Contains(err.Error(), "provide a key prefix") {
+			t.Errorf("prefix %q: want the empty-query refusal, got %v", prefix, err)
+		}
+	}
+	// A padded prefix is a query: it must proceed past the guard (the store
+	// path is unreachable here — a store error, never the empty-query text).
+	t.Setenv("MEMENTO_OPENSEARCH_URL", "http://127.0.0.1:9")
+	t.Setenv("MEMENTO_ALLOW_PLAINTEXT", "1")
+	t.Setenv("OPENSEARCH_PASSWORD", "testpw")
+	if _, _, err := s.keys(context.Background(), nil, keysInput{Prefix: " k "}); err == nil ||
+		strings.Contains(err.Error(), "provide a key prefix") {
+		t.Errorf("padded prefix must reach the store path, got %v", err)
+	}
+}
+
 func TestAddBatchShapeLimits(t *testing.T) {
 	s := &mcpServer{}
 	if _, _, err := s.addBatch(context.Background(), nil, addBatchInput{}); err == nil {

@@ -66,7 +66,11 @@ A host outside fetch_allow_hosts is rejected before the request is made.`,
 			}
 			// The project tag is agent/user-supplied text that lands in a shared
 			// index, and the cache-hit path re-tags a stored doc WITHOUT the
-			// content guard: scan the tag here, once, for both paths.
+			// content guard: scan the tag here, once, for both paths. The tag
+			// is trimmed before the guard and the store (MCP fetchDoc parity):
+			// the docs term filter is exact on spaces, so a padded tag would
+			// make the MCP search_docs edge miss the CLI's own documents.
+			fetchFlags.project = strings.TrimSpace(fetchFlags.project)
 			if err := guardCheck(cfg.SecretGuard, fetchFlags.allowSecret,
 				guardField{Name: "project", Text: fetchFlags.project}); err != nil {
 				fatalErr(err)
@@ -178,7 +182,7 @@ func DocsCmd() *cobra.Command {
 			if err != nil {
 				fatalErr(err)
 			}
-			docs, meta, err := c.SearchDocs(ctx, args[0], docsFlags.project, docsFlags.limit)
+			docs, meta, err := c.SearchDocs(ctx, args[0], strings.TrimSpace(docsFlags.project), docsFlags.limit)
 			if err != nil {
 				fatalErr(err)
 			}
@@ -260,7 +264,16 @@ func guardFetch(doc *model.Doc, level string, allowed bool) ([]model.Redaction, 
 	}
 
 	redact := func(field, text string) string {
+		// Same double pass as the stored HTML: the second pass catches a span
+		// the first pass' fold dropped (a greedy span that swallowed part of
+		// an adjacent credential). Redact reports only applied findings, so
+		// the audit lines match what the text really lost.
 		red, findings := secretguard.Redact(field, text)
+		if len(findings) > 0 {
+			var more []secretguard.Finding
+			red, more = secretguard.Redact(field, red)
+			findings = append(findings, more...)
+		}
 		for _, f := range findings {
 			redactions = append(redactions, model.Redaction{Field: field, Pattern: f.Pattern, Chars: f.Length})
 		}

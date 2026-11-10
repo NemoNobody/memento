@@ -933,11 +933,16 @@ func (s *mcpServer) keys(ctx context.Context, req *mcp.CallToolRequest, in keysI
 	// over trimmed keys answers a silent zero.
 	in.Match = strings.TrimSpace(in.Match)
 	in.Project = strings.TrimSpace(in.Project)
-	if in.Prefix == "" && in.Match == "" {
-		return nil, factsOutput{}, fmt.Errorf("memento_keys: provide a key prefix and/or a match pattern")
+	// Normalize the prefix before the empty-query check: " " and "*"
+	// normalize to "" and must count as "no query given" — otherwise the
+	// call reaches the store and its shape error comes back wrapped in the
+	// availability advice ("do not retry"), contradicting the contract.
+	normPrefix, pErr := client.NormalizePrefix(in.Prefix)
+	if pErr != nil {
+		return nil, factsOutput{}, fmt.Errorf("memento_keys: %w", pErr)
 	}
-	if _, err := client.NormalizePrefix(in.Prefix); err != nil {
-		return nil, factsOutput{}, fmt.Errorf("memento_keys: %w", err)
+	if normPrefix == "" && in.Match == "" {
+		return nil, factsOutput{}, fmt.Errorf("memento_keys: provide a key prefix and/or a match pattern")
 	}
 	c, err := s.newClient(ctx)
 	if err != nil {
@@ -947,7 +952,7 @@ func (s *mcpServer) keys(ctx context.Context, req *mcp.CallToolRequest, in keysI
 	if serr != nil {
 		return nil, factsOutput{}, serr
 	}
-	facts, meta, err := c.Keys(ctx, in.Prefix, in.Match, in.Project, status)
+	facts, meta, err := c.Keys(ctx, normPrefix, in.Match, in.Project, status)
 	if err != nil {
 		return nil, factsOutput{}, storeError("memento_keys", err)
 	}
