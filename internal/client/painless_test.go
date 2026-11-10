@@ -20,6 +20,7 @@ func TestPainlessScriptsAreEscapeFree(t *testing.T) {
 		"obsoleteScript":      obsoleteScript,
 		"patchScript":         patchScript,
 		"pruneHistoryScript":  pruneHistoryScript,
+		"migrateLinkScript":   migrateLinkScript,
 	}
 	for name, src := range scripts {
 		if strings.Contains(src, "'") {

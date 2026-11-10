@@ -488,6 +488,17 @@ func (c *Client) PruneJournal(ctx context.Context, key string, keep int) (int, e
 // journalInfraMu lives on the Client (see opensearch.go); journal infra is
 // (re)installed until it succeeds (see ensureJournalInfra).
 
+// migrateLinkScript is the fact-side half of MigrateFact: it drops the
+// legacy array and (only while the ref is still empty) links current_ref.
+// Same lexer contract as the other scripts: double-quoted literals, no
+// backslashes (painless processes no standard escapes — see
+// TestPainlessScriptsAreEscapeFree).
+const migrateLinkScript = `
+if (ctx._source.current_ref == null || ctx._source.current_ref == "") { ctx._source.current_ref = params.ref; }
+ctx._source.remove("history");
+if (ctx._source.updated_at == null || params.updated_at.compareTo(ctx._source.updated_at) > 0) { ctx._source.updated_at = params.updated_at; }
+`
+
 // MigrateFact finishes one fact's journal migration (big-bang migration,
 // one-time): legacy in-doc history entries become op=write journal entries
 // in oldest-first order, the current value gets its own entry when the fact
@@ -572,12 +583,8 @@ func (c *Client) MigrateFact(ctx context.Context, f *model.Fact, now time.Time) 
 
 	body, _ := json.Marshal(map[string]interface{}{
 		"script": map[string]interface{}{
-			"lang": "painless",
-			"source": `
-if (ctx._source.current_ref == null || ctx._source.current_ref == '') { ctx._source.current_ref = params.ref; }
-ctx._source.remove('history');
-if (ctx._source.updated_at == null || params.updated_at.compareTo(ctx._source.updated_at) > 0) { ctx._source.updated_at = params.updated_at; }
-`,
+			"lang":   "painless",
+			"source": migrateLinkScript,
 			"params": map[string]interface{}{
 				"ref":        ref,
 				"updated_at": now.UTC().Format(time.RFC3339Nano),

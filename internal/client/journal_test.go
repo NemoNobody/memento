@@ -374,14 +374,31 @@ func TestMigrateFactMovesArrayToJournal(t *testing.T) {
 	if len(updates) != 1 {
 		t.Fatalf("fact updates = %d, want 1", len(updates))
 	}
-	if !strings.Contains(updates[0].Body, "remove('history')") || !strings.Contains(updates[0].Body, "current_ref") {
-		t.Errorf("migration update must link current_ref and drop the array, body=%s", updates[0].Body)
+	var upd struct {
+		Script struct {
+			Lang   string `json:"lang"`
+			Source string `json:"source"`
+		} `json:"script"`
+	}
+	if err := json.Unmarshal([]byte(updates[0].Body), &upd); err != nil {
+		t.Fatalf("update body: %v", err)
+	}
+	if upd.Script.Lang != "painless" {
+		t.Errorf("script lang = %q, want painless", upd.Script.Lang)
+	}
+	if !strings.Contains(upd.Script.Source, `remove("history")`) || !strings.Contains(upd.Script.Source, "current_ref") {
+		t.Errorf("migration update must link current_ref and drop the array, source=%s", upd.Script.Source)
 	}
 	// The link must be conditional: a concurrent Add that already set
 	// current_ref carries a fresher ref; overwriting it would point the new
 	// value at the old journal entry.
-	if !strings.Contains(updates[0].Body, "current_ref == null || ctx._source.current_ref == ''") {
-		t.Errorf("migration link must only set current_ref while empty, body=%s", updates[0].Body)
+	if !strings.Contains(upd.Script.Source, `current_ref == null || ctx._source.current_ref == ""`) {
+		t.Errorf("migration link must only set current_ref while empty, source=%s", upd.Script.Source)
+	}
+	// The painless lexer contract (house-wide invariant, now pinned for this
+	// script too): double-quoted literals, no backslashes.
+	if strings.Contains(upd.Script.Source, "'") || strings.Contains(upd.Script.Source, "\\") {
+		t.Errorf("migration link script must stay quote- and escape-free, source=%s", upd.Script.Source)
 	}
 }
 
