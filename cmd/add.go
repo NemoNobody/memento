@@ -54,11 +54,11 @@ func AddCmd() *cobra.Command {
 				fatalErr(err)
 			}
 			if err := guardCheck(cfg.SecretGuard, addFlags.allowSecret,
-				guardField{"key", key},
-				guardField{"value", value},
-				guardField{"notes", addFlags.notes},
-				guardField{"summary", addFlags.summary},
-				guardField{"source", addFlags.source}); err != nil {
+				guardField{Name: "key", Text: key},
+				guardField{Name: "value", Text: value},
+				guardField{Name: "notes", Text: addFlags.notes},
+				guardField{Name: "summary", Text: addFlags.summary},
+				guardField{Name: "source", Text: addFlags.source}); err != nil {
 				fatalErr(err)
 			}
 			c, err := newClientFromConfig(cfg)

@@ -64,6 +64,13 @@ A host outside fetch_allow_hosts is rejected before the request is made.`,
 				}
 				return
 			}
+			// The project tag is agent/user-supplied text that lands in a shared
+			// index, and the cache-hit path re-tags a stored doc WITHOUT the
+			// content guard: scan the tag here, once, for both paths.
+			if err := guardCheck(cfg.SecretGuard, fetchFlags.allowSecret,
+				guardField{Name: "project", Text: fetchFlags.project}); err != nil {
+				fatalErr(err)
+			}
 			ctx := context.Background()
 			c, err := newClientFromConfig(cfg)
 			if err != nil {
@@ -231,9 +238,21 @@ func guardFetch(doc *model.Doc, level string, allowed bool) ([]model.Redaction, 
 		return nil, nil
 	}
 	var redactions []model.Redaction
-	// The stored raw HTML: high-confidence shapes only, as before — the
-	// generic shapes fire on ordinary markup and must not mangle pages.
-	doc.HTML, _ = secretguard.Redact("html", doc.HTML)
+	// The stored raw HTML: high-confidence shapes only, twice — the second
+	// pass closes the latent overlap-tail gap (a span that starts inside an
+	// earlier replacement is dropped by Redact's fold and must not survive
+	// raw), and markers are a fixed point (the assignment rule refuses a
+	// right-hand side that starts with '['). HTML redactions join the audit
+	// trail (field "html": never served to agents, but the store surgery is
+	// reported).
+	var htmlFindings []secretguard.Finding
+	var more []secretguard.Finding
+	doc.HTML, htmlFindings = secretguard.Redact("html", doc.HTML)
+	doc.HTML, more = secretguard.Redact("html", doc.HTML)
+	htmlFindings = append(htmlFindings, more...)
+	for _, f := range htmlFindings {
+		redactions = append(redactions, model.Redaction{Field: "html", Pattern: f.Pattern, Chars: f.Length})
+	}
 
 	redact := func(field, text string) string {
 		red, findings := secretguard.Redact(field, text)
@@ -244,7 +263,10 @@ func guardFetch(doc *model.Doc, level string, allowed bool) ([]model.Redaction, 
 	}
 	doc.Title = redact("title", doc.Title)
 	fields := []guardField{
-		{Name: "url", Text: doc.URL},
+		// The URL is identity: it cannot be redacted, and medium shapes are
+		// ordinary in URLs (git SHAs in GitHub paths). Only the deterministic
+		// credential shapes may refuse it.
+		{Name: "url", Text: doc.URL, HighOnly: true},
 		{Name: "project", Text: doc.Project},
 		{Name: "title", Text: doc.Title},
 	}

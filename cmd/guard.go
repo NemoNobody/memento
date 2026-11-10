@@ -14,6 +14,11 @@ import (
 type guardField struct {
 	Name string
 	Text string
+	// HighOnly narrows the scan to high-confidence shapes: fields that carry
+	// identity (a document URL) cannot be redacted and legitimately contain
+	// medium-shape content (git SHAs in paths), so only the deterministic
+	// credential shapes may refuse them.
+	HighOnly bool
 }
 
 // guardCheck enforces the secret_guard policy over the fields of one write.
@@ -33,7 +38,12 @@ func guardCheck(level string, allowed bool, fields ...guardField) error {
 	}
 	var findings []secretguard.Finding
 	for _, f := range fields {
-		findings = append(findings, secretguard.Scan(f.Name, f.Text)...)
+		for _, fd := range secretguard.Scan(f.Name, f.Text) {
+			if f.HighOnly && fd.Confidence != secretguard.ConfHigh {
+				continue
+			}
+			findings = append(findings, fd)
+		}
 	}
 	if len(findings) == 0 {
 		return nil

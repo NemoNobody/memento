@@ -480,7 +480,39 @@ func loadConfig(explicitPath string, finder func() string) (*Config, error) {
 		return nil, fmt.Errorf("opensearch_url carries user info; put the user in opensearch_user and the password in the keyring/env (url: %s)", RedactURL(cfg.OpenSearchURL))
 	}
 	resolvePassword(cfg)
+	if err := validateProxyURL(cfg.FetchProxyURL); err != nil {
+		return nil, fmt.Errorf("fetch_proxy_url: %w", err)
+	}
 	return cfg, nil
+}
+
+// validateProxyURL is the load-time contract for fetch_proxy_url: a
+// scheme+host a client can actually dial. A scheme-less value ("host:3128")
+// parses as a bogus scheme and fails at fetch time as a NETWORK error —
+// which would silently steer the obscura render fallback into direct egress
+// (the proxy is the operator's chosen route, never to be bypassed).
+// Credentials in a proxy URL are refused at load (argv hygiene: the render
+// path must not forward secrets, and the value surfaces in errors).
+func validateProxyURL(v string) error {
+	if v == "" {
+		return nil
+	}
+	u, err := url.Parse(v)
+	if err != nil {
+		return fmt.Errorf("invalid syntax (its text is not echoed)")
+	}
+	switch u.Scheme {
+	case "http", "https", "socks5", "socks5h":
+	default:
+		return fmt.Errorf("scheme must be http/https/socks5/socks5h, got %q (host: %q is not a proxy URL)", u.Scheme, u.Hostname())
+	}
+	if u.Hostname() == "" {
+		return fmt.Errorf("host is empty (write scheme://host:port)")
+	}
+	if u.User != nil {
+		return fmt.Errorf("carries user info; a proxy with credentials is never forwarded to subprocesses (argv is visible in /proc)")
+	}
+	return nil
 }
 
 // RedactURL strips the password from a URL for display (status, error

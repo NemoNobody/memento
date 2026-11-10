@@ -51,7 +51,10 @@ memento add <key> <value> <category> [--project <p>] [--source <s>] [--notes <n>
 Adds a fact. If the key exists: a different value corrects it (the accepted
 value is appended to the journal, then the main doc is updated to point at the
 entry); the same value updates `notes`/`source` only (no journal entry,
-`observed_at` stays). `--notes` carries qualifiers ("checked the dev config
+`observed_at` stays). One asymmetry to know: a same-value `add` on an
+**obsolete** fact resurrects it to `verified` with no journal entry (the
+re-add is the evidence); `memento_patch` journals that transition because it
+states it explicitly. `--notes` carries qualifiers ("checked the dev config
 only") to later sessions. A value over `summary_min_len` requires `--summary`
 (the store's table of contents, see below).
 
@@ -296,7 +299,17 @@ Guarantees and limits:
   redaction would mangle it): at `ask` a finding can be confirmed, at
   `reject` there is no bypass. Redaction runs before the stored `size` and
   `content_hash` are computed, so the metadata describes exactly the text
-  that ships.
+  that ships. The stored raw HTML is redacted in a high-confidence pass
+  applied twice (the second pass closes the overlap tail: a span starting
+  inside an earlier replacement), and its redactions join the audit trail as
+  field `html` — the raw HTML is never served to agents, but the surgery on
+  the store is reported. The document URL is scanned high-confidence only:
+  it is identity (redaction is impossible) and medium shapes are ordinary in
+  it (git SHAs in GitHub paths). The agent/user-supplied `project` tag is
+  scanned at the call sites, before the store: the cache-hit re-tag path
+  never sees the content guard, so the tag is gated where both paths begin.
+  The `redactions` field is dynamically mapped, not filtered — the docs
+  index is small and the audit trail is worth the mapping.
 - Deliberate tradeoff: a high-confidence secret on a fetched page ends up
   stored in redacted form — the redaction must therefore out-cover a reject.
   For the shared plaintext docs store this is the accepted product decision:

@@ -119,12 +119,14 @@ func TestRenderObscuraStealthOff(t *testing.T) {
 	}
 }
 
-func TestRenderObscuraProxyNoUserinfo(t *testing.T) {
+func TestRenderObscuraProxyPolicy(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "argv.log")
 	stub := writeObscuraStub(t, logPath)
 	t.Setenv("STUB_MODE", "ok")
 
+	// A forwardable proxy is passed to the renderer (the egress the operator
+	// chose is kept, not bypassed).
 	cfg := renderCfg(stub)
 	cfg.FetchProxyURL = "http://proxy.internal:3128"
 	if _, err := renderObscura(context.Background(), cfg, "https://example.com/x"); err != nil {
@@ -134,17 +136,30 @@ func TestRenderObscuraProxyNoUserinfo(t *testing.T) {
 		t.Errorf("proxy not forwarded: %s", readLog(t, logPath))
 	}
 
-	// A proxy URL with credentials is never forwarded: argv is visible in
-	// /proc, and the secret must not ride there.
+	// A credential proxy is NEVER forwarded (argv is visible in /proc) — and
+	// the renderer must NOT run direct behind it: the render fails loudly.
 	logPath2 := filepath.Join(dir, "argv2.log")
 	stub2 := writeObscuraStub(t, logPath2)
 	cfg2 := renderCfg(stub2)
 	cfg2.FetchProxyURL = "http://user:sekret@proxy.internal:3128"
-	if _, err := renderObscura(context.Background(), cfg2, "https://example.com/x"); err != nil {
-		t.Fatalf("render with cred proxy: %v", err)
+	_, err := renderObscura(context.Background(), cfg2, "https://example.com/x")
+	if err == nil || !strings.Contains(err.Error(), "refusing to render direct") {
+		t.Errorf("credential proxy must fail the render loudly: %v", err)
 	}
-	if strings.Contains(readLog(t, logPath2), "--proxy") {
-		t.Errorf("credential proxy leaked into argv: %s", readLog(t, logPath2))
+	if strings.Contains(fmt.Sprint(err), "sekret") {
+		t.Errorf("the credential proxy URL leaked into the error: %v", err)
+	}
+	if readLog(t, logPath2) != "" {
+		t.Error("the renderer ran behind an unforwardable proxy")
+	}
+
+	// Scheme-less proxy values fail the same way (they are network-class
+	// errors at fetch time, which is exactly how they used to leak into
+	// direct render egress).
+	cfg3 := renderCfg(stub2)
+	cfg3.FetchProxyURL = "proxy.internal:3128"
+	if _, err := renderObscura(context.Background(), cfg3, "https://example.com/x"); err == nil {
+		t.Error("scheme-less proxy must fail the render, not bypass it")
 	}
 }
 

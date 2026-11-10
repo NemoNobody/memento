@@ -194,3 +194,63 @@ func TestHex32UnderPrefix(t *testing.T) {
 		t.Errorf("AWS key must be high-confidence via the prefix: %+v", fs)
 	}
 }
+
+// TestConfidenceBoundaries: the 20-rune rule is the classification edge —
+// a 20-rune 3-class right-hand side is high, 19 runes is medium (the rule
+// must be exact, not fuzzy).
+func TestConfidenceBoundaries(t *testing.T) {
+	r20 := strings.Repeat("a", 17) + "A1!" // 20 runes: lower, upper, digit, symbol
+	r19 := strings.Repeat("a", 16) + "A1!" // 19 runes, same class spread
+	findings := Scan("value", "api_key: "+r20)
+	if len(findings) != 1 || findings[0].Confidence != ConfHigh {
+		t.Errorf("20-rune RHS: %+v, want one high", findings)
+	}
+	findings = Scan("value", "api_key: "+r19)
+	if len(findings) != 1 || findings[0].Confidence != ConfMedium {
+		t.Errorf("19-rune RHS: %+v, want one medium", findings)
+	}
+}
+
+// TestQuotedAssignment: JSON/YAML config lines are the main habitat of
+// credential assignments; an opening quote on the right-hand side must not
+// open a false-negative hole.
+func TestQuotedAssignment(t *testing.T) {
+	cases := []string{
+		`"api_key": "A1b2C3d4E5f6G7h8I9j0Kl"`,
+		"password = 'Xk9mQ2vL7pR4tW8nZ5bJ3cY1dA6e' ",
+	}
+	for _, text := range cases {
+		fs := Scan("value", text)
+		high := false
+		for _, f := range fs {
+			if f.Pattern == "credential-assignment" && f.Confidence == ConfHigh {
+				high = true
+			}
+		}
+		if !high {
+			t.Errorf("quoted assignment must yield a high finding: %q -> %+v", text, fs)
+		}
+	}
+}
+
+// TestRedactionMarkerIsStable: the marker must not itself fire any pattern
+// (the redact->rescan loop must terminate on the second pass).
+func TestRedactionMarkerIsStable(t *testing.T) {
+	text := "the key is " + sentinelAWS + " and a secret = " + strings.Repeat("aB3x", 6) + "X!"
+	out, first := Redact("section 0", text)
+	if len(first) == 0 {
+		t.Fatal("expected findings")
+	}
+	out2, second := Redact("section 0", out)
+	if len(second) != 0 {
+		t.Errorf("second redact pass found new shapes (marker re-fires): %+v", second)
+	}
+	if out2 != out {
+		t.Error("the redacted text must be a fixed point of Redact")
+	}
+	for _, f := range Scan("section 0", out) {
+		if f.Confidence == ConfHigh {
+			t.Errorf("high finding survives redaction: %+v", f)
+		}
+	}
+}

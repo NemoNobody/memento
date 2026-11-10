@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/NemoNobody/memento/internal/config"
@@ -29,11 +28,13 @@ import (
 //
 // The render path is serialized (single-flight): concurrent fetches must
 // not share the obscura worker/port. Render is rare (fallbacks only), so
-// serialization is cheap insurance.
+// serialization is cheap insurance. The semaphore is ctx-aware: a caller
+// that gives up releases its slot, and queued renders do not block past
+// their own deadline.
 
-// obscuraMu serializes render subprocesses across Clients (Clients are
-// built per call, so the lock is package-level).
-var obscuraMu sync.Mutex
+// obscuraSem serializes render subprocesses across Clients (Clients are
+// built per call, so the semaphore is package-level). Capacity 1.
+var obscuraSem = make(chan struct{}, 1)
 
 // cappedWriter keeps at most the first n bytes written: the renderer's
 // stderr is diagnostics, not a stream to buffer.
@@ -66,8 +67,27 @@ func renderObscura(ctx context.Context, cfg *config.Config, normalizedURL string
 		return nil, fmt.Errorf("obscura: binary %q not found (install with 'make obscura' or point fetch_obscura_path at it): %w", bin, err)
 	}
 
-	obscuraMu.Lock()
-	defer obscuraMu.Unlock()
+	// The proxy is the operator's chosen egress: when fetch_proxy_url is set,
+	// the renderer MUST go through it. A value that cannot be forwarded
+	// (credentials, bogus scheme) is a loud config error — rendering DIRECT
+	// from the machine's real IP behind the operator's back is the failure
+	// mode this path must never take. (validateProxyURL already refuses
+	// userinfo and scheme-less values at config load; this check re-arms the
+	// rule for callers that build Config in code.)
+	proxyArg := ""
+	if cfg.FetchProxyURL != "" {
+		if verr := validateProxyURLForRender(cfg.FetchProxyURL); verr != nil {
+			return nil, fmt.Errorf("obscura: %w", verr)
+		}
+		proxyArg = cfg.FetchProxyURL
+	}
+
+	select {
+	case obscuraSem <- struct{}{}:
+		defer func() { <-obscuraSem }()
+	case <-ctx.Done():
+		return nil, fmt.Errorf("obscura: waiting for the render slot: %w", ctx.Err())
+	}
 
 	dir, err := os.MkdirTemp("", "memento-obscura-")
 	if err != nil {
@@ -91,11 +111,8 @@ func renderObscura(ctx context.Context, cfg *config.Config, normalizedURL string
 	}
 	args = append(args, "fetch", normalizedURL, "--dump", "html", "--quiet",
 		"--timeout", strconv.Itoa(nav), "-o", out)
-	if cfg.FetchProxyURL != "" {
-		if p, perr := url.Parse(cfg.FetchProxyURL); perr == nil && p.Host != "" && p.User == nil {
-			args = append(args, "--proxy", cfg.FetchProxyURL)
-		}
-		// A proxy with userinfo is deliberately not forwarded to argv.
+	if proxyArg != "" {
+		args = append(args, "--proxy", proxyArg)
 	}
 
 	// The nav timeout is obscura's own; the Go context adds headroom for
@@ -112,6 +129,11 @@ func renderObscura(ctx context.Context, cfg *config.Config, normalizedURL string
 		}
 		return nil, fmt.Errorf("obscura: %v: %s", err, diag)
 	}
+	// Cap before the read: a hostile rendered dump must not force a
+	// multi-GB allocation.
+	if fi, serr := os.Stat(out); serr == nil && fi.Size() > int64(maxBytes) {
+		return nil, fmt.Errorf("obscura: rendered page exceeds fetch_max_bytes (%d): too large to cache", maxBytes)
+	}
 	data, err := os.ReadFile(out)
 	if err != nil {
 		return nil, fmt.Errorf("obscura: exit 0 but no output file: %w", err)
@@ -125,4 +147,26 @@ func renderObscura(ctx context.Context, cfg *config.Config, normalizedURL string
 		return nil, fmt.Errorf("obscura: rendered page exceeds fetch_max_bytes (%d): too large to cache", maxBytes)
 	}
 	return data, nil
+}
+
+// validateProxyURLForRender mirrors config.validateProxyURL for Config
+// values built in code (tests, embedding): the render path re-arms the
+// egress rule itself instead of trusting the load pipeline.
+func validateProxyURLForRender(v string) error {
+	u, err := url.Parse(v)
+	if err != nil {
+		return fmt.Errorf("fetch_proxy_url has invalid syntax (its text is not echoed); the renderer refuses to run direct behind it")
+	}
+	switch u.Scheme {
+	case "http", "https", "socks5", "socks5h":
+	default:
+		return fmt.Errorf("fetch_proxy_url scheme %q is not forwardable to the renderer (want http/https/socks5/socks5h); refusing to render direct", u.Scheme)
+	}
+	if u.Hostname() == "" {
+		return fmt.Errorf("fetch_proxy_url has no host; refusing to render direct")
+	}
+	if u.User != nil {
+		return fmt.Errorf("fetch_proxy_url carries user info; a credential proxy is never forwarded to argv; refusing to render direct")
+	}
+	return nil
 }

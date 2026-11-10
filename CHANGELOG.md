@@ -80,7 +80,13 @@ Fetch guard triage and fetch v1 fixes:
   preview) plus a `warning`; redaction runs before `size`/`content_hash`, so
   metadata matches the stored text. Medium findings in visible text refuse the
   write (confirmable at `ask`, no bypass at `reject`) — silent redaction would
-  mangle real documentation. The same graded set scans fact writes.
+  mangle real documentation. The same graded set scans fact writes. The
+  credential-assignment rule reads quoted JSON/YAML lines (`"api_key":
+  "S3cr3t"`). The stored raw HTML is redacted twice (the second pass closes
+  the overlap tail), its redactions are reported as field `html`; the
+  document URL is scanned high-confidence only (identity: a git SHA in a
+  GitHub path is ordinary); the agent-supplied `project` tag is guard-scanned
+  at the call (the cache-hit re-tag path never sees the content guard).
 - Default fetch User-Agent is a desktop Chrome string (sites 403 known bot
   UAs; override with `fetch_user_agent`/`MEMENTO_FETCH_USER_AGENT`).
 - 429 is treated as an IP ban: with `fetch_proxy_fallback` the proxy is a new
@@ -104,9 +110,12 @@ JS rendering (opt-in, obscura):
 - Third-party by design: ~75 MB binary, executes page JS locally, linux
   x86_64 glibc 2.35+. `make obscura` installs the sha256-pinned 0.2.6
   stealth build into `~/.local/bin`. The renderer is serialized (one render
-  at a time); `robots.txt` (when respected) gates both paths; a proxy URL
-  with credentials is never forwarded (argv hygiene); a typo in
-  `fetch_render` is a loud startup error.
+  at a time, cancel-aware); `robots.txt` (when respected) gates both paths;
+  the renderer keeps the operator's egress — `fetch_proxy_url` is validated
+  at config load, and a proxy that cannot be forwarded (credentials, a
+  scheme-less value) is a load error: the render never runs direct behind it
+  (argv hygiene: a credential proxy is never forwarded to the subprocess);
+  a typo in `fetch_render` is a loud startup error.
 - v1 limits: rendered docs store `final_url` = the requested URL (the dump
   mode does not report redirects); success = exit 0 + non-empty dump.
   README “JS rendering” and docs/setup.md §8.

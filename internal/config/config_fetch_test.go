@@ -125,6 +125,44 @@ func TestLoadConfigFetchFileFields(t *testing.T) {
 	}
 }
 
+// TestValidateProxyURL pins the load-time contract (#9): a value the client
+// cannot dial is refused at load, never surfaced as a fetch-time network
+// error (which would steer the obscura render into direct egress).
+func TestValidateProxyURL(t *testing.T) {
+	ok := []string{"", "http://p:3128", "https://p.example:8443", "socks5://127.0.0.1:1080", "socks5h://p:1080"}
+	for _, v := range ok {
+		if err := validateProxyURL(v); err != nil {
+			t.Errorf("validateProxyURL(%q) = %v, want ok", v, err)
+		}
+	}
+	bad := []string{
+		"proxy.internal:3128",   // scheme-less: dials as a bogus-scheme network error
+		"http://user:pw@p:3128", // credentials: never forwarded to argv
+		"ftp://p:21",            // unsupported scheme
+		"http://",               // no host
+		"not a url ://",         // syntax
+	}
+	for _, v := range bad {
+		if err := validateProxyURL(v); err == nil {
+			t.Errorf("validateProxyURL(%q) = nil, want refusal", v)
+		}
+	}
+}
+
+// TestLoadConfigRejectsBadProxyURL: the contract fires at load, so a bad
+// fetch_proxy_url never reaches a fetch.
+func TestLoadConfigRejectsBadProxyURL(t *testing.T) {
+	dir := t.TempDir()
+	restore := chdir(t, dir)
+	defer restore()
+	clearEnv(t)
+
+	t.Setenv("MEMENTO_FETCH_PROXY_URL", "proxy.internal:3128")
+	if _, err := LoadConfig(); err == nil {
+		t.Fatal("a scheme-less proxy URL must fail at config load")
+	}
+}
+
 func TestLoadConfigFetchBadEnvFails(t *testing.T) {
 	dir := t.TempDir()
 	restore := chdir(t, dir)

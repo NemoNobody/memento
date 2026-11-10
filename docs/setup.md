@@ -325,6 +325,19 @@ is a startup error, never a silent plain fetch. Rendered docs are marked
 TTL pipeline as plain fetches. v1 limitation: `final_url` of a rendered doc
 is the requested URL (the dump mode does not report redirects).
 
+The proxy is the operator's chosen egress and the renderer must not bypass
+it: when `fetch_proxy_url` is set, obscura is passed `--proxy` and a proxy
+URL that cannot be forwarded (credentials in the URL, a scheme-less value
+like `host:3128`) is a **config load error** — the render never falls back
+to direct egress behind your back.
+
+Time budget of one `memento fetch` / `memento_fetch_doc`, worst case: the
+polite 429 retry (a ~2 s pause + one more request) plus the proxy fallback
+(one more `fetch_timeout`) plus the render fallback (the nav timeout + 20 s
+of process headroom) — a few times `fetch_timeout` plus the render window.
+The stages are each bounded; there is no single global deadline (MCP clients
+set their own tool timeouts).
+
 ## Troubleshooting
 
 | Symptom | Cause / fix |

@@ -67,7 +67,13 @@ var patterns = []pattern{
 	{"private-key-pem", regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`), ConfHigh, false},
 	{"bearer-header", regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._\-]{16,}`), ConfHigh, false},
 	{"basic-auth-url", regexp.MustCompile(`(?i)\bhttps?://[^\s/@:]+:[^\s@]+@[^\s/]+`), ConfHigh, false},
-	{"credential-assignment", regexp.MustCompile(`(?i)\b(?:password|passwd|secret|token|api[_-]?key|access[_-]?key|secret[_-]?key)\b\s*[:=]\s*[^\s"']{6,}`), ConfMedium, true},
+	// The assignment rule tolerates the JSON/YAML habitat (quoted keys and
+	// quoted values: "api_key": "S3cr3t") and refuses a right-hand side that
+	// starts with '[' — the redaction marker. Without that exclusion the
+	// post-redaction guard scan fires on its own marker (an infinite
+	// self-reject: the redacted text "secret = [memento-redacted:...]" reads
+	// as a fresh assignment).
+	{"credential-assignment", regexp.MustCompile(`(?i)\b(?:password|passwd|secret|token|api[_-]?key|access[_-]?key|secret[_-]?key)\b["']?\s*[:=]\s*["']?[^\s"'\[]{6,}`), ConfMedium, true},
 	{"long-hex", regexp.MustCompile(`\b[0-9a-fA-F]{32,}\b`), ConfMedium, false},
 	{"long-base64", regexp.MustCompile(`[A-Za-z0-9+/]{40,}=`), ConfMedium, false},
 	{"long-opaque-token", regexp.MustCompile(`[A-Za-z0-9+/]{48,}`), ConfMedium, false},
@@ -86,6 +92,10 @@ func classifyAssignment(match string) string {
 		return ConfMedium
 	}
 	rhs := strings.TrimSpace(match[idx+1:])
+	// The regex allows one optional opening quote (JSON/YAML config lines:
+	// "api_key": "S3cr3t..."); the class stops at the closing quote, so the
+	// right-hand side starts quoted — strip it before scoring.
+	rhs = strings.TrimLeft(rhs, "\"'")
 	r := []rune(rhs)
 	if len(r) < 20 {
 		return ConfMedium
@@ -152,24 +162,24 @@ func Redact(field, text string) (string, []Finding) {
 	return b.String(), findings
 }
 
-// scan is Scan with the pattern-set switch: highOnly drops the
-// medium-confidence shapes (Redact's set). Findings are masked previews only
-// (see the package doc).
+// scan is Scan with the pattern-set switch: highOnly keeps the
+// high-confidence shapes (Redact's set) — including the dynamic
+// credential-assignment rule, whose per-match classification decides.
+// Findings are masked previews only (see the package doc).
 func scan(field, text string, highOnly bool) []Finding {
 	var out []Finding
 	for _, p := range patterns {
-		conf := p.confidence
-		if highOnly && conf != ConfHigh {
-			continue
-		}
 		for _, loc := range p.re.FindAllStringIndex(text, -1) {
 			start, end := loc[0], loc[1]
-			if covered(out, start, end) {
-				continue
-			}
-			level := conf
+			level := p.confidence
 			if p.dynamic {
 				level = classifyAssignment(text[start:end])
+			}
+			if highOnly && level != ConfHigh {
+				continue
+			}
+			if covered(out, start, end) {
+				continue
 			}
 			out = append(out, Finding{
 				Field:      field,
