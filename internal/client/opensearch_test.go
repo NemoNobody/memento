@@ -551,6 +551,9 @@ func TestAddSameValueOnObsoleteJournalsResurrect(t *testing.T) {
 	if !res.Changed {
 		t.Error("Changed = false, want true (resurrection is a new accepted state)")
 	}
+	if !res.Resurrected {
+		t.Error("Resurrected = false, want true: a same-value add over an obsolete fact re-declares it alive")
+	}
 	journals := fake.sawAnyPrefix("/memento-history-")
 	if !journals {
 		t.Error("resurrection must write a journal entry")
@@ -568,5 +571,52 @@ func TestAddSameValueOnObsoleteJournalsResurrect(t *testing.T) {
 	}
 	if refID := appends[0].Path[strings.LastIndex(appends[0].Path, "/")+1:]; refID == "" || !strings.Contains(updates[0].Body, `"current_ref":"`+refID+`"`) {
 		t.Errorf("update body = %.160s, want current_ref pointing at the resurrection entry id %q", updates[0].Body, refID)
+	}
+}
+
+// TestAddCorrectionOnObsoleteReportsResurrected (finding 129): a value
+// correction over an obsolete fact also resurrects it (the script writes
+// status=verified) — changed=true alone hides the status transition, so
+// the result must name it.
+func TestAddCorrectionOnObsoleteReportsResurrected(t *testing.T) {
+	obsoleteSrc := `{"fact_id":"fid","key":"k","value":"v","category":"config","project":"proj","status":"obsolete","created_at":"2020-01-01T00:00:00Z","updated_at":"2020-01-01T00:00:00Z","observed_at":"2020-01-01T00:00:00Z"}`
+	c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+		if code, body := journalRoutesOK(r); code != 500 {
+			return code, body
+		}
+		switch {
+		case r.Method == "GET":
+			return 200, `{"_index":"memento","_id":"k","found":true,"_source":` + obsoleteSrc + `}`
+		case r.Method == "POST" && strings.Contains(r.Path, "_update"):
+			return 200, `{"result":"updated"}`
+		}
+		return 500, `{"status":500,"error":"unexpected ` + r.Method + " " + r.Path + `"}`
+	})
+	res, err := c.Add(context.Background(), model.NewFact("k", "v-new", "config", "proj", "", ""))
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if !res.Changed || !res.Resurrected {
+		t.Errorf("res = %+v, want changed and resurrected both true", res)
+	}
+	// A plain correction (verified fact) must NOT report Resurrected.
+	c2, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+		if code, body := journalRoutesOK(r); code != 500 {
+			return code, body
+		}
+		switch {
+		case r.Method == "GET":
+			return 200, `{"_index":"memento","_id":"k","found":true,"_source":{"fact_id":"fid","key":"k","value":"v","category":"config","project":"proj","status":"verified","created_at":"2020-01-01T00:00:00Z","updated_at":"2020-01-01T00:00:00Z","observed_at":"2020-01-01T00:00:00Z"}}`
+		case r.Method == "POST" && strings.Contains(r.Path, "_update"):
+			return 200, `{"result":"updated"}`
+		}
+		return 500, `{"status":500,"error":"unexpected ` + r.Method + " " + r.Path + `"}`
+	})
+	res2, err := c2.Add(context.Background(), model.NewFact("k", "v-new", "config", "proj", "", ""))
+	if err != nil {
+		t.Fatalf("Add (verified): %v", err)
+	}
+	if !res2.Changed || res2.Resurrected {
+		t.Errorf("res = %+v, want changed only (no resurrection on a live fact)", res2)
 	}
 }

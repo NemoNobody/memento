@@ -262,6 +262,12 @@ type AddResult struct {
 	// PreviousSummary is the summary the correction replaced ("" when the
 	// prior fact had none) — names the superseded version cheaply.
 	PreviousSummary string
+	// Resurrected: the fact was obsolete and this write re-declared it
+	// alive (status back to verified, observed_at moved, the event is
+	// journaled). Without it a same-value resurrect reads as a value
+	// correction (changed=true), and a correction over an obsolete fact
+	// hides the status transition entirely.
+	Resurrected bool
 }
 
 // Add stores a fact under its key. Three cases: the key is new (created, then
@@ -417,8 +423,8 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 		// Same value: notes/source moved, observed_at must not (the
 		// observation is old), the journal is untouched — the resurrection
 		// exception above is the one same-value write that IS a new
-		// observation, and it reports Changed=true.
-		return AddResult{Changed: resurrect}, nil
+		// observation, and it reports Changed=true and Resurrected=true.
+		return AddResult{Changed: resurrect, Resurrected: resurrect}, nil
 	}
 
 	if err := c.checkSummaryRequired(f); err != nil {
@@ -482,8 +488,10 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 	}
 	// The value was accepted as a new version (journal entry + correction):
 	// changed=true, and the summary the correction is replacing is reported
-	// so the caller can name the superseded version without reading the journal.
-	return AddResult{Changed: true, PreviousSummary: existing.Summary}, nil
+	// so the caller can name the superseded version without reading the
+	// journal. A correction over an obsolete fact also resurrects it (the
+	// script writes status=verified): the transition is named explicitly.
+	return AddResult{Changed: true, PreviousSummary: existing.Summary, Resurrected: existing.Status == "obsolete"}, nil
 }
 
 // newJournalEntryFor builds — without writing — the entry for a state the

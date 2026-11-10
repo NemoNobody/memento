@@ -527,6 +527,11 @@ func (s *mcpServer) search(ctx context.Context, req *mcp.CallToolRequest, in sea
 	// the filter trims too — " proj " must not answer a silent zero.
 	in.Category = strings.ToLower(strings.TrimSpace(in.Category))
 	in.Project = strings.TrimSpace(in.Project)
+	// An unknown category filter answers a silent zero forever (the term is
+	// exact on the stored canonical): refuse the typo at the edge instead.
+	if in.Category != "" && !model.ValidCategory(in.Category) {
+		return nil, factsOutput{}, fmt.Errorf("memento_search: unknown category %q (filters match the stored canonical: location | config | endpoint | behavior | context_map)", in.Category)
+	}
 	status, serr := resolveStatus(in.Status)
 	if serr != nil {
 		return nil, factsOutput{}, serr
@@ -569,10 +574,17 @@ type getInput struct {
 }
 
 type getOutput struct {
-	Found bool      `json:"found" jsonschema:"false when no fact has this key (single-key mode only)"`
+	// Found is the single-key answer; it is a pointer so batch mode stays
+	// clean: getOutput{Items: ...} used to emit a top-level "found": false
+	// that means nothing there (every item carries its own flag).
+	Found *bool     `json:"found,omitempty" jsonschema:"false when no fact has this key (single-key mode only; absent in batch mode — items carry their own found flag)"`
 	Fact  *factView `json:"fact,omitempty" jsonschema:"the fact, when found (single-key mode)"`
 	Items []itemGet `json:"items,omitempty" jsonschema:"batch mode (keys param): one item per requested key, in request order"`
 }
+
+// boolPtr exists for one reason: getOutput.Found must be omittable without
+// conflating "absent" with "false".
+func boolPtr(b bool) *bool { return &b }
 
 // itemGet is one batch-lookup result: found=false is an answer, not an error.
 type itemGet struct {
@@ -629,13 +641,13 @@ func (s *mcpServer) get(ctx context.Context, req *mcp.CallToolRequest, in getInp
 	f, err := c.Get(ctx, in.Key)
 	if errors.Is(err, client.ErrNotFound) {
 		// Not an error: "there is no such fact" is a legitimate answer.
-		return nil, getOutput{Found: false}, nil
+		return nil, getOutput{Found: boolPtr(false)}, nil
 	}
 	if err != nil {
 		return nil, getOutput{}, storeError("memento_get", err)
 	}
 	v := newFactView(*f, in.IncludeHistory, false)
-	return nil, getOutput{Found: true, Fact: &v}, nil
+	return nil, getOutput{Found: boolPtr(true), Fact: &v}, nil
 }
 
 // maxGetKeys and maxAddBatchItems cap the batch tools: a batch is a
@@ -652,7 +664,7 @@ type addInput struct {
 	Project  string `json:"project,omitempty" jsonschema:"project name; defaults to 'global'"`
 	Source   string `json:"source,omitempty" jsonschema:"where the fact came from (tool:read_file, doc:README, user:confirmed); defaults to tool:mcp"`
 	Notes    string `json:"notes,omitempty" jsonschema:"qualifiers: what was checked, how far, caveats — carried to later sessions"`
-	Summary  string `json:"summary,omitempty" jsonschema:"short table-of-contents rendering of the value (under summary_max_len chars); required when the value is longer than summary_min_len; ignored on same-value re-adds"`
+	Summary  string `json:"summary,omitempty" jsonschema:"short table-of-contents rendering of the value (under summary_max_len chars); required when the value is longer than summary_min_len; not applied on same-value re-adds, but an over-cap summary is still refused at every edge"`
 
 	// ConfirmSecret bypasses a guard hit at secret_guard=ask. It is the agent's
 	// barrier: show the masked finding to the user first, set this only after
@@ -673,7 +685,7 @@ type addOutput struct {
 	// Note explains the least-obvious answer (a same-value touch): without
 	// it, created=false+changed=false reads like a no-op and agents mis-age
 	// the fact.
-	Note string `json:"note,omitempty" jsonschema:"what exactly this write did when it was not a new version (same-value touch: observed_at and age keep counting; notes/source moved only)"`
+	Note string `json:"note,omitempty" jsonschema:"what exactly this write did when the shape alone does not say (same-value touch: observed_at and age keep counting, notes/source moved only; resurrect: an obsolete fact re-declared alive)"`
 }
 
 func (s *mcpServer) add(ctx context.Context, req *mcp.CallToolRequest, in addInput) (*mcp.CallToolResult, addOutput, error) {
@@ -757,6 +769,8 @@ func (s *mcpServer) addOne(ctx context.Context, cfg *config.Config, c *client.Cl
 		Status: f.Status, PreviousSummary: res.PreviousSummary}
 	if !res.Created && !res.Changed {
 		out.Note = "same-value touch: observed_at and the journal untouched, the fact keeps aging (re-verify when stale); notes/source moved only"
+	} else if res.Resurrected {
+		out.Note = "resurrected: the fact was obsolete; status is back to verified, observed_at moved, and the event is journaled"
 	}
 	return out, nil
 }
@@ -814,13 +828,15 @@ func (s *mcpServer) addBatch(ctx context.Context, req *mcp.CallToolRequest, in a
 		cErr = storeError("memento_add_batch", cErr)
 	}
 	out := addBatchOutput{Items: make([]addBatchItem, 0, len(in.Items))}
-	for _, it := range in.Items {
+	for i, it := range in.Items {
 		res, err := s.addOne(ctx, cfg, c, cErr, it)
 		// The echo carries the TRIMMED key: it is what the store holds, and a
 		// caller reconciling answers against the store must not miss on " k ".
 		item := addBatchItem{Key: strings.TrimSpace(it.Key), Created: res.Created, Changed: res.Changed, Status: res.Status}
 		if err != nil {
-			item.Error = err.Error()
+			// Label the item, not the single-add tool: an agent reading a
+			// batch answer must not conclude memento_add itself broke.
+			item.Error = "memento_add_batch item " + strconv.Itoa(i) + ": " + strings.TrimPrefix(err.Error(), "memento_add: ")
 		} else {
 			if res.Created {
 				out.Created++
@@ -989,11 +1005,13 @@ func (s *mcpServer) patchBatch(ctx context.Context, req *mcp.CallToolRequest, in
 		cErr = storeError("memento_patch_batch", cErr)
 	}
 	out := patchBatchOutput{Items: make([]patchBatchItem, 0, len(in.Items))}
-	for _, it := range in.Items {
+	for i, it := range in.Items {
 		res, err := s.patchOne(ctx, cfg, c, cErr, it)
 		item := patchBatchItem{Key: strings.TrimSpace(it.Key), Changed: res.Changed, Status: res.Status}
 		if err != nil {
-			item.Error = err.Error()
+			// Batch label, same as memento_add_batch: the item failed, not
+			// the single-patch tool.
+			item.Error = "memento_patch_batch item " + strconv.Itoa(i) + ": " + strings.TrimPrefix(err.Error(), "memento_patch: ")
 		} else if res.Changed {
 			out.Changed++
 		} else {
@@ -1206,6 +1224,11 @@ func (s *mcpServer) prune(ctx context.Context, req *mcp.CallToolRequest, in prun
 	// keep resolves from local config BEFORE any store contact: the refusal
 	// needs no store, and it must not pay for an index ensure.
 	keep := in.Keep
+	if keep < 0 {
+		// A negative keep used to collapse silently into the configured
+		// default: the operator asked to prune and got a different plan.
+		return nil, pruneOutput{}, fmt.Errorf("memento_prune: keep must not be negative (got %d); pass keep=0 for the configured history_limit", in.Keep)
+	}
 	if keep <= 0 {
 		keep = cfg.HistoryLimit
 	}

@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -42,7 +43,12 @@ their approval.`,
 				fatalErr(err)
 			}
 			keep := pruneFlags.keep
-			if keep <= 0 {
+			if keep < 0 {
+				// A negative --keep used to collapse silently into the
+				// configured default: refuse loudly.
+				fatalErr(fmt.Errorf("prune: --keep must not be negative (got %d); omit the flag for the configured history_limit", keep))
+			}
+			if keep == 0 {
 				keep = cfg.HistoryLimit
 			}
 			if keep <= 0 {
@@ -104,8 +110,8 @@ their approval.`,
 			}
 		},
 	}
-	cmd.Flags().IntVar(&pruneFlags.keep, "keep", -1,
-		"number of newest history entries to keep (default: history_limit from config)")
+	cmd.Flags().IntVar(&pruneFlags.keep, "keep", 0,
+		"number of newest history entries to keep (0/omitted: history_limit from config)")
 	cmd.Flags().BoolVar(&pruneFlags.yes, "yes", false,
 		"confirm the deletion (without it only the plan is printed)")
 	return cmd

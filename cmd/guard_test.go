@@ -339,3 +339,50 @@ func TestFetchGuardAuditOrder(t *testing.T) {
 		t.Error("html redactions missing from the audit trail")
 	}
 }
+
+// TestIsAPIContentType (finding 108): the guard route must agree with the
+// parser — FetchPage parses application/xhtml+xml as an HTML doc, so the
+// "+xml" suffix must not silently route XHTML to the strict API policy.
+func TestIsAPIContentType(t *testing.T) {
+	cases := []struct {
+		ct   string
+		want bool
+	}{
+		{"application/xhtml+xml", false},
+		{"application/xhtml+xml; charset=utf-8", false},
+		{"text/html", false},
+		{"", false},
+		{"application/json", true},
+		{"application/json; charset=utf-8", true},
+		{"application/xml", true},
+		{"text/xml", true},
+		{"application/vnd.api+json", true},
+		{"application/rss+xml", true},
+	}
+	for _, tc := range cases {
+		if got := isAPIContentType(tc.ct); got != tc.want {
+			t.Errorf("isAPIContentType(%q) = %v, want %v", tc.ct, got, tc.want)
+		}
+	}
+}
+
+// TestGuardFetchImageURLCounted (finding 109): a medium token shape left in
+// a stored image href on the doc route must surface through
+// GuardMediumIgnored — leniency stays visible, not silent.
+func TestGuardFetchImageURLCounted(t *testing.T) {
+	doc := &model.Doc{
+		URL:         "https://docs.example/x",
+		FinalURL:    "https://docs.example/x",
+		Project:     "p",
+		ContentType: "text/html",
+		Images: []model.ImageRef{{
+			URL: "https://cdn.example/9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08.png",
+		}},
+	}
+	if _, err := guardFetch(doc, config.GuardReject, false); err != nil {
+		t.Fatalf("doc route must tolerate an asset-hash href: %v", err)
+	}
+	if doc.GuardMediumIgnored == 0 {
+		t.Error("image URL medium shape must be counted in GuardMediumIgnored")
+	}
+}
