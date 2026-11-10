@@ -341,6 +341,7 @@ func TestCLIStatusAndLimitShapeBeforeStore(t *testing.T) {
 	cases := [][]string{
 		{"search", "q", "--status", "bogus"},
 		{"search", "q", "--limit", "-1"},
+		{"search", "  "},
 		{"keys", "k", "--status", "bogus"},
 		{"list", "p", "--prefix", "a*b"},
 		{"doc", ""},

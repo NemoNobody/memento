@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -25,6 +26,14 @@ func SearchCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			query := args[0]
+			// Shape before store contact: an invalid status, a negative limit
+			// or an empty query are the caller's problem. A negative limit
+			// would read as "no cap" (0 = up to 1000) and silently widen the
+			// page; an empty query answers a silent zero (navigation is what
+			// list/keys are for — the search_docs edge refuses the same input).
+			if strings.TrimSpace(query) == "" {
+				fatalErr(errors.New("query is required"))
+			}
 			// Shape before store contact: an invalid status or a negative
 			// limit are the caller's problem. A negative limit would read as
 			// "no cap" (0 = up to 1000) and silently widen the page.

@@ -731,6 +731,9 @@ func TestMCPServerM1ValidationOffline(t *testing.T) {
 		{"memento_list", map[string]any{"project": "p", "prefix": "a*b"}, "trailing *"},
 		{"memento_get", map[string]any{"key": "k", "keys": []any{"k"}}, "exactly one"},
 		{"memento_get", map[string]any{}, "exactly one"},
+		// The fact-search edge refuses an empty query up-front (the
+		// search_docs contract): a silent zero is not an answer.
+		{"memento_search", map[string]any{"query": "  "}, "query is required"},
 	} {
 		t.Run(tc.name+" "+tc.want, func(t *testing.T) {
 			res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: tc.name, Arguments: tc.args})

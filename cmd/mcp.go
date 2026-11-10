@@ -493,6 +493,11 @@ type searchInput struct {
 }
 
 func (s *mcpServer) search(ctx context.Context, req *mcp.CallToolRequest, in searchInput) (*mcp.CallToolResult, factsOutput, error) {
+	// Shape before store contact (the search_docs contract): an empty query
+	// answers a silent zero — navigation is what list/keys are for.
+	if strings.TrimSpace(in.Query) == "" {
+		return nil, factsOutput{}, errors.New("memento_search: query is required")
+	}
 	limit := in.Limit
 	if limit <= 0 {
 		limit = 10
