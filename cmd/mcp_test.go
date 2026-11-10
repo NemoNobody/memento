@@ -348,6 +348,31 @@ func TestMCPGetDocMissingIsFoundFalse(t *testing.T) {
 	}
 }
 
+// TestMCPPruneKeepRefusalOffline pins the prune edge: with history_limit=0
+// and no explicit keep, the refusal is a config-state answer that must not
+// touch the store (the round-10 shape-before-store contract).
+func TestMCPPruneKeepRefusalOffline(t *testing.T) {
+	session := connectTestServer(t, "OPENSEARCH_URL=https://127.0.0.1:9", "MEMENTO_HISTORY_LIMIT=0")
+	ctx := context.Background()
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "memento_prune",
+		Arguments: map[string]any{"key": "k"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool(memento_prune): %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("history_limit=0 without keep must be refused")
+	}
+	text := toolText(res)
+	if !strings.Contains(text, "history_limit is 0") {
+		t.Errorf("error must name the config state, got: %s", text)
+	}
+	if strings.Contains(text, "127.0.0.1:9") {
+		t.Errorf("the refusal ran after the store was reached: %s", text)
+	}
+}
+
 func TestResolveStatus(t *testing.T) {
 	cases := map[string]string{
 		"":         "verified", // default: only trusted facts

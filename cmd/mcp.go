@@ -1056,10 +1056,12 @@ func (s *mcpServer) prune(ctx context.Context, req *mcp.CallToolRequest, in prun
 	if in.Key == "" {
 		return nil, pruneOutput{}, errors.New("memento_prune: key is required")
 	}
-	c, cfg, err := s.newClientWithConfig(ctx)
-	if err != nil {
-		return nil, pruneOutput{}, storeError("memento_prune", err)
+	cfg, cerr := s.loadConfig()
+	if cerr != nil {
+		return nil, pruneOutput{}, storeError("memento_prune", cerr)
 	}
+	// keep resolves from local config BEFORE any store contact: the refusal
+	// needs no store, and it must not pay for an index ensure.
 	keep := in.Keep
 	if keep <= 0 {
 		keep = cfg.HistoryLimit
@@ -1068,6 +1070,10 @@ func (s *mcpServer) prune(ctx context.Context, req *mcp.CallToolRequest, in prun
 		// history_limit: 0 means "keep everything": silently collapsing it
 		// to 1 would destroy every history entry. Demand an explicit keep.
 		return nil, pruneOutput{}, fmt.Errorf("memento_prune: history_limit is 0 (keep everything) and no keep value was given: pass an explicit keep (e.g. keep: 5)")
+	}
+	c, err := s.clientFromConfig(ctx, cfg)
+	if err != nil {
+		return nil, pruneOutput{}, storeError("memento_prune", err)
 	}
 	f, err := c.Get(ctx, in.Key)
 	if errors.Is(err, client.ErrNotFound) {

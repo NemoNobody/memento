@@ -338,19 +338,25 @@ func TestCLITrimParity(t *testing.T) {
 // "no cap" and widen the page).
 func TestCLIStatusAndLimitShapeBeforeStore(t *testing.T) {
 	fake, calls := startTrimFake(t, true)
-	cases := [][]string{
-		{"search", "q", "--status", "bogus"},
-		{"search", "q", "--limit", "-1"},
-		{"search", "  "},
-		{"keys", "k", "--status", "bogus"},
-		{"list", "p", "--prefix", "a*b"},
-		{"doc", ""},
-		{"docs", "  "},
+	cases := []struct {
+		args []string
+		env  []string
+	}{
+		{[]string{"search", "q", "--status", "bogus"}, nil},
+		{[]string{"search", "q", "--limit", "-1"}, nil},
+		{[]string{"search", "  "}, nil},
+		{[]string{"keys", "k", "--status", "bogus"}, nil},
+		{[]string{"list", "p", "--prefix", "a*b"}, nil},
+		{[]string{"doc", ""}, nil},
+		{[]string{"docs", "  "}, nil},
+		// history_limit=0 without --keep is a config-state refusal: it needs
+		// no store, so it must not pay for an index ensure.
+		{[]string{"prune", "k"}, []string{"MEMENTO_HISTORY_LIMIT=0"}},
 	}
-	for _, args := range cases {
-		out, code := runCLISubprocess(t, fake.URL, args...)
+	for _, tc := range cases {
+		out, code := runCLISubprocessEnv(t, fake.URL, tc.env, tc.args...)
 		if code == 0 {
-			t.Errorf("%v exited 0, want a shape refusal; output: %s", args, out)
+			t.Errorf("%v exited 0, want a shape refusal; output: %s", tc.args, out)
 		}
 	}
 	if got := calls(); len(got) != 0 {

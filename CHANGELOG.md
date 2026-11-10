@@ -136,7 +136,8 @@ Fetch guard triage and fetch v1 fixes:
   `memento keys "k *"` normalizes to `k` once (the guard-checked prefix is
   what the wire sees), `memento_list`/`memento_search`/`memento_keys` and the
   CLI `search`/`keys` validate status (and `search --limit >= 0`) before any
-  store contact, and `memento status`'s env list is now pinned against the
+  store contact (`prune` resolves `keep` from the local config before building
+  the client too), and `memento status`'s env list is now pinned against the
   loader's source (the "kept in sync" comment is a test, not a promise).
   `memento_patch` answers its shape errors (nothing to change, a bogus
   `status`, a `reason` without `status=obsolete`) before any store contact

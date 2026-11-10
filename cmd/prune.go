@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/NemoNobody/memento/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -33,7 +34,10 @@ their approval.`,
 				fatalErr(errors.New("key is required"))
 			}
 			ctx := context.Background()
-			c, cfg, err := newClientWithConfig()
+			// Resolve keep from the local config BEFORE building the client:
+			// the refusal needs config only, and it must not pay for an index
+			// ensure (the shape-before-store contract).
+			cfg, err := config.LoadConfig()
 			if err != nil {
 				fatalErr(err)
 			}
@@ -45,6 +49,10 @@ their approval.`,
 				// history_limit: 0 means "keep everything": collapsing it to 1
 				// here would destroy every history entry. Demand an explicit --keep.
 				fatalErr(errors.New("prune: history_limit is 0 (keep everything): pass an explicit --keep N"))
+			}
+			c, err := newClientFromConfig(cfg)
+			if err != nil {
+				fatalErr(err)
 			}
 			f, err := c.Get(ctx, key)
 			if err != nil {
