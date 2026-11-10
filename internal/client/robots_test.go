@@ -166,3 +166,41 @@ func TestRobotsCancelledNotCached(t *testing.T) {
 		t.Errorf("robots.txt fetched %d times, want 1 (the cancelled fetch must not be cached as bad)", n)
 	}
 }
+
+// TestRobotsWildcards (finding 123): RFC 9309 path rules — '*' matches any
+// run, '$' anchors the end. Before this, such rules were plain prefixes:
+// "/*.php$" denied nothing and "*" matched nothing, so a robots file that
+// spoke the standard was silently ignored.
+func TestRobotsWildcards(t *testing.T) {
+	e := robotsEntry{groups: parseRobots("User-agent: *\nDisallow: /*.php$\nDisallow: /private\nAllow: /public/*.jpg\n")}
+	cases := []struct {
+		path string
+		want bool
+	}{
+		{"/x.php", false},
+		{"/a/b.php", false},
+		{"/x.php?y=1", true}, // '$': the match must reach the path end
+		{"/x.php5", true},    // '$' end-anchor
+		{"/private/x", false},
+		{"/public/a.jpg", true},
+		{"/public/a.png", true}, // no matching deny
+	}
+	for _, tc := range cases {
+		if got := robotsAllowed(e, "memento", tc.path); got != tc.want {
+			t.Errorf("robotsAllowed(%q) = %v, want %v", tc.path, got, tc.want)
+		}
+	}
+	// A bare "*" rule denies everything (it used to match nothing).
+	e2 := robotsEntry{groups: parseRobots("User-agent: *\nDisallow: *\n")}
+	if robotsAllowed(e2, "memento", "/anything") {
+		t.Error("Disallow: * must deny")
+	}
+	// Longest-match still wins: an allow with a wildcard beats a shorter deny.
+	e3 := robotsEntry{groups: parseRobots("User-agent: *\nDisallow: /private\nAllow: /private/public*\n")}
+	if !robotsAllowed(e3, "memento", "/private/public/x") {
+		t.Error("the longer wildcard allow must win")
+	}
+	if robotsAllowed(e3, "memento", "/private/x") {
+		t.Error("the deny still covers the rest")
+	}
+}

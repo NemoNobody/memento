@@ -131,6 +131,12 @@ func renderObscura(ctx context.Context, cfg *config.Config, normalizedURL string
 	cctx, cancel := context.WithTimeout(ctx, time.Duration(nav+20)*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(cctx, path, args...)
+	// Scrub the environment: memento's own config (any variable naming
+	// MEMENTO or OPENSEARCH, up to and including the password) never rides
+	// along into the child browser; HOME is parked in the throwaway dir so
+	// no real browser profile or cache is touched. Everything else passes
+	// through so operator wrapper scripts around obscura_bin keep working.
+	cmd.Env = scrubEnvForRenderer(dir)
 	var stderr cappedWriter
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
@@ -279,4 +285,25 @@ func blockedInList(ips []net.IPAddr) (net.IP, bool) {
 		}
 	}
 	return nil, false
+}
+
+// scrubEnvForRenderer prepares the obscura child environment: everything is
+// inherited except variables naming MEMENTO or OPENSEARCH (the MCP's own
+// config — allowlists, index names, keyring service, up to a password set
+// via env), and HOME, which is parked in the caller's throwaway dir so the
+// renderer cannot touch a real profile or cache. A prefix-free contains()
+// match is deliberate: MEMENTO_* is the documented prefix, but operators
+// also export hand-made names like MY_MEMENTO_PASS.
+func scrubEnvForRenderer(dir string) []string {
+	environ := os.Environ()
+	out := make([]string, 0, len(environ)+1)
+	for _, kv := range environ {
+		name, _, _ := strings.Cut(kv, "=")
+		upper := strings.ToUpper(name)
+		if strings.Contains(upper, "MEMENTO") || strings.Contains(upper, "OPENSEARCH") || name == "HOME" {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return append(out, "HOME="+dir)
 }

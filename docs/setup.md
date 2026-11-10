@@ -341,9 +341,14 @@ forwarded to obscura verbatim — the renderer must support the scheme.
 
 SSRF: the plain fetch refuses internal addresses at dial time (loopback,
 RFC1918, link-local/cloud metadata, and the IPv4 addresses embedded in v6
-tunnels — 6to4, Teredo, and the NAT64 well-known prefix with its local /48
-variant; arbitrary RFC 6052 prefixes stay a documented residual), and a host refused
-that way fails as a network error — which makes it render-eligible. The renderer dials on its
+tunnels — 6to4, Teredo, the NAT64 well-known prefix with its local /48
+variant, and the deprecated IPv4-compatible form `::x.x.x.x`; arbitrary
+RFC 6052 prefixes stay a documented residual), and a host refused
+that way fails as a network error — which makes it render-eligible. A
+POLICY refusal (a host outside `fetch_allow_hosts`, a redirect that would
+cross to a blocked host) is final: neither the proxy nor the render
+fallback retries it — the operator's wall is the same wall everywhere.
+The renderer dials on its
 own, so a **direct** render resolves the target through the same rule and
 refuses a non-public answer (`fetch_allow_private: true` is the documented
 opt-in for self-hosted targets). With a proxy the proxy is the egress and
@@ -351,6 +356,20 @@ enforces the policy — run the renderer behind a proxy if you need the
 allowlist and the internal-address rule enforced on the render route: obscura
 follows redirects on its own, and a DNS-rebinding window between the
 pre-check and obscura's dial cannot be closed from memento's side.
+Stored docs also drop image references aimed at internal hosts (the
+drop sets `truncated`; `fetch_allow_private` keeps them for self-hosted
+documentation).
+
+Fetch honesty limits, stated plainly: `robots.txt` gates the REQUESTED URL
+(the rules honor RFC 9309 path wildcards `*` and end-anchor `$`; a redirect
+to a different host is checked by the allowlist/SSRF wall, not by a re-read
+robots file); response bodies are treated as UTF-8 — a server declaring
+another charset is not transcoded (mojibake is visible in the stored text;
+the renderer or a manual re-encode are the cures), and the renderer's
+environment drops every variable naming MEMENTO or OPENSEARCH (the MCP's
+own config, up to a password set via env) plus a sandboxed HOME; the rest
+of the operator environment passes through, so wrapper scripts around
+`obscura_bin` keep working.
 
 Time budget of one `memento fetch` / `memento_fetch_doc`, worst case: the
 polite 429 retry (a ~2 s pause + one more request) plus the proxy fallback

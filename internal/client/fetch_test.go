@@ -136,6 +136,19 @@ func TestNormalizeURL(t *testing.T) {
 			t.Errorf("error echoes credentials: %v", err)
 		}
 	}
+
+	// A literal '+' inside a signed query survives normalization untouched:
+	// the Query()/Encode round-trip re-quotes literals and reorders
+	// parameters, breaking signatures (finding 126).
+	if got, err := NormalizeURL("https://ex.com/f?sig=a%2Bb+c&v=1", true); err != nil ||
+		got != "https://ex.com/f?sig=a%2Bb+c&v=1" {
+		t.Errorf("signed query must survive verbatim: %q, %v", got, err)
+	}
+	// utm_* cutting still works when a cut is actually due.
+	if got, err := NormalizeURL("https://ex.com/f?utm_source=x&sig=a+b", true); err != nil ||
+		strings.Contains(got, "utm_") || !strings.Contains(got, "sig=") {
+		t.Errorf("utm cut broken: %q, %v", got, err)
+	}
 }
 
 // The SSRF guard: fetch follows untrusted URLs, so internal addresses are
@@ -159,6 +172,11 @@ func TestBlockedHostGuard(t *testing.T) {
 		"64:ff9b::c0a8:0132",                      // NAT64 well-known → 192.168.1.50
 		"64:ff9b::7f00:1",                         // NAT64 well-known → 127.0.0.1
 		"64:ff9b:1::7f00:1",                       // NAT64 local /48 → 127.0.0.1
+		// IPv4-compatible IPv6 (deprecated, still parsed): To4 decodes only
+		// ::ffff-mapped, so these must be decoded by hand.
+		"::7f00:1",    // ::127.0.0.1
+		"::127.0.0.1", // same, dotted form
+		"::a9fe:a9fe", // ::169.254.169.254 (cloud metadata)
 	} {
 		if !blockedHost(h) {
 			t.Errorf("blockedHost(%q) = false, want blocked", h)
@@ -172,6 +190,7 @@ func TestBlockedHostGuard(t *testing.T) {
 		"2001:0000:0000:0000:0000:0000:8888:8888", // Teredo → 119.119.119.119
 		"64:ff9b::808:808",                        // NAT64 well-known → 8.8.8.8 (public)
 		"64:ff9b:1::808:808",                      // NAT64 local /48 → 8.8.8.8 (public)
+		"::808:808",                               // IPv4-compatible → 8.8.8.8 (public)
 	} {
 		if blockedHost(h) {
 			t.Errorf("blockedHost(%q) = true, want allowed", h)
@@ -408,6 +427,56 @@ func TestFetchPageRedirect(t *testing.T) {
 	}
 	if doc.FinalURL != ft.srv.URL+"/page" {
 		t.Errorf("final_url = %q, want the redirect target", doc.FinalURL)
+	}
+}
+
+// TestFetchPagePolicyRefusalIsFinal (finding 124): an allowlist/redirect
+// policy refusal is the operator's wall — the proxied attempt faces the
+// SAME wall, so retrying through the proxy must not even be attempted
+// (the tell: no "(direct:" composition, which only appears when the proxy
+// attempt also failed).
+func TestFetchPagePolicyRefusalIsFinal(t *testing.T) {
+	ft := newFetchTarget(t)
+	proxy := newProxyServer(t)
+	fb := config.DefaultConfig()
+	fb.FetchAllowPrivate = true
+	fb.FetchProxyURL = proxy.URL
+	fb.FetchProxyFallback = true
+	fb.FetchAllowHosts = []string{"elsewhere.invalid"}
+	_, err := FetchPage(context.Background(), fb, ft.srv.URL+"/redirect", nil)
+	if err == nil {
+		t.Fatal("a redirect outside the allowlist must fail")
+	}
+	if !strings.Contains(err.Error(), "redirect chain") {
+		t.Errorf("want the policy refusal, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "(direct:") {
+		t.Errorf("policy refusal must not retry through the proxy: %v", err)
+	}
+}
+
+// TestResolveImageRefsDropsInternalRefs (finding 125): an img href aimed
+// at an internal host is SSRF bait, not documentation; the drop is counted
+// (the caller folds it into truncated).
+func TestResolveImageRefsDropsInternalRefs(t *testing.T) {
+	mk := func() []model.ImageRef {
+		return []model.ImageRef{
+			{URL: "/a.png"},
+			{URL: "http://127.0.0.1/b.png"},
+			{URL: "http://intranet.home/c.png"},
+			{URL: "https://cdn.example/d.png"},
+		}
+	}
+	kept, dropped := resolveImageRefs(mk(), "https://docs.example/page", false)
+	if dropped != 2 {
+		t.Errorf("dropped = %d, want 2", dropped)
+	}
+	if len(kept) != 2 || kept[0].URL != "https://docs.example/a.png" || kept[1].URL != "https://cdn.example/d.png" {
+		t.Errorf("kept = %+v, want the doc-relative and the public ref", kept)
+	}
+	kept2, dropped2 := resolveImageRefs(mk(), "https://docs.example/page", true)
+	if dropped2 != 0 || len(kept2) != 4 {
+		t.Errorf("fetch_allow_private must keep internal refs: kept=%d dropped=%d", len(kept2), dropped2)
 	}
 }
 

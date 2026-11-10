@@ -253,3 +253,21 @@ func textOfSections(secs []model.Section) []string {
 	}
 	return out
 }
+
+// TestContentLinesKeepsCJK (finding 126): the junk filter counts RUNES now.
+// A byte limit silently ate CJK content (one ideograph = 3 bytes); ASCII
+// keeps the old short-menu-debris threshold.
+func TestContentLinesKeepsCJK(t *testing.T) {
+	lines := contentLines("安装\n说明文档\nFAQ\n→\nok")
+	joined := strings.Join(lines, "|")
+	for _, want := range []string{"安装", "说明文档"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("CJK line %q was dropped: %q", want, joined)
+		}
+	}
+	for _, junk := range []string{"FAQ", "→", "ok"} {
+		if strings.Contains(joined, junk) {
+			t.Errorf("junk %q survived the filter: %q", junk, joined)
+		}
+	}
+}

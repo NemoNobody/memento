@@ -122,6 +122,13 @@ func blockedIP(ip net.IP) bool {
 	// (64:ff9b:1::/48, RFC 8215) carry the v4 in the last four bytes.
 	// Arbitrary RFC 6052 prefixes are not decoded — the documented residual.
 	if b := ip.To16(); b != nil {
+		// IPv4-compatible IPv6 (::x.x.x.x — deprecated but still parsed by
+		// resolvers): To4 decodes only ::ffff-mapped addresses, so the
+		// compatible form must be decoded by hand or ::127.0.0.1 and
+		// ::169.254.169.254 sail through as "just some v6 address".
+		if allZero(b[:12]) {
+			return blockedIP(net.IP(append([]byte(nil), b[12:16]...)))
+		}
 		if b[0] == 0x20 && b[1] == 0x02 {
 			return blockedIP(net.IP(append([]byte(nil), b[2:6]...)))
 		}
@@ -159,6 +166,15 @@ func inReservedV4(v4 net.IP) bool {
 		}
 	}
 	return false
+}
+
+func allZero(b []byte) bool {
+	for _, x := range b {
+		if x != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // blockedHost is the cheap pre-DNS guard: literal IPs are checked directly,
@@ -257,13 +273,19 @@ func NormalizeURL(raw string, allowPrivate bool) (string, error) {
 			"fetch: host %q is not a public address; fetch refuses loopback/private/link-local targets "+
 				"(opt in with fetch_allow_private for self-hosted docs)", u.Host)
 	}
-	q := u.Query()
-	for k := range q {
-		if strings.HasPrefix(strings.ToLower(k), "utm_") {
-			q.Del(k)
+	// The query is only rebuilt when a utm_* cut is actually due: the
+	// Query()/Encode round-trip re-quotes literals (a '+' inside a signed
+	// URL is a different string after re-encoding — the signature breaks)
+	// and reorders the parameters (some signed URLs are order-sensitive).
+	if strings.Contains(strings.ToLower(u.RawQuery), "utm_") {
+		q := u.Query()
+		for k := range q {
+			if strings.HasPrefix(strings.ToLower(k), "utm_") {
+				q.Del(k)
+			}
 		}
+		u.RawQuery = q.Encode()
 	}
-	u.RawQuery = q.Encode()
 	u.Scheme = strings.ToLower(u.Scheme)
 	u.Host = strings.ToLower(u.Host)
 	if p := u.Port(); (p == "80" && u.Scheme == "http") || (p == "443" && u.Scheme == "https") {
@@ -504,6 +526,13 @@ func fetchHTTP(ctx context.Context, cfg *config.Config, normalizedURL string) (c
 	// of the document, so the proxy would fetch the same over-large page.
 	isIPBlock := ipBlockStatuses[status]
 	isNetwork := status == 0
+	// A policy refusal is final: the operator's wall (allowlist, SSRF
+	// guard) is the same wall the proxied attempt would hit — retrying
+	// through the proxy only pretends the wall is bypassable.
+	var fe *FetchError
+	if errors.As(err, &fe) && fe.Class == ClassPolicy {
+		return "", nil, final, ViaDirect, err
+	}
 	if !isIPBlock && !isNetwork {
 		return "", nil, final, ViaDirect, err
 	}
@@ -574,7 +603,10 @@ func FetchPage(ctx context.Context, cfg *config.Config, normalizedURL string,
 	if title == "" {
 		title = normalizedURL
 	}
-	images = resolveImageRefs(images, finalURL)
+	images, imgDropped := resolveImageRefs(images, finalURL, cfg.FetchAllowPrivate)
+	if imgDropped > 0 {
+		truncated = true // refs dropped as internal-target bait: truncation stays visible
+	}
 
 	host, _ := os.Hostname()
 	now := time.Now().UTC()
@@ -622,24 +654,38 @@ func FetchPage(ctx context.Context, cfg *config.Config, normalizedURL string,
 
 // resolveImageRefs resolves relative img srcs against the final URL, so the
 // stored references are openable from anywhere. Unparseable or non-http(s)
-// schemes (mailto, javascript, data) keep their original form.
-func resolveImageRefs(images []model.ImageRef, baseURL string) []model.ImageRef {
+// schemes (mailto, javascript, data) keep their original form. http(s)
+// references aimed at an internal target are dropped (returned count): an
+// href to a loopback/RFC1918 host is not documentation, it is SSRF bait —
+// an agent clicking it meets the fetch wall, and storing it advertises the
+// internal shape. Name-level filter only (literal IPs, special-use
+// domains); the authoritative guard is guardedDialContext at fetch time.
+// fetch_allow_private keeps internal refs (self-hosted documentation).
+func resolveImageRefs(images []model.ImageRef, baseURL string, allowPrivate bool) ([]model.ImageRef, int) {
 	if len(images) == 0 {
-		return images
+		return images, 0
 	}
 	base, err := url.Parse(baseURL)
 	if err != nil || base.Scheme == "" {
-		return images
+		return images, 0
 	}
+	kept := images[:0]
+	dropped := 0
 	for i := range images {
 		u, err := url.Parse(images[i].URL)
 		if err != nil {
+			kept = append(kept, images[i])
 			continue
 		}
 		abs := base.ResolveReference(u)
 		if abs.Scheme == "http" || abs.Scheme == "https" {
 			images[i].URL = abs.String()
+			if !allowPrivate && blockedHost(strings.ToLower(abs.Hostname())) {
+				dropped++
+				continue
+			}
 		}
+		kept = append(kept, images[i])
 	}
-	return images
+	return kept, dropped
 }

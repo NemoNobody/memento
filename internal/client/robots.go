@@ -164,7 +164,7 @@ func robotsAllowed(e robotsEntry, agent, path string) bool {
 	}
 	var allow, deny int
 	for _, p := range best.allow {
-		if p != "" && strings.HasPrefix(path, p) && len(p) > allow {
+		if p != "" && matchRobotPath(p, path) && len(p) > allow {
 			allow = len(p)
 		}
 	}
@@ -172,11 +172,59 @@ func robotsAllowed(e robotsEntry, agent, path string) bool {
 		if p == "" {
 			continue // an empty Disallow means "allow everything"
 		}
-		if strings.HasPrefix(path, p) && len(p) > deny {
+		if matchRobotPath(p, path) && len(p) > deny {
 			deny = len(p)
 		}
 	}
 	return allow >= deny
+}
+
+// matchRobotPath applies one RFC 9309 path rule: '*' matches any run of
+// characters, and a rule ending in '$' must match the path end exactly.
+// Before this, rules were plain prefixes: "/*.php$" never denied anything
+// and "*" matched nothing — robots files that speak RFC 9309 were silently
+// ignored, i.e. the crawler ignored a rule it appeared to honor.
+func matchRobotPath(rule, path string) bool {
+	endAnchor := strings.HasSuffix(rule, "$")
+	pattern := rule
+	if endAnchor {
+		pattern = pattern[:len(pattern)-1]
+	}
+	if !strings.Contains(pattern, "*") {
+		if endAnchor {
+			return path == pattern
+		}
+		return strings.HasPrefix(path, pattern)
+	}
+	parts := strings.Split(pattern, "*")
+	if !strings.HasPrefix(path, parts[0]) {
+		return false
+	}
+	rest := path[len(parts[0]):]
+	for _, part := range parts[1 : len(parts)-1] {
+		if part == "" {
+			continue
+		}
+		i := strings.Index(rest, part)
+		if i < 0 {
+			return false
+		}
+		rest = rest[i+len(part):]
+	}
+	last := parts[len(parts)-1]
+	if last == "" {
+		// A trailing '*' (with or without '$') absorbs everything that is
+		// left: the middle parts already matched in order.
+		return true
+	}
+	i := strings.Index(rest, last)
+	if i < 0 {
+		return false
+	}
+	if endAnchor {
+		return i+len(last) == len(rest)
+	}
+	return true
 }
 
 // uaToken extracts the RFC 9309 product token from a User-Agent string:

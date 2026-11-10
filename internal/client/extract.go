@@ -142,6 +142,8 @@ func ExtractSections(body string) (sections []model.Section, images []model.Imag
 			if ref, ok := imageRef(body[tagStart:tagEnd]); ok {
 				if len(images) < maxImages {
 					images = append(images, ref)
+				} else {
+					truncated = true // a usable img beyond the cap: the drop must be visible
 				}
 			}
 		case !isClose && headingTags[name]:
@@ -469,12 +471,29 @@ func contentLines(raw string) []string {
 	var lines []string
 	for _, line := range strings.Split(raw, "\n") {
 		line = cleanText(line)
-		if len(line) < 4 {
+		// The junk filter counts RUNES: a byte limit silently drops CJK
+		// content (one ideograph is three bytes, two fit under a 4-byte
+		// cut). ASCII keeps the old byte-par threshold ("FAQ", "Log",
+		// arrows); non-ASCII lines survive from two runes up — CJK text
+		// legitimately packs meaning into two-character lines.
+		switch n := utf8.RuneCountInString(line); {
+		case n < 2:
+			continue
+		case n < 4 && isASCIIText(line):
 			continue
 		}
 		lines = append(lines, line)
 	}
 	return lines
+}
+
+func isASCIIText(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
 }
 
 // cleanText unescapes entities and collapses whitespace to single spaces.
