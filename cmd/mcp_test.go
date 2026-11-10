@@ -781,3 +781,50 @@ func TestNewFactViewCompactDropsHistory(t *testing.T) {
 		t.Error("full row with include_history must carry the history block")
 	}
 }
+
+// TestMCPServerObsoleteGuardCoversKey pins the guard parity between the CLI
+// edge (key+reason) and the MCP edge: a credential-shaped KEY must not reach
+// the shared index via MCP only.
+func TestMCPServerObsoleteGuardCoversKey(t *testing.T) {
+	const sentinel = "AKIAIOSFODNN7EXAMPLE"
+	storeDown := "OPENSEARCH_URL=https://127.0.0.1:9"
+	session := connectTestServer(t, "MEMENTO_SECRET_GUARD=reject", storeDown)
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "memento_obsolete",
+		Arguments: map[string]any{
+			"key":    "leak-" + sentinel,
+			"reason": "file deleted",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("reject mode accepted a credential-shaped key")
+	}
+	if text := toolText(res); !strings.Contains(text, "secret-guard") {
+		t.Errorf("want a secret-guard error, got: %s", text)
+	}
+}
+
+// TestMCPGetKeysEmptyPreValidated pins that every key is validated before
+// any store contact: the empty entry fails the whole call without touching
+// the store, and the shape refusals (exactly-one, cap) keep priority over
+// the per-key complaint.
+func TestMCPGetKeysEmptyPreValidated(t *testing.T) {
+	session := connectTestServer(t, "OPENSEARCH_URL=https://127.0.0.1:9")
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "memento_get",
+		Arguments: map[string]any{"keys": []any{" k ", " "}},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	text := toolText(res)
+	if !strings.Contains(text, "empty key in keys at index 1") {
+		t.Errorf("want the indexed empty-key refusal, got: %s", text)
+	}
+	if strings.Contains(text, "store") {
+		t.Errorf("the call touched the store before validating: %s", text)
+	}
+}

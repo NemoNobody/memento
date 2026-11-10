@@ -518,7 +518,10 @@ func ValidateProxy(u *url.URL) error {
 	switch u.Scheme {
 	case "http", "https", "socks5", "socks5h":
 	default:
-		return fmt.Errorf("scheme must be http/https/socks5/socks5h, got %q (host: %q is not a proxy URL)", u.Scheme, u.Hostname())
+		// The offending scheme text is not echoed: a normalized env value
+		// can hide a credential in the scheme position, and messages reach
+		// agent context.
+		return fmt.Errorf("scheme must be http/https/socks5/socks5h (host: %q); the configured value is not a proxy URL", u.Hostname())
 	}
 	if u.Hostname() == "" {
 		return fmt.Errorf("host is empty (write scheme://host:port)")

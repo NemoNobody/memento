@@ -3,13 +3,12 @@ package cmd
 import (
 	"context"
 	"errors"
+	"github.com/NemoNobody/memento/internal/client"
+	"github.com/spf13/cobra"
 	"os"
 	"strconv"
+	"strings"
 	"time"
-
-	"github.com/NemoNobody/memento/internal/client"
-
-	"github.com/spf13/cobra"
 )
 
 var keysFlags struct {
@@ -48,7 +47,9 @@ func KeysCmd() *cobra.Command {
 			if serr != nil {
 				fatalErr(serr)
 			}
-			facts, meta, err := c.Keys(ctx, prefix, keysFlags.match, keysFlags.project, status)
+			// Store keys and project labels are trimmed edges; a padded
+			// filter answers a silent zero (the MCP edges trim the same way).
+			facts, meta, err := c.Keys(ctx, prefix, strings.TrimSpace(keysFlags.match), strings.TrimSpace(keysFlags.project), status)
 			if err != nil {
 				fatalErr(err)
 			}

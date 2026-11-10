@@ -99,10 +99,14 @@ Fetch guard triage and fetch v1 fixes:
 - `memento obsolete` refuses a reason on an already-obsolete fact (mirrors
   `memento_patch`): the journal skips a re-retire, so notes must not grow an
   audit line the journal never recorded.
-- Keys are trimmed at every CLI edge (`add`, `get`, `obsolete`, `prune`,
-  `journal`, `history-info`) and for the `keys` `match`, matching the
-  store's trimmed keys; CLI `add` defaults the project to `global` (the MCP
-  rule) so documents never sit outside project navigation.
+- Keys, project labels and doc hashes are trimmed at every CLI and MCP edge
+  (`add`, `get`, `obsolete`, `prune`, `journal`, `history-info`, `list`,
+  `search`, `keys --match/--project`, `doc`; MCP read filters and the MCP
+  project default included) — a padded filter never answers a silent zero.
+- A same-value `add` on an obsolete fact resurrects it with a journal entry
+  and moves `observed_at` (the Patch resurrect rule kept symmetric): the
+  status flip is never silent. The MCP `memento_obsolete` guard now scans the
+  key as well as the reason (CLI parity).
 - Retire reasons fold to one line in notes (whitespace runs → single spaces):
   the audit trail stays one event per line.
 - Render env-proxy hardening: the proxy Go's environment machinery produced

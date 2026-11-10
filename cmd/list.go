@@ -2,16 +2,15 @@ package cmd
 
 import (
 	"context"
+	"errors"
+	"github.com/NemoNobody/memento/internal/client"
+	"github.com/NemoNobody/memento/internal/model"
+	"github.com/spf13/cobra"
 	"io"
 	"os"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/NemoNobody/memento/internal/client"
-	"github.com/NemoNobody/memento/internal/model"
-
-	"github.com/spf13/cobra"
 )
 
 func ListCmd() *cobra.Command {
@@ -20,7 +19,12 @@ func ListCmd() *cobra.Command {
 		Short: "List all facts for a project",
 		Args:  cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-			project := args[0]
+			// Project labels are stored trimmed (write edges); the term
+			// filter is whitespace-exact, so trim the query too.
+			project := strings.TrimSpace(args[0])
+			if project == "" {
+				fatalErr(errors.New("project is required"))
+			}
 			ctx := context.Background()
 			c, err := newClient()
 			if err != nil {

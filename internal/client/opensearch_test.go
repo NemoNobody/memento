@@ -519,3 +519,46 @@ func TestObsoleteReasonSingleLine(t *testing.T) {
 		t.Errorf("update body = %.160s, want the reason folded to one line", body)
 	}
 }
+
+// TestAddSameValueOnObsoleteJournalsResurrect pins the resurrect symmetry:
+// re-adding the same value to an obsolete fact is a fresh verification — the
+// transition is journaled (Patch resurrect parity), observed_at moves, and
+// the fact points at the new journal entry. Changed=true tells the caller a
+// version was accepted.
+func TestAddSameValueOnObsoleteJournalsResurrect(t *testing.T) {
+	obsoleteSrc := `{"fact_id":"fid","key":"k","value":"v","category":"config","project":"proj","status":"obsolete","created_at":"2020-01-01T00:00:00Z","updated_at":"2020-01-01T00:00:00Z","observed_at":"2020-01-01T00:00:00Z"}`
+	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
+		if code, body := journalRoutesOK(r); code != 500 {
+			return code, body
+		}
+		switch {
+		case r.Method == "GET":
+			return 200, `{"_index":"memento","_id":"k","found":true,"_source":` + obsoleteSrc + `}`
+		case r.Method == "POST" && strings.Contains(r.Path, "_update"):
+			return 200, `{"result":"updated"}`
+		}
+		return 500, `{"status":500,"error":"unexpected ` + r.Method + " " + r.Path + `"}`
+	})
+
+	res, err := c.Add(context.Background(), model.NewFact("k", "v", "config", "proj", "", ""))
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if !res.Changed {
+		t.Error("Changed = false, want true (resurrection is a new accepted state)")
+	}
+	journals := fake.sawAnyPrefix("/memento-history-")
+	if !journals {
+		t.Error("resurrection must write a journal entry")
+	}
+	updates := fake.requestsFor("POST", "/memento/_update/k")
+	if len(updates) != 1 {
+		t.Fatalf("updates = %d, want 1", len(updates))
+	}
+	if !strings.Contains(updates[0].Body, "observed_at") {
+		t.Errorf("update body = %.160s, want observed_at moved (fresh verification)", updates[0].Body)
+	}
+	if !strings.Contains(updates[0].Body, `"current_ref":"journal-entry-1"`) {
+		t.Errorf("update body = %.160s, want current_ref pointing at the resurrection entry", updates[0].Body)
+	}
+}

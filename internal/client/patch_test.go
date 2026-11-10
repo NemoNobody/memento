@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/NemoNobody/memento/internal/config"
 )
@@ -65,9 +65,12 @@ func TestPatchNotesAppendIsTouch(t *testing.T) {
 		t.Error("Changed = true for a notes-only patch; it is a touch")
 	}
 	params := patchParams(t, body)
-	wantLine := time.Now().UTC().Format("2006-01-02") + ": checked in prod"
-	if params["notes_append"] != wantLine {
-		t.Errorf("notes_append = %v, want %q", params["notes_append"], wantLine)
+	// The dated line is stamped by the server clock: pin the shape
+	// ("YYYY-MM-DD: text"), not the exact day (a run across midnight must
+	// not fail for a legal timestamp).
+	got, _ := params["notes_append"].(string)
+	if !regexp.MustCompile(`^\d{4}-\d{2}-\d{2}: checked in prod$`).MatchString(got) {
+		t.Errorf("notes_append = %q, want the dated line", got)
 	}
 	if v, ok := params["value"]; !ok || v != nil {
 		t.Errorf("value must be null (untouched), got %v", v)
@@ -96,7 +99,7 @@ func TestPatchValueChangeJournalsAndClearsSummary(t *testing.T) {
 	if !res.Changed {
 		t.Error("Changed = false for a value change")
 	}
-	appends := fake.requestsFor(http.MethodPost, "/memento-history-"+time.Now().UTC().Format("2006.01")+"/_doc")
+	appends := journalAppends(fake)
 	if len(appends) != 1 {
 		t.Fatalf("journal appends = %d, want 1", len(appends))
 	}
@@ -198,7 +201,7 @@ func TestPatchObsoleteWithReasonJournals(t *testing.T) {
 	}
 	// The journal entry carries the reason: "why did this die" must be
 	// answerable from the log (audit symmetry with memento_obsolete).
-	appends := fake.requestsFor(http.MethodPost, "/memento-history-"+time.Now().UTC().Format("2006.01")+"/_doc")
+	appends := journalAppends(fake)
 	if len(appends) != 1 {
 		t.Fatalf("journal appends = %d, want 1", len(appends))
 	}
@@ -248,7 +251,7 @@ func TestPatchRetireEmptyNotes(t *testing.T) {
 	if _, err := c.Patch(context.Background(), "k", PatchFields{Status: "obsolete", Reason: "gone"}); err != nil {
 		t.Fatalf("Patch: %v", err)
 	}
-	appends := fake.requestsFor(http.MethodPost, "/memento-history-"+time.Now().UTC().Format("2006.01")+"/_doc")
+	appends := journalAppends(fake)
 	if len(appends) != 1 {
 		t.Fatalf("journal appends = %d, want 1", len(appends))
 	}
@@ -275,5 +278,23 @@ func TestPatchRetireOnObsoleteFactIsRejected(t *testing.T) {
 	}
 	if len(fake.requestsFor(http.MethodPost, "/memento/_update/k")) != 0 {
 		t.Error("the rejected patch must not touch the doc")
+	}
+}
+
+// TestPatchRetireReasonFolded pins the notes convention on the Patch edge
+// too: the retire reason joins notes as ONE line (whitespace runs folded).
+func TestPatchRetireReasonFolded(t *testing.T) {
+	var body string
+	c, _ := newFakeClient(t, patchRespond(
+		`{"key":"k","value":"v","category":"config","project":"p","status":"verified"}`, &body))
+
+	if _, err := c.Patch(context.Background(), "k", PatchFields{
+		Status: "obsolete", Reason: "file deleted\non the server   today",
+	}); err != nil {
+		t.Fatalf("Patch: %v", err)
+	}
+	params := patchParams(t, body)
+	if params["reason_append"] != "file deleted on the server today" {
+		t.Errorf("reason_append = %v, want the folded single line", params["reason_append"])
 	}
 }

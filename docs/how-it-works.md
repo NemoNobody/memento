@@ -39,8 +39,13 @@ document keyed by its `key` (the key is the document ID).
   (`project:area:location:detail`) — a later session must be able to guess it
   without searching.
 - Keys are **trimmed at every edge** (add, patch, get, journal, obsolete,
-  prune; the batch dupe check runs on the trimmed key): `" k "` and `"k"`
-  must never become two docs with diverging history.
+  prune, keys; the batch dupe check runs on the trimmed key): `" k "` and
+  `"k"` must never become two docs with diverging history. Documents written
+  with padded keys before this rule are not auto-merged — `memento keys
+  --match` finds them; merging is an admin call.
+- `project` labels are trimmed at every edge (write and read) and, like the
+  birth authorship, **write-once**: re-adding a fact never migrates its
+  project label (an empty project at add time means `global`).
 - `value` is the human-readable fact.
 
 ## Commands
@@ -54,10 +59,11 @@ memento add <key> <value> <category> [--project <p>] [--source <s>] [--notes <n>
 Adds a fact. If the key exists: a different value corrects it (the accepted
 value is appended to the journal, then the main doc is updated to point at the
 entry); the same value updates `notes`/`source` only (no journal entry,
-`observed_at` stays). One asymmetry to know: a same-value `add` on an
-**obsolete** fact resurrects it to `verified` with no journal entry (the
-re-add is the evidence); `memento_patch` journals that transition because it
-states it explicitly. `--notes` carries qualifiers ("checked the dev config
+`observed_at` stays). The exception: a same-value `add` on an **obsolete**
+fact is a fresh verification — it resurrects the fact to `verified`, moves
+`observed_at` to now, and the transition is journaled (the Patch resurrect
+rule kept symmetric, so "when was it last seen alive" is always answerable
+from the log). `--notes` carries qualifiers ("checked the dev config
 only") to later sessions. A value over `summary_min_len` requires `--summary`
 (the store's table of contents, see below).
 

@@ -200,15 +200,22 @@ func renderEgressProxyWith(cfg *config.Config, rawURL string, envProxy func(*htt
 		if verr := config.ValidateProxy(evU); verr != nil {
 			return "", fmt.Errorf("the environment proxy %v; refusing to render direct", verr)
 		}
-		if strings.Contains(evU.String(), "@") {
+		if strings.Contains(evU.Path, "@") {
 			// Defense in depth: a normalized form can hide user info in the
-			// path; no '@' ever reaches the renderer argv.
+			// path (and '%40' decodes to '@' in the Path of the parsed form).
 			return "", fmt.Errorf("the environment proxy carries user info; refusing to render direct (argv is visible in /proc)")
 		}
 		proxy = evU.String()
 	}
 	if verr := config.ValidateProxyURL(proxy); verr != nil {
 		return "", fmt.Errorf("%v; refusing to render direct", verr)
+	}
+	if strings.Contains(proxy, "@") {
+		// The final string is what lands in the renderer argv. User info is
+		// refused upstream (both branches); a literal '@' left in the path is
+		// a credential-shaped artifact — the argv invariant is kept strictly:
+		// no '@' reaches the subprocess, for env or config proxies.
+		return "", fmt.Errorf("the proxy URL carries an '@' in its path; refusing to render direct (argv is visible in /proc)")
 	}
 	return proxy, nil
 }

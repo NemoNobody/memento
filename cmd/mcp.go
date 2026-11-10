@@ -505,8 +505,11 @@ func (s *mcpServer) search(ctx context.Context, req *mcp.CallToolRequest, in sea
 		limit = 50
 	}
 	// Write edges store the lowercase canonical category; the term filter is
-	// case-sensitive, so canonicalize the filter too.
+	// case-sensitive, so canonicalize the filter too. Project labels are
+	// stored trimmed (write edges); the term filter is whitespace-exact, so
+	// the filter trims too — " proj " must not answer a silent zero.
 	in.Category = strings.ToLower(strings.TrimSpace(in.Category))
+	in.Project = strings.TrimSpace(in.Project)
 	status, serr := resolveStatus(in.Status)
 	if serr != nil {
 		return nil, factsOutput{}, serr
@@ -556,20 +559,22 @@ func (s *mcpServer) get(ctx context.Context, req *mcp.CallToolRequest, in getInp
 	for i, k := range in.Keys {
 		in.Keys[i] = strings.TrimSpace(k)
 	}
-	// Every key must survive the trim (validate all up front, before any
-	// store contact): a keys list carrying " " would otherwise serve the keys
-	// before it and fail the call only after touching the store.
-	for i, k := range in.Keys {
-		if k == "" {
-			return nil, getOutput{}, fmt.Errorf("memento_get: empty key in keys at index %d", i)
-		}
-	}
+	// Shape first (exactly one of key/keys, then the cap): those refusals
+	// describe the call as a whole and must not be preempted by a per-key
+	// complaint. Only then the per-key non-empty check — every key validated
+	// before any store contact: a keys list carrying " " must fail without
+	// touching the store.
 	hasKey := in.Key != ""
 	if hasKey == (len(in.Keys) > 0) {
 		return nil, getOutput{}, fmt.Errorf("memento_get: provide exactly one of key or keys (up to %d)", maxGetKeys)
 	}
 	if len(in.Keys) > maxGetKeys {
 		return nil, getOutput{}, fmt.Errorf("memento_get: keys is capped at %d (context economy)", maxGetKeys)
+	}
+	for i, k := range in.Keys {
+		if k == "" {
+			return nil, getOutput{}, fmt.Errorf("memento_get: empty key in keys at index %d", i)
+		}
 	}
 	c, err := s.newClient(ctx)
 	if err != nil {
@@ -678,6 +683,7 @@ func (s *mcpServer) addOne(ctx context.Context, cfg *config.Config, c *client.Cl
 	// are case-sensitive, so a mixed-case write would silently never age and
 	// never match category filters.
 	in.Category = strings.ToLower(in.Category)
+	in.Project = strings.TrimSpace(in.Project)
 	if in.Project == "" {
 		in.Project = "global"
 	}
@@ -859,6 +865,8 @@ type listInput struct {
 }
 
 func (s *mcpServer) list(ctx context.Context, req *mcp.CallToolRequest, in listInput) (*mcp.CallToolResult, factsOutput, error) {
+	// Project labels are stored trimmed; the term filter is whitespace-exact.
+	in.Project = strings.TrimSpace(in.Project)
 	compact := true
 	if in.Compact != nil {
 		compact = *in.Compact
@@ -924,6 +932,7 @@ func (s *mcpServer) keys(ctx context.Context, req *mcp.CallToolRequest, in keysI
 	// same way the prefix is: store keys are trimmed, and " k " as a wildcard
 	// over trimmed keys answers a silent zero.
 	in.Match = strings.TrimSpace(in.Match)
+	in.Project = strings.TrimSpace(in.Project)
 	if in.Prefix == "" && in.Match == "" {
 		return nil, factsOutput{}, fmt.Errorf("memento_keys: provide a key prefix and/or a match pattern")
 	}
@@ -973,7 +982,10 @@ func (s *mcpServer) obsolete(ctx context.Context, req *mcp.CallToolRequest, in o
 	if cerr != nil {
 		return nil, obsoleteOutput{}, storeError("memento_obsolete", cerr)
 	}
+	// The CLI edge scans key+reason; the MCP edge must not be the narrower
+	// gate (a credential-shaped key reaches the shared index via MCP only).
 	if err := guardCheck(cfg.SecretGuard, in.ConfirmSecret,
+		guardField{Name: "key", Text: in.Key},
 		guardField{Name: "reason", Text: in.Reason}); err != nil {
 		return nil, obsoleteOutput{}, err
 	}
@@ -1258,6 +1270,9 @@ func (s *mcpServer) fetchDoc(ctx context.Context, req *mcp.CallToolRequest, in f
 	// The project tag is agent-supplied text that lands in a shared index,
 	// and the cache-hit path re-tags a stored doc WITHOUT the content
 	// guard (guardFetch gates only the fresh path): scan the tag here.
+	// Trim first: stored labels are trimmed, and the guard must see the
+	// value that will be stored.
+	in.Project = strings.TrimSpace(in.Project)
 	if err := guardCheck(cfg.SecretGuard, in.ConfirmSecret,
 		guardField{Name: "project", Text: in.Project}); err != nil {
 		return nil, fetchDocOutput{}, err
@@ -1321,7 +1336,8 @@ type getDocOutput struct {
 }
 
 func (s *mcpServer) getDoc(ctx context.Context, req *mcp.CallToolRequest, in getDocInput) (*mcp.CallToolResult, getDocOutput, error) {
-	if strings.TrimSpace(in.Hash) == "" {
+	in.Hash = strings.TrimSpace(in.Hash)
+	if in.Hash == "" {
 		return nil, getDocOutput{}, errors.New("memento_get_doc: hash is required")
 	}
 	c, err := s.newClient(ctx)
@@ -1408,6 +1424,7 @@ func (s *mcpServer) searchDocs(ctx context.Context, req *mcp.CallToolRequest, in
 	if strings.TrimSpace(in.Query) == "" {
 		return nil, docsHitsOutput{}, errors.New("memento_search_docs: query is required")
 	}
+	in.Project = strings.TrimSpace(in.Project)
 	limit := in.Limit
 	if limit <= 0 {
 		limit = 5

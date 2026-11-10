@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -180,5 +181,18 @@ func TestLoadConfigFetchBadEnvFails(t *testing.T) {
 				t.Errorf("%s=%q: want loud failure", tc.key, tc.val)
 			}
 		})
+	}
+}
+
+// TestValidateProxyNoSchemeEcho pins the message hygiene: the scheme text of
+// a rejected proxy URL is not echoed (a normalized env value can hide a
+// credential in the scheme position).
+func TestValidateProxyNoSchemeEcho(t *testing.T) {
+	err := ValidateProxyURL("AKIAIOSFODNN7EXAMPLE://p:3128")
+	if err == nil {
+		t.Fatal("non-proxy scheme must be refused")
+	}
+	if strings.Contains(err.Error(), "AKIAIOSFODNN7EXAMPLE") {
+		t.Errorf("the offending scheme was echoed: %v", err)
 	}
 }

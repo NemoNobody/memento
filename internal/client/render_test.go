@@ -475,3 +475,22 @@ func TestBlockedInList(t *testing.T) {
 		}
 	}
 }
+
+// TestRenderProxyAtInvariant pins the strict argv invariant: no '@' reaches
+// the renderer argv from EITHER branch — not from a config proxy with an
+// '@' in the path, nor from an env proxy whose credential is '%40'-encoded
+// (it decodes to '@' inside the parsed Path).
+func TestRenderProxyAtInvariant(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.FetchProxyURL = "http://proxy.corp:3128/tok=sk_live_51Hb@x"
+	noEnv := func(*http.Request) (*url.URL, error) { return nil, nil }
+	if _, err := renderEgressProxyWith(cfg, "https://example.com/x", noEnv); err == nil {
+		t.Error("config proxy with '@' in the path must be refused (argv is visible in /proc)")
+	}
+	pct := func(*http.Request) (*url.URL, error) {
+		return url.Parse("http://p:3128/k%40user:sekret")
+	}
+	if _, err := renderEgressProxyWith(config.DefaultConfig(), "https://example.com/x", pct); err == nil {
+		t.Error("'%40'-encoded env proxy credential must be refused")
+	}
+}

@@ -36,7 +36,7 @@ func SearchCmd() *cobra.Command {
 			if serr != nil {
 				fatalErr(serr)
 			}
-			facts, meta, err := c.Search(ctx, query, searchFlags.project, strings.ToLower(strings.TrimSpace(searchFlags.category)), status, searchFlags.limit)
+			facts, meta, err := c.Search(ctx, query, strings.TrimSpace(searchFlags.project), strings.ToLower(strings.TrimSpace(searchFlags.category)), status, searchFlags.limit)
 			if err != nil {
 				fatalErr(err)
 			}

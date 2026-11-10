@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/NemoNobody/memento/internal/config"
 	"github.com/NemoNobody/memento/internal/model"
@@ -670,10 +669,9 @@ func TestObsoleteKeepsValueAndAppendsReason(t *testing.T) {
 	if params["current_ref"] != "journal-entry-1" {
 		t.Errorf("current_ref = %v, want journal-entry-1: the transition must be journaled", params["current_ref"])
 	}
-	journalPath := "/memento-history-" + time.Now().UTC().Format("2006.01") + "/_doc"
-	appends := fake.requestsFor(http.MethodPost, journalPath)
+	appends := journalAppends(fake)
 	if len(appends) != 1 {
-		t.Fatalf("journal appends = %d, want 1 (path %s)", len(appends), journalPath)
+		t.Fatalf("journal appends = %d, want 1", len(appends))
 	}
 	if !strings.Contains(appends[0].Body, "old note\\nfile deleted") {
 		t.Errorf("journal entry must carry the stated notes: %s", appends[0].Body)

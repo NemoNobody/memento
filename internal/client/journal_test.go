@@ -44,6 +44,23 @@ func journalRoutesOK(r recordedRequest) (int, string) {
 	return journalInfraOK(r)
 }
 
+// journalAppends returns the POST writes to ANY journal dated index.
+// Pinning one month name flakes when a test run crosses the month boundary:
+// the write lands in the next period's index.
+func journalAppends(fake *fakeOpenSearch) []recordedRequest {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	var out []recordedRequest
+	for _, r := range fake.requests {
+		if r.Method == http.MethodPost &&
+			strings.HasPrefix(r.Path, "/memento-history-") &&
+			strings.HasSuffix(r.Path, "/_doc") {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 func TestJournalIndexNamePeriods(t *testing.T) {
 	day := time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)
 	isoWeekFlip := time.Date(2027, 1, 1, 12, 0, 0, 0, time.UTC) // ISO 2026-W53
@@ -235,10 +252,7 @@ func TestAddCorrectionAppendsJournalBeforeMain(t *testing.T) {
 	}
 
 	// The journal entry for v2 must exist, and the main update must point at it.
-	appends := fake.requestsFor(http.MethodPost, "/memento-history-2026.11/_doc")
-	if len(appends) == 0 {
-		appends = fake.requestsFor(http.MethodPost, "/memento-history-"+time.Now().UTC().Format("2006.01")+"/_doc")
-	}
+	appends := journalAppends(fake)
 	if len(appends) != 1 {
 		t.Fatalf("journal appends = %d, want 1", len(appends))
 	}

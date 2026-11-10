@@ -266,9 +266,11 @@ type AddResult struct {
 // Add stores a fact under its key. Three cases: the key is new (created, then
 // journaled and linked); the value is unchanged (only notes/source/status
 // move — observed_at must not, the observation is old and only the qualifier
-// is new, and the journal is untouched); the value changed (a journal entry
-// is appended for the new value, then the main doc is corrected to point at
-// it — this also resurrects an obsolete fact).
+// is new, and the journal is untouched; the exception is a dead fact: an
+// unchanged re-add of an obsolete fact is a fresh verification, journaled
+// like the Patch resurrect, and observed_at moves); the value changed (a
+// journal entry is appended for the new value, then the main doc is
+// corrected to point at it — this also resurrects an obsolete fact).
 //
 // The journal append precedes the main write: the journal is the accepted
 // log, the main doc is the projection. A failed main write leaves an orphan
@@ -337,12 +339,34 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	if existing.Value == f.Value {
+		// Re-declaring a dead fact alive IS a fresh verification (the Patch
+		// resurrect rule, kept symmetric): flipping obsolete→verified on a
+		// same-value add without a journal entry left the audit asymmetry
+		// half-closed — "when was it last seen alive" would go unrecorded.
+		// Only the explicit dead state resurrects (a status-less legacy doc
+		// is not "dead": it stays a plain touch).
+		resurrect := existing.Status == "obsolete"
 		doc := map[string]interface{}{
 			"source":     f.Source,
 			"category":   f.Category,
 			"status":     "verified",
 			"updated_by": c.resolveAuthor(ctx).Author,
 			"updated_at": now,
+		}
+		if resurrect {
+			observed := time.Now().UTC()
+			stated := *existing
+			if f.Notes != "" {
+				stated.Notes = f.Notes
+			}
+			stated.Status = "verified"
+			stated.ObservedAt = observed
+			ref, jErr := c.journalAppend(ctx, &stated, existing.FactID, observed)
+			if jErr != nil {
+				return AddResult{}, jErr
+			}
+			doc["observed_at"] = observed.Format(time.RFC3339)
+			doc["current_ref"] = ref
 		}
 		if f.Notes != "" {
 			doc["notes"] = f.Notes
@@ -359,10 +383,11 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 		if err != nil {
 			return AddResult{}, wrapWriteError("add fact", err)
 		}
-		// Same value: notes/source/status moved, observed_at must not (the
-		// observation is old), the journal is untouched. changed=false tells
-		// the caller nothing was accepted as a new version.
-		return AddResult{Changed: false}, nil
+		// Same value: notes/source moved, observed_at must not (the
+		// observation is old), the journal is untouched — the resurrection
+		// exception above is the one same-value write that IS a new
+		// observation, and it reports Changed=true.
+		return AddResult{Changed: resurrect}, nil
 	}
 
 	if err := c.checkSummaryRequired(f); err != nil {

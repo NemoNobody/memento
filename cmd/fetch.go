@@ -113,7 +113,9 @@ func DocCmd() *cobra.Command {
 		Short: "Read a stored document section by hash",
 		Args:  cobra.RangeArgs(1, 2),
 		Run: func(cmd *cobra.Command, args []string) {
-			hash := args[0]
+			// Hashes are looked up exactly; trim the argument like every
+			// other key-shaped edge so " <hash> " finds the document.
+			hash := strings.TrimSpace(args[0])
 			section := docFlags.section
 			if len(args) == 2 {
 				n, err := strconv.Atoi(args[1])
