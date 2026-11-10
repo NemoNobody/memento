@@ -46,9 +46,6 @@ func journalRoutesOK(r recordedRequest) (int, string) {
 	return journalInfraOK(r)
 }
 
-// journalAppends returns the POST writes to ANY journal dated index.
-// Pinning one month name flakes when a test run crosses the month boundary:
-// the write lands in the next period's index.
 // journalAppends returns writes to ANY journal dated index: POST /_doc
 // (auto id) and PUT /_doc/<id> (deterministic id — migration and the
 // doc-first write paths). Pinning one month name flakes when a test run
@@ -412,7 +409,7 @@ func TestAddCreatesIndexThenJournalsNewFact(t *testing.T) {
 			return http.StatusNotFound, `{"status":404,"error":{"type":"document_missing_exception"}}`
 		case r.Method == http.MethodPut && r.Path == "/memento/_doc/k":
 			return http.StatusOK, `{"_index":"memento","_id":"k","result":"created"}`
-		case r.Method == http.MethodPost && strings.HasPrefix(r.Path, "/memento-history-"):
+		case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-"):
 			return http.StatusOK, `{"_id":"j1","result":"created"}`
 		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
 			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
@@ -428,12 +425,91 @@ func TestAddCreatesIndexThenJournalsNewFact(t *testing.T) {
 	if !res.Created {
 		t.Error("created = false, want true")
 	}
-	if !fake.sawAnyPrefix("/memento-history-") {
-		t.Error("a new fact's birth value must be journaled")
+	appends := journalAppends(fake)
+	if len(appends) != 1 {
+		t.Fatalf("birth journal writes = %d, want 1", len(appends))
+	}
+	// The birth entry is appended under a deterministic id (PUT /_doc/<id>,
+	// op_type=create): migrate-history's repair path re-appends the current
+	// value under the same content-derived id, so a link failure between
+	// append and link repairs by collision, never by duplication.
+	if !strings.Contains(appends[0].Path, "/_doc/") {
+		t.Errorf("birth append must carry a deterministic doc id, path=%s", appends[0].Path)
+	}
+	if appends[0].Query.Get("op_type") != "create" {
+		t.Errorf("birth append must be create-only, query=%s", appends[0].Query.Encode())
 	}
 	updates := fake.requestsFor(http.MethodPost, "/memento/_update/k")
-	if len(updates) != 1 || !strings.Contains(updates[0].Body, "current_ref") {
-		t.Error("the created fact must be linked to its journal entry (current_ref)")
+	if len(updates) != 1 {
+		t.Fatalf("fact updates = %d, want 1 (the link)", len(updates))
+	}
+	birthID := appends[0].Path[strings.LastIndex(appends[0].Path, "/")+1:]
+	if !strings.Contains(updates[0].Body, birthID) {
+		t.Errorf("the created fact must be linked to the deterministic entry id %q, body=%s", birthID, updates[0].Body)
+	}
+}
+
+// TestAddBirthLinkFailureRepairedByMigrationWithoutDuplication is the full
+// finding-111 contract: the blackout lands between the birth append and
+// the link update — the fact stays unlinked, a same-value retry is a touch
+// and never relinks, but migrate-history repairs the fact and the repair
+// collides with the already-written birth entry (same content-derived id)
+// instead of appending a duplicate.
+func TestAddBirthLinkFailureRepairedByMigrationWithoutDuplication(t *testing.T) {
+	var mu sync.Mutex
+	journalDocs := map[string]bool{}
+	updateCalls := 0
+	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
+		if code, body := journalInfraOK(r); code != http.StatusInternalServerError {
+			return code, body
+		}
+		switch {
+		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
+			return http.StatusNotFound, `{"status":404,"error":{"type":"document_missing_exception"}}`
+		case r.Method == http.MethodPut && r.Path == "/memento/_doc/k":
+			return http.StatusOK, `{"_index":"memento","_id":"k","result":"created"}`
+		case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-"):
+			mu.Lock()
+			defer mu.Unlock()
+			if journalDocs[r.Path] {
+				return http.StatusConflict, `{"error":{"type":"version_conflict_engine_exception","reason":"document already exists"},"status":409}`
+			}
+			journalDocs[r.Path] = true
+			return http.StatusOK, `{"_id":"j1","result":"created"}`
+		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+			updateCalls++
+			if updateCalls == 1 {
+				// The blackout: the link update fails after the append landed.
+				return http.StatusInternalServerError, `{"status":500,"error":"transient link failure"}`
+			}
+			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+		}
+		return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Path + `"}`
+	})
+
+	f := model.NewFact("k", "v1", "config", "p", "s", "")
+	if _, err := c.Add(context.Background(), f); err == nil {
+		t.Fatal("Add must report the link failure")
+	}
+	if n := len(journalDocs); n != 1 {
+		t.Fatalf("journal docs after failed Add = %d, want 1 (the birth entry)", n)
+	}
+	// migrate-history catches the unlinked fact: the same-value current
+	// entry re-appends under the same deterministic id (409 = success).
+	n, err := c.MigrateFact(context.Background(), f, time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("MigrateFact repair: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("repair appended = %d, want 1", n)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(journalDocs) != 1 {
+		t.Errorf("journal docs after repair = %d, want 1: the repair must collide, not duplicate", len(journalDocs))
+	}
+	if got := len(fake.requestsFor(http.MethodPost, "/memento/_update/k")); got != 2 {
+		t.Errorf("fact updates = %d, want 2 (failed link, repair link)", got)
 	}
 }
 

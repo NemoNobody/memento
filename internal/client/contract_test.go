@@ -238,7 +238,8 @@ func TestGetUsesRealtimeDocumentAPI(t *testing.T) {
 // change must not overwrite the old value with a PUT — it is a scripted
 // update that projects the accepted value and points current_ref at the
 // journal entry that carries the history. A PUT would silently lose the old
-// observation (journal_test pins the journal-append-before-main ordering).
+// observation (journal_test pins the doc-first ordering: the scripted
+// update lands before the journal entry is indexed).
 func TestAddCorrectionUsesScriptedUpdate(t *testing.T) {
 	var updateBody string
 	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {

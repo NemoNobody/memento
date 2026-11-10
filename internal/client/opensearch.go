@@ -314,11 +314,22 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 			return AddResult{}, err
 		}
 		if created {
-			// Journal the birth value, then link the fact to it. A journal
-			// failure leaves the fact in the pre-journal shape (migrate-history
-			// catches it), not a broken fact.
-			ref, jErr := c.journalAppend(ctx, f, f.FactID, f.ObservedAt)
-			if jErr != nil {
+			// Journal the birth value under a deterministic id (the same
+			// contract as corrections and the migration), then link the fact
+			// to it. A journal failure leaves the fact in the pre-journal
+			// shape (migrate-history catches it), not a broken fact. A link
+			// failure (a blackout between the append and the link) is also
+			// repairable: a same-value retry is a touch, not a relink, but
+			// migrate-history re-appends the current entry under the SAME
+			// deterministic id and links it — the collision is success, so
+			// the repair neither duplicates the birth entry nor needs the
+			// old auto id.
+			ts := f.ObservedAt
+			if ts.IsZero() {
+				ts = f.UpdatedAt
+			}
+			ref := journalEntryID(f.Key, model.OpWrite, f.Value, f.Notes, f.Source, ts)
+			if _, jErr := c.appendJournalID(ctx, c.newJournalEntryFor(ctx, f, f.FactID, ts), ref, ""); jErr != nil {
 				return AddResult{Created: true, Changed: true}, jErr
 			}
 			if lErr := c.linkCurrentRef(ctx, f.Key, ref); lErr != nil {
@@ -475,18 +486,6 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 	return AddResult{Changed: true, PreviousSummary: existing.Summary}, nil
 }
 
-// journalAppend appends the journal entry for an accepted fact value and
-// returns the entry id. The create path uses it (the fact is already in the
-// index when the birth entry is written; the link follows in a separate
-// update). The correction/patch/obsolete paths do NOT: they must keep the
-// journal free of refused writes — see newJournalEntryFor.
-// The entry carries its own author labels: "who wrote this version" is a
-// per-entry fact of the log; factID is the identity the entry belongs to
-// (the doc's fact_id, which survives key renames).
-func (c *Client) journalAppend(ctx context.Context, f *model.Fact, factID string, ts time.Time) (string, error) {
-	return c.AppendJournal(ctx, c.newJournalEntryFor(ctx, f, factID, ts))
-}
-
 // newJournalEntryFor builds — without writing — the entry for a state the
 // caller is about to accept. The scripted write paths preallocate the entry
 // id, carry it into the update as current_ref, and index the entry under
@@ -505,9 +504,9 @@ func (c *Client) newJournalEntryFor(ctx context.Context, f *model.Fact, factID s
 	return e
 }
 
-// linkCurrentRef points a fact at its journal entry. Used on the create path
-// (the birth write happens before the journal id exists); the correction
-// script sets current_ref inside the same write.
+// linkCurrentRef points a fact at its journal entry. Used on the create
+// path (the fact doc is written before the entry id is committed); the
+// correction script sets current_ref inside the same write.
 func (c *Client) linkCurrentRef(ctx context.Context, key, ref string) error {
 	body, _ := json.Marshal(map[string]interface{}{
 		"doc": map[string]interface{}{"current_ref": ref},
