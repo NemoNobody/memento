@@ -158,6 +158,7 @@ func TestBlockedHostGuard(t *testing.T) {
 		"2001:0000:0000:0000:0000:0000:3f57:fecd", // Teredo → 192.168.1.50
 		"64:ff9b::c0a8:0132",                      // NAT64 well-known → 192.168.1.50
 		"64:ff9b::7f00:1",                         // NAT64 well-known → 127.0.0.1
+		"64:ff9b:1::7f00:1",                       // NAT64 local /48 → 127.0.0.1
 	} {
 		if !blockedHost(h) {
 			t.Errorf("blockedHost(%q) = false, want blocked", h)
@@ -170,6 +171,7 @@ func TestBlockedHostGuard(t *testing.T) {
 		"2002:8888:8888::1",                       // 6to4 → 136.136.136.136 (public)
 		"2001:0000:0000:0000:0000:0000:8888:8888", // Teredo → 119.119.119.119
 		"64:ff9b::808:808",                        // NAT64 well-known → 8.8.8.8 (public)
+		"64:ff9b:1::808:808",                      // NAT64 local /48 → 8.8.8.8 (public)
 	} {
 		if blockedHost(h) {
 			t.Errorf("blockedHost(%q) = true, want allowed", h)

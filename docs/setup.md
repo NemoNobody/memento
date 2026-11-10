@@ -341,7 +341,8 @@ forwarded to obscura verbatim — the renderer must support the scheme.
 
 SSRF: the plain fetch refuses internal addresses at dial time (loopback,
 RFC1918, link-local/cloud metadata, and the IPv4 addresses embedded in v6
-tunnels — 6to4, Teredo, and the NAT64 well-known prefix), and a host refused
+tunnels — 6to4, Teredo, and the NAT64 well-known prefix with its local /48
+variant; arbitrary RFC 6052 prefixes stay a documented residual), and a host refused
 that way fails as a network error — which makes it render-eligible. The renderer dials on its
 own, so a **direct** render resolves the target through the same rule and
 refuses a non-public answer (`fetch_allow_private: true` is the documented

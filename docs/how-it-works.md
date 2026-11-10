@@ -59,7 +59,9 @@ memento add <key> <value> <category> [--project <p>] [--source <s>] [--notes <n>
 Adds a fact. If the key exists: a different value corrects it (the accepted
 value is appended to the journal, then the main doc is updated to point at the
 entry); the same value updates `notes`/`source` only (no journal entry,
-`observed_at` stays). The exception: a same-value `add` on an **obsolete**
+`observed_at` stays). A correction's journal entry carries the merged accepted
+state — the new value with the stored `source`/`notes` when the request left
+them empty — so the log and the doc never disagree about the qualifiers. The exception: a same-value `add` on an **obsolete**
 fact is a fresh verification — it resurrects the fact to `verified`, moves
 `observed_at` to now, and the transition is journaled (the Patch resurrect
 rule kept symmetric, so "when was it last seen alive" is always answerable

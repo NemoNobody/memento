@@ -358,6 +358,9 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 			if f.Notes != "" {
 				stated.Notes = f.Notes
 			}
+			if f.Source != "" {
+				stated.Source = f.Source
+			}
 			stated.Status = "verified"
 			stated.ObservedAt = observed
 			ref, jErr := c.journalAppend(ctx, &stated, existing.FactID, observed)
@@ -402,8 +405,21 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 
 	// The journal entry carries the doc's fact_id (not the caller's fresh
 	// uuid): entries group by the identity that survives, and the doc's
-	// fact_id is that identity.
-	ref, err := c.journalAppend(ctx, f, existing.FactID, f.ObservedAt)
+	// fact_id is that identity. The qualifiers are MERGED onto the incoming
+	// value before journaling: the script keeps the stored source/notes when
+	// the incoming ones are empty, and the journal entry must state the
+	// accepted state exactly as the doc will read after the write — an entry
+	// with an empty source next to a doc that kept "doc:README" is a small
+	// audit fiction. (The entry body is value/notes/source only — see
+	// journalAppend — so the merge stays three fields.)
+	stated := *f
+	if stated.Source == "" {
+		stated.Source = existing.Source
+	}
+	if stated.Notes == "" {
+		stated.Notes = existing.Notes
+	}
+	ref, err := c.journalAppend(ctx, &stated, existing.FactID, f.ObservedAt)
 	if err != nil {
 		return AddResult{}, err
 	}
@@ -587,10 +603,12 @@ func (c *Client) Keys(ctx context.Context, prefix, match, project, status string
 
 // NormalizePrefix validates a key prefix and strips the optional trailing
 // '*'. It is exported so CLI and MCP can reject bad prefixes before touching
-// the store.
+// the store. It is idempotent: the result is trimmed again after the strip
+// ("k *" normalizes to "k", not "k "), so what a guard-checked edge accepts
+// is exactly the term the store sees on the wire.
 func NormalizePrefix(prefix string) (string, error) {
 	p := strings.TrimSpace(prefix)
-	p = strings.TrimSuffix(p, "*")
+	p = strings.TrimSpace(strings.TrimSuffix(p, "*"))
 	if strings.Contains(p, "*") {
 		return "", fmt.Errorf("key prefix %q: only a trailing * is supported", prefix)
 	}

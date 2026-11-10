@@ -878,6 +878,14 @@ func (s *mcpServer) list(ctx context.Context, req *mcp.CallToolRequest, in listI
 	if sort != "updated" && sort != "key" {
 		return nil, factsOutput{}, fmt.Errorf("memento_list: sort must be updated|key, got %q", in.Sort)
 	}
+	// Shape before store contact (the keys/search edges validate the same
+	// way): an invalid status must not pay for a full navigation query
+	// before failing. The filter itself stays client-side — List has no
+	// server-side status term — but validation does not wait for it.
+	status, serr := resolveStatus(in.Status)
+	if serr != nil {
+		return nil, factsOutput{}, serr
+	}
 	c, err := s.newClient(ctx)
 	if err != nil {
 		return nil, factsOutput{}, storeError("memento_list", err)
@@ -890,12 +898,6 @@ func (s *mcpServer) list(ctx context.Context, req *mcp.CallToolRequest, in listI
 	// below shrinks the page, and truncation must survive the filtering.
 	// rawLen >= cap used to fire on an exactly-full page (a complete result).
 	rawLen := meta.Total
-	// List has no server-side status filter, so apply it here to keep the
-	// "trusted only by default" guarantee.
-	status, serr := resolveStatus(in.Status)
-	if serr != nil {
-		return nil, factsOutput{}, serr
-	}
 	if status != "" {
 		kept := facts[:0]
 		for _, f := range facts {

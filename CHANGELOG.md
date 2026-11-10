@@ -123,8 +123,17 @@ Fetch guard triage and fetch v1 fixes:
   (a match folded into an overlapping one is no longer reported), and the
   double redaction pass now covers every agent-visible field, not just the
   stored HTML.
-- SSRF tunnels: the NAT64 well-known prefix (`64:ff9b::/96`) is decoded to
-  its embedded IPv4 like 6to4 and Teredo already were.
+- SSRF tunnels: the NAT64 well-known prefix (`64:ff9b::/96`, and its local
+  `/48` variant `64:ff9b:1::/48`) is decoded to its embedded IPv4 like 6to4
+  and Teredo already were; arbitrary RFC 6052 prefixes stay a documented
+  residual.
+- A correction journals the MERGED accepted state (the new value with the
+  stored `source`/`notes` when the request left them empty): the journal
+  entry and the doc never disagree about the qualifiers. `memento keys "k *"
+  ` normalizes to `k` once (the guard-checked prefix is what the wire sees),
+  `memento_list` validates `status` before any store contact, and `memento
+  status`'s env list is now pinned against the loader's source (the
+  "kept in sync" comment is a test, not a promise).
 - `memento keys` shape errors answer before any store contact: a prefix that
   normalizes to empty (" " or "*") with no `--match` is a caller error, not
   a wrapped "the store is unreachable" advisory. `memento fetch --project`

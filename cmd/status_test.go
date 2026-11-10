@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -77,6 +78,43 @@ func TestPermWarning(t *testing.T) {
 // server resolves config through the NoCWD chain, so a cloned repo's
 // memento.conf in the editor's cwd cannot move the report (and its
 // credentialed request) to an attacker endpoint. The CLI keeps the cwd entry.
+// TestStatusEnvVarsMatchConfig pins the "kept in sync" claim of
+// statusEnvVars: every env variable config.LoadConfigFrom reads must be
+// listed in status (names only), and the list must not name a variable the
+// loader no longer reads. The comment alone drifted once already (the render
+// trio went missing in round 5); the source of the loader is the contract.
+func TestStatusEnvVarsMatchConfig(t *testing.T) {
+	src, err := os.ReadFile("../internal/config/config.go")
+	if err != nil {
+		t.Fatalf("read config.go: %v", err)
+	}
+	reads := map[string]bool{}
+	for _, m := range regexp.MustCompile(`os\.Getenv\("([A-Z0-9_]+)"\)`).FindAllStringSubmatch(string(src), -1) {
+		reads[m[1]] = true
+	}
+	if len(reads) < 20 {
+		t.Fatalf("the source scan found only %d env reads — the regexp or the file moved", len(reads))
+	}
+
+	listed := map[string]bool{}
+	for _, name := range statusEnvVars {
+		if listed[name] {
+			t.Errorf("statusEnvVars lists %q twice", name)
+		}
+		listed[name] = true
+	}
+	for name := range reads {
+		if !listed[name] {
+			t.Errorf("config reads %s but statusEnvVars omits it (an override invisible in status)", name)
+		}
+	}
+	for name := range listed {
+		if !reads[name] {
+			t.Errorf("statusEnvVars names %s but config.go no longer reads it (stale list)", name)
+		}
+	}
+}
+
 func TestCollectStatusConfigChain(t *testing.T) {
 	dir := t.TempDir()
 	hijack := `{"opensearch_url":"https://hijack.invalid:9999","opensearch_user":"u","opensearch_password":"p","allow_plaintext":true}`

@@ -211,15 +211,16 @@ func renderEgressProxyWith(cfg *config.Config, rawURL string, envProxy func(*htt
 		return "", fmt.Errorf("%v; refusing to render direct", verr)
 	}
 	// The final string is what lands in the renderer argv. User info is
-	// refused upstream (both branches); a credential-shaped artifact left in
-	// the path is refused as well, in both forms: a literal '@' in the string,
-	// and the decoded form ('%40' hides '@' from a literal check while any
-	// consumer that decodes the path sees '@' — the env branch already checks
-	// the decoded Path of the parsed struct, so the config branch must not be
-	// looser). The invariant is kept strictly: no '@' reaches the subprocess.
+	// refused upstream (both branches); a credential-shaped artifact left
+	// anywhere in the URL is refused too — both forms: a literal '@' in the
+	// string, and the decoded path form ('%40' hides '@' from a literal check
+	// while any consumer that decodes the path sees '@'; the env branch
+	// already checks the decoded Path of the parsed struct, so the config
+	// branch must not be looser). The invariant is kept strictly: no '@'
+	// reaches the subprocess, wherever in the URL it sat.
 	if u, perr := url.Parse(proxy); perr != nil || strings.Contains(proxy, "@") ||
 		(u != nil && strings.Contains(u.Path, "@")) {
-		return "", fmt.Errorf("the proxy URL carries an '@' in its path; refusing to render direct (argv is visible in /proc)")
+		return "", fmt.Errorf("the proxy URL carries an '@'; refusing to render direct (argv is visible in /proc)")
 	}
 	return proxy, nil
 }

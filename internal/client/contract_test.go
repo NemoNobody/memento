@@ -433,9 +433,16 @@ func TestAddEmptySourcePreservesSource(t *testing.T) {
 		t.Errorf("empty source must not be written over the stored source: %s", updateBody)
 	}
 
-	// The scripted correction path guards source the same way it guards notes.
+	// The scripted correction path guards source the same way it guards notes,
+	// and the journal entry it precedes carries the MERGED qualifiers (the
+	// accepted state, not the raw request).
 	updateBody = ""
+	var journalBody string
 	c2, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+		if r.Method == http.MethodPost && strings.HasPrefix(r.Path, "/memento-history-") && strings.HasSuffix(r.Path, "/_doc") {
+			journalBody = r.Body
+			return http.StatusOK, `{"_id":"journal-entry-1","result":"created"}`
+		}
 		if code, body := journalRoutesOK(r); code != http.StatusInternalServerError {
 			return code, body
 		}
@@ -443,6 +450,7 @@ func TestAddEmptySourcePreservesSource(t *testing.T) {
 		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
 			return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
 				"fact_id":"existing-id","key":"k","value":"old","source":"doc:README",
+				"notes":"dev config only",
 				"created_at":"2020-01-01T00:00:00Z","updated_at":"2020-01-01T00:00:00Z",
 				"observed_at":"2020-01-01T00:00:00Z"}}`
 		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
@@ -456,6 +464,13 @@ func TestAddEmptySourcePreservesSource(t *testing.T) {
 	}
 	if !strings.Contains(updateBody, "params.source != ''") {
 		t.Errorf("correction script must guard source replacement: %s", updateBody)
+	}
+	// The journal entry is the accepted state: the new value with the stored
+	// qualifiers, not the empty request fields.
+	for _, want := range []string{`"value":"new value"`, `"source":"doc:README"`, `"notes":"dev config only"`} {
+		if !strings.Contains(journalBody, want) {
+			t.Errorf("journal entry must carry %s: %s", want, journalBody)
+		}
 	}
 }
 

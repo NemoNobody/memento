@@ -118,7 +118,9 @@ func blockedIP(ip net.IP) bool {
 	}
 	// 6to4 (2002::/16) embeds the IPv4 in bytes 2..5; Teredo (2001:0::/32)
 	// stores the peer v4 one-complemented in the last four bytes; the NAT64
-	// well-known prefix (64:ff9b::/96) carries the v4 in the last four bytes.
+	// well-known prefix (64:ff9b::/96) and its local /48 variant
+	// (64:ff9b:1::/48, RFC 8215) carry the v4 in the last four bytes.
+	// Arbitrary RFC 6052 prefixes are not decoded — the documented residual.
 	if b := ip.To16(); b != nil {
 		if b[0] == 0x20 && b[1] == 0x02 {
 			return blockedIP(net.IP(append([]byte(nil), b[2:6]...)))
@@ -127,9 +129,11 @@ func blockedIP(ip net.IP) bool {
 			v4 := net.IP{^b[12], ^b[13], ^b[14], ^b[15]}
 			return blockedIP(v4)
 		}
-		if b[0] == 0x00 && b[1] == 0x64 && b[2] == 0xff && b[3] == 0x9b &&
-			b[4] == 0x00 && b[5] == 0x00 {
-			return blockedIP(net.IP(append([]byte(nil), b[12:16]...)))
+		if b[0] == 0x00 && b[1] == 0x64 && b[2] == 0xff && b[3] == 0x9b && b[4] == 0x00 {
+			// /96 (b[5]==0) and the local /48 (b[4..5]==00 01) share the head.
+			if b[5] == 0x00 || b[5] == 0x01 {
+				return blockedIP(net.IP(append([]byte(nil), b[12:16]...)))
+			}
 		}
 	}
 	return false
