@@ -131,9 +131,10 @@ store contact; findings come back as masked previews (the secret is never
 explicit approval re-calls with `confirm_secret: true`; at `reject` there is no
 bypass.
 
-Every read carries `age_days` and `stale` (per-category TTL: `config`/`endpoint`
-14 days, `location`/`behavior` 30 days, `context_map` never; writes reject
-unknown categories, so a typo cannot create facts that rot in the dark).
+Every read carries `age_days`, `age_hours` and `stale` (per-category TTL:
+`config`/`endpoint` 14 days, `location`/`behavior` 30 days, `context_map` never;
+writes reject unknown categories, so a typo cannot create facts that rot in the
+dark). `age_hours` disambiguates fresh facts that all share `age_days: 0`.  
 `stale: true` means re-verify against the source before trusting the
 fact — it is a signal, not a verdict.
 

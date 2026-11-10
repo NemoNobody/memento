@@ -80,7 +80,13 @@ MCP ergonomics (context economy, partial updates, batch):
 - Keys are trimmed at every edge (add/patch/get/keys/journal/obsolete/prune;
   the batch dupe check uses the trimmed key): `" k "` and `"k"` never become
   two docs. A compact answer never ships history (full rows only).
-- 15 MCP tools.
+- Answers say what the write did: a same-value touch (`memento_add`/
+  `memento_patch` with `changed: false`) carries a `note` spelling out that
+  only notes/source moved — `observed_at`, age and the journal untouched. The
+  batch answers add summary counters (`created`/`changed`/`touched`).
+- Reads carry `age_hours` next to `age_days`: a fresh fact with `age_days: 0`
+  can be 1 hour or 23 hours old, and the trust decision depends on it.
+- 16 MCP tools.
 
 Fetch guard triage and fetch v1 fixes:
 - The secret guard now grades findings: `high` (vendor prefixes, PEM blocks,

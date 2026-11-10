@@ -100,7 +100,7 @@ func runMCPServer(confPath string) error {
 			"(include_history=true with compact=false); memento_journal is the " +
 			"history tool. " +
 			"compact is TRUE by default (rows scan cheap; memento_get reads the value); compact=false restores full values. " +
-			"Answers carry age_days/stale: a stale fact " +
+			"Answers carry age_days/age_hours/stale: a stale fact " +
 			"must be re-verified against the source before being trusted.",
 	}, s.search)
 
@@ -109,7 +109,7 @@ func runMCPServer(confPath string) error {
 		Description: "Get facts by exact key: key=... for one fact (found=false when " +
 			"there is no such fact — that is not an error), keys=[...] for a batch of " +
 			"up to 10 (items[] with per-key found). History is omitted unless " +
-			"include_history=true. Answers carry age_days/stale: a stale fact must be " +
+			"include_history=true. Answers carry age_days/age_hours/stale: a stale fact must be " +
 			"re-verified against the source before being trusted.",
 	}, s.get)
 
@@ -315,6 +315,7 @@ type factView struct {
 	Notes        string        `json:"notes,omitempty" jsonschema:"qualifiers: what was checked, how far, caveats (compact mode: first 100 runes)"`
 	ObservedAt   string        `json:"observed_at" jsonschema:"RFC3339 when the current value was observed"`
 	AgeDays      int           `json:"age_days" jsonschema:"whole days since the observation; -1 when observed_at is unknown"`
+	AgeHours     int           `json:"age_hours" jsonschema:"whole hours since the observation; -1 when observed_at is unknown (0 age_days can mean 1 hour or 23 — hours disambiguate fresh facts)"`
 	Stale        bool          `json:"stale" jsonschema:"true when age passes the category TTL (config/endpoint 14d, location/behavior 30d, context_map never) — re-verify against the source before trusting"`
 	History      []historyView `json:"history,omitempty" jsonschema:"previous observations, oldest first; present only when include_history=true"`
 	CreatedAt    string        `json:"created_at,omitempty" jsonschema:"RFC3339 creation time (dropped in compact mode)"`
@@ -369,6 +370,7 @@ func newFactView(f model.Fact, includeHistory, compact bool) factView {
 		Notes:        f.Notes,
 		ObservedAt:   rfc3339OrEmpty(f.ObservedAt),
 		AgeDays:      f.AgeDays(time.Now().UTC()),
+		AgeHours:     f.AgeHours(time.Now().UTC()),
 		Stale:        f.Stale(time.Now().UTC()),
 		CreatedAt:    rfc3339OrEmpty(f.CreatedAt),
 		UpdatedAt:    rfc3339OrEmpty(f.UpdatedAt),
@@ -668,6 +670,10 @@ type addOutput struct {
 	// had none). It is what closes the "did I replace the critical value or
 	// just touch it?" ambiguity.
 	PreviousSummary string `json:"previous_summary,omitempty" jsonschema:"summary of the value this write replaced (empty when the fact was created fresh or the prior version had no summary)"`
+	// Note explains the least-obvious answer (a same-value touch): without
+	// it, created=false+changed=false reads like a no-op and agents mis-age
+	// the fact.
+	Note string `json:"note,omitempty" jsonschema:"what exactly this write did when it was not a new version (same-value touch: observed_at and age keep counting; notes/source moved only)"`
 }
 
 func (s *mcpServer) add(ctx context.Context, req *mcp.CallToolRequest, in addInput) (*mcp.CallToolResult, addOutput, error) {
@@ -747,8 +753,12 @@ func (s *mcpServer) addOne(ctx context.Context, cfg *config.Config, c *client.Cl
 	if err != nil {
 		return addOutput{}, storeError("memento_add", err)
 	}
-	return addOutput{Key: in.Key, Created: res.Created, Changed: res.Changed,
-		Status: f.Status, PreviousSummary: res.PreviousSummary}, nil
+	out := addOutput{Key: in.Key, Created: res.Created, Changed: res.Changed,
+		Status: f.Status, PreviousSummary: res.PreviousSummary}
+	if !res.Created && !res.Changed {
+		out.Note = "same-value touch: observed_at and the journal untouched, the fact keeps aging (re-verify when stale); notes/source moved only"
+	}
+	return out, nil
 }
 
 // addBatchInput carries add-shaped items; confirm_secret is per item, so a
@@ -758,8 +768,12 @@ type addBatchInput struct {
 }
 
 type addBatchOutput struct {
-	Count int            `json:"count" jsonschema:"number of items processed"`
-	Items []addBatchItem `json:"items" jsonschema:"per-item outcome in request order; a failed item does not roll back the others"`
+	Count int `json:"count" jsonschema:"number of items processed"`
+	// Summary counters: the whole-session ritual without re-reading items.
+	Created int            `json:"created" jsonschema:"items newly created"`
+	Changed int            `json:"changed" jsonschema:"items that accepted a new version (includes created)"`
+	Touched int            `json:"touched" jsonschema:"items touched on the same value (notes/source only)"`
+	Items   []addBatchItem `json:"items" jsonschema:"per-item outcome in request order; a failed item does not roll back the others"`
 }
 
 type addBatchItem struct {
@@ -807,6 +821,16 @@ func (s *mcpServer) addBatch(ctx context.Context, req *mcp.CallToolRequest, in a
 		item := addBatchItem{Key: strings.TrimSpace(it.Key), Created: res.Created, Changed: res.Changed, Status: res.Status}
 		if err != nil {
 			item.Error = err.Error()
+		} else {
+			if res.Created {
+				out.Created++
+			}
+			if res.Changed {
+				out.Changed++
+			}
+			if !res.Changed {
+				out.Touched++
+			}
 		}
 		out.Items = append(out.Items, item)
 	}
