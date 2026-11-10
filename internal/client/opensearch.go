@@ -575,19 +575,24 @@ func NormalizePrefix(prefix string) (string, error) {
 // coming back verified both leave entries. The journal entry carries the
 // current value with the reason folded into notes, so "when did this die and
 // why" is answerable from the log.
+// appendNote joins a line into notes without leading/trailing blank lines
+// (the shared join for retire reasons and dated note appends).
+func appendNote(base, line string) string {
+	if line == "" {
+		return base
+	}
+	if base == "" {
+		return line
+	}
+	return base + "\n" + line
+}
+
 func (c *Client) Obsolete(ctx context.Context, key, reason string) error {
 	existing, err := c.Get(ctx, key)
 	if err != nil {
 		return fmt.Errorf("obsolete fact: %w", err)
 	}
-	notes := existing.Notes
-	if reason != "" {
-		if notes == "" {
-			notes = reason
-		} else {
-			notes = notes + "\n" + reason
-		}
-	}
+	notes := appendNote(existing.Notes, reason)
 	currentRef := existing.CurrentRef
 	if existing.Status != "obsolete" {
 		stated := *existing
@@ -655,6 +660,10 @@ if (params.notes_append != null) {
   String n = ctx._source.notes == null ? '' : ctx._source.notes.toString();
   ctx._source.notes = n.isEmpty() ? params.notes_append : n + '\n' + params.notes_append;
 }
+if (params.reason_append != null) {
+  String n = ctx._source.notes == null ? '' : ctx._source.notes.toString();
+  ctx._source.notes = n.isEmpty() ? params.reason_append : n + '\n' + params.reason_append;
+}
 if (params.source != null) { ctx._source.source = params.source; }
 if (params.status != null) { ctx._source.status = params.status; }
 if (params.observed_at != null) { ctx._source.observed_at = params.observed_at; }
@@ -701,7 +710,6 @@ func (c *Client) Patch(ctx context.Context, key string, p PatchFields) (PatchRes
 	valueChanged := p.Value != "" && p.Value != existing.Value
 	statusChanged := p.Status != "" && p.Status != existing.Status
 	resurrect := statusChanged && p.Status == "verified"
-	retire := statusChanged && p.Status == "obsolete"
 
 	// notes for the doc: replace wins, then append, then the retire reason.
 	newNotes := existing.Notes
@@ -711,11 +719,13 @@ func (c *Client) Patch(ctx context.Context, key string, p PatchFields) (PatchRes
 	appendLine := ""
 	if p.NotesAppend != "" {
 		appendLine = time.Now().UTC().Format("2006-01-02") + ": " + p.NotesAppend
-		if newNotes == "" {
-			newNotes = appendLine
-		} else {
-			newNotes = newNotes + "\n" + appendLine
-		}
+		newNotes = appendNote(newNotes, appendLine)
+	}
+	journalNotes := newNotes
+	retireReason := ""
+	if p.Status == "obsolete" && p.Reason != "" {
+		retireReason = p.Reason
+		journalNotes = appendNote(journalNotes, retireReason)
 	}
 
 	if valueChanged {
@@ -742,7 +752,11 @@ func (c *Client) Patch(ctx context.Context, key string, p PatchFields) (PatchRes
 		if valueChanged {
 			stated.Value = p.Value
 		}
-		stated.Notes = newNotes
+		// The journal carries the notes as of journal time — a concurrent
+		// atomic append that landed after this Get is not in the snapshot (the
+		// doc stays right, the log lags by one append; the journal is a
+		// history of accepted state, not a changelog of every byte).
+		stated.Notes = journalNotes
 		if p.Source != "" {
 			stated.Source = p.Source
 		}
@@ -759,16 +773,17 @@ func (c *Client) Patch(ctx context.Context, key string, p PatchFields) (PatchRes
 	}
 
 	params := map[string]interface{}{
-		"value":        nil,
-		"summary":      nil,
-		"notes":        nil,
-		"notes_append": nil,
-		"source":       nil,
-		"status":       nil,
-		"observed_at":  nil,
-		"current_ref":  nil,
-		"updated_at":   now.Format(time.RFC3339),
-		"updated_by":   c.resolveAuthor(ctx).Author,
+		"value":         nil,
+		"summary":       nil,
+		"notes":         nil,
+		"notes_append":  nil,
+		"reason_append": nil,
+		"source":        nil,
+		"status":        nil,
+		"observed_at":   nil,
+		"current_ref":   nil,
+		"updated_at":    now.Format(time.RFC3339),
+		"updated_by":    c.resolveAuthor(ctx).Author,
 	}
 	if valueChanged {
 		params["value"] = p.Value
@@ -791,16 +806,12 @@ func (c *Client) Patch(ctx context.Context, key string, p PatchFields) (PatchRes
 	} else if appendLine != "" {
 		params["notes_append"] = appendLine
 	}
-	if retire && p.Reason != "" {
-		// The reason folds into notes atomically (the doc-write path above
-		// already includes it in newNotes for the journal; the doc gets it
-		// through the same append).
-		if appendLine != "" {
-			params["notes"] = newNotes + "\n" + p.Reason
-			params["notes_append"] = nil
-		} else {
-			params["notes"] = newNotes + "\n" + p.Reason
-		}
+	if retireReason != "" {
+		// The reason appends INSIDE the script: folding it into a Go-side
+		// notes replace would be a read-modify-write of the stale Get, which
+		// silently drops a concurrent atomic notes_append — the exact race
+		// the scripted patch exists to prevent.
+		params["reason_append"] = retireReason
 	}
 	if p.Source != "" {
 		params["source"] = p.Source

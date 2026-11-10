@@ -220,6 +220,10 @@ func TestMCPServerDocToolsValidateOffline(t *testing.T) {
 		{"memento_fetch_doc", map[string]any{"url": ""}, "empty url"},
 		{"memento_fetch_doc", map[string]any{"url": "ftp://allowed.example.com/x"}, "scheme"},
 		{"memento_fetch_doc", map[string]any{"url": "https://denied.example.com/x"}, "fetch_allow_hosts"},
+		// The project tag is stored text: it is guard-scanned at the call,
+		// before the store (the cache-hit re-tag path never sees the content
+		// guard, so the gate lives here).
+		{"memento_fetch_doc", map[string]any{"url": "https://allowed.example.com/x", "project": "p " + guardSentinel}, "secret-guard"},
 		{"memento_search_docs", map[string]any{"query": ""}, "query"},
 		{"memento_get_doc", map[string]any{"hash": ""}, "hash"},
 	} {
@@ -606,9 +610,10 @@ func TestPickMatchedSection(t *testing.T) {
 	if i := pickMatchedSection(sections, terms); i != 2 {
 		t.Errorf("pick = %d, want 2 (section 3 has ALL terms; section 1 lacks delta)", i)
 	}
-	// No section has all terms: the most distinct terms wins.
-	if i := pickMatchedSection(sections, queryTerms("alpha zeta")); i != 0 && i != 2 {
-		t.Errorf("fallback pick = %d, want 0 (one term, first)", i)
+	// No section has all terms: the most distinct terms wins; ties go to the
+	// first section (pickMatchedSection is deterministic).
+	if i := pickMatchedSection(sections, queryTerms("alpha zeta")); i != 0 {
+		t.Errorf("fallback pick = %d, want 0 (one term each, first wins)", i)
 	}
 	if i := pickMatchedSection(sections, queryTerms("nonexistent")); i != -1 {
 		t.Errorf("no-match pick = %d, want -1", i)

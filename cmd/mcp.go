@@ -96,7 +96,9 @@ func runMCPServer(confPath string) error {
 			"only — it does NOT match keys, so use memento_get for an exact key " +
 			"(memento_keys navigates keys by pattern). By default returns only " +
 			"trusted ('verified') facts; obsolete facts are superseded and must not " +
-			"be treated as current. History is omitted unless include_history=true. " +
+			"be treated as current. History ships only on full rows " +
+			"(include_history=true with compact=false); memento_journal is the " +
+			"history tool. " +
 			"compact=true drops full values (rows scan cheap; memento_get reads). " +
 			"Answers carry age_days/stale: a stale fact " +
 			"must be re-verified against the source before being trusted.",
@@ -165,8 +167,10 @@ func runMCPServer(confPath string) error {
 			"restores full rows, memento_get reads any single fact. SORT by default " +
 			"updated (newest activity first: 'what moved since last session'; note " +
 			"a same-value touch moves updated_at without changing age/stale); " +
-			"sort=key for stable navigation. History is omitted unless " +
-			"include_history=true.",
+			"sort=key for stable navigation. History ships only on full rows " +
+			"(include_history=true with compact=false); memento_journal is the " +
+			"history tool. A zero-hit answer carries a hint naming the next " +
+			"right move.",
 	}, s.list)
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -334,10 +338,11 @@ func truncRunes(s string, n int) string {
 //
 // compact keeps the fields an agent navigates by (key, summary, category,
 // status, source, notes head, age/stale, updated_at) and drops the bulk
-// (value, authorship labels, created_at): full facts are ~5x the tokens of a
-// compact one, and list/search over a whole project is the most expensive
-// call in a session. A fact without a summary keeps a 100-rune head of its
-// value so it is not an empty row.
+// (value, authorship labels, created_at, history): full facts are ~5x the
+// tokens of a compact one, and list/search over a whole project is the most
+// expensive call in a session. A fact without a summary keeps a 100-rune
+// head of its value so it is not an empty row. History is a full-row-only
+// option: compact rows are navigation; memento_journal reads the history.
 func newFactView(f model.Fact, includeHistory, compact bool) factView {
 	v := factView{
 		Key:          f.Key,
@@ -366,7 +371,7 @@ func newFactView(f model.Fact, includeHistory, compact bool) factView {
 			v.Value = ""
 		}
 	}
-	if includeHistory {
+	if includeHistory && !compact {
 		history := make([]historyView, 0, len(f.History))
 		for _, h := range f.History {
 			history = append(history, historyView{
@@ -626,7 +631,7 @@ func (s *mcpServer) add(ctx context.Context, req *mcp.CallToolRequest, in addInp
 	if cerr != nil {
 		return nil, addOutput{}, storeError("memento_add", cerr)
 	}
-	out, err := s.addOne(ctx, cfg, in)
+	out, err := s.addOne(ctx, cfg, nil, in)
 	if err != nil {
 		return nil, addOutput{}, err
 	}
@@ -637,10 +642,15 @@ func (s *mcpServer) add(ctx context.Context, req *mcp.CallToolRequest, in addInp
 // config arrives loaded (the guard and the client share it; a locked wallet
 // is not prompted twice), so memento_add_batch runs the identical pipeline
 // per item without re-reading config per call.
-func (s *mcpServer) addOne(ctx context.Context, cfg *config.Config, in addInput) (addOutput, error) {
+// addOne is the shared write path of memento_add and memento_add_batch.
+// c is the shared client (a batch reuses one connection and one EnsureIndex);
+// nil means "create one for this single call". The key is trimmed at this
+// edge: "k " and "k" must not become two docs with diverging history.
+func (s *mcpServer) addOne(ctx context.Context, cfg *config.Config, c *client.Client, in addInput) (addOutput, error) {
 	// Validate the shape before guard and store: an empty key produces a
 	// cryptic store error, and an unknown category never ages (silent rot).
-	if strings.TrimSpace(in.Key) == "" {
+	in.Key = strings.TrimSpace(in.Key)
+	if in.Key == "" {
 		return addOutput{}, errors.New("memento_add: key is required")
 	}
 	if strings.TrimSpace(in.Value) == "" {
@@ -662,16 +672,19 @@ func (s *mcpServer) addOne(ctx context.Context, cfg *config.Config, in addInput)
 	// The guard runs before any store contact: a rejected write must be
 	// rejected even when OpenSearch is down.
 	if err := guardCheck(cfg.SecretGuard, in.ConfirmSecret,
-		guardField{"key", in.Key},
-		guardField{"value", in.Value},
-		guardField{"notes", in.Notes},
-		guardField{"summary", in.Summary},
-		guardField{"source", in.Source}); err != nil {
+		guardField{Name: "key", Text: in.Key},
+		guardField{Name: "value", Text: in.Value},
+		guardField{Name: "notes", Text: in.Notes},
+		guardField{Name: "summary", Text: in.Summary},
+		guardField{Name: "source", Text: in.Source}); err != nil {
 		return addOutput{}, err
 	}
-	c, err := s.clientFromConfig(ctx, cfg)
-	if err != nil {
-		return addOutput{}, storeError("memento_add", err)
+	if c == nil {
+		var cerr error
+		c, cerr = s.clientFromConfig(ctx, cfg)
+		if cerr != nil {
+			return addOutput{}, storeError("memento_add", cerr)
+		}
 	}
 	f := model.NewFact(in.Key, in.Value, in.Category, in.Project, in.Source, in.Notes)
 	f.Summary = in.Summary
@@ -696,7 +709,7 @@ type addBatchOutput struct {
 
 type addBatchItem struct {
 	Key     string `json:"key" jsonschema:"the item's key"`
-	Created bool   `json:"created,omitempty" jsonschema:"see memento_add"`
+	Created bool   `json:"created" jsonschema:"see memento_add"`
 	Changed bool   `json:"changed" jsonschema:"see memento_add"`
 	Status  string `json:"status,omitempty" jsonschema:"status of the stored fact"`
 	// Error carries the item's rejection (guard hit, validation, store
@@ -711,22 +724,33 @@ func (s *mcpServer) addBatch(ctx context.Context, req *mcp.CallToolRequest, in a
 	}
 	// Duplicate keys in one batch are ambiguous by construction: the second
 	// item silently corrects the first (order-dependent created/changed and
-	// summary requirements). Reject the shape instead of picking a winner.
+	// summary requirements). Reject the shape instead of picking a winner —
+	// on the TRIMMED key, which is what addOne stores.
 	seen := make(map[string]bool, len(in.Items))
 	for _, it := range in.Items {
-		if seen[it.Key] {
-			return nil, addBatchOutput{}, fmt.Errorf("memento_add_batch: duplicate key %q in one batch", it.Key)
+		k := strings.TrimSpace(it.Key)
+		if seen[k] {
+			return nil, addBatchOutput{}, fmt.Errorf("memento_add_batch: duplicate key %q in one batch", k)
 		}
-		seen[it.Key] = true
+		seen[k] = true
 	}
 	cfg, cerr := s.loadConfig()
 	if cerr != nil {
 		return nil, addBatchOutput{}, storeError("memento_add_batch", cerr)
 	}
+	// One client for the batch: a shared connection and a single EnsureIndex
+	// (the per-item version made the "one round-trip" tool ten round-trips).
+	c, cErr := s.clientFromConfig(ctx, cfg)
+	if cErr != nil {
+		cErr = storeError("memento_add_batch", cErr)
+	}
 	out := addBatchOutput{Items: make([]addBatchItem, 0, len(in.Items))}
 	for _, it := range in.Items {
-		res, err := s.addOne(ctx, cfg, it)
+		res, err := s.addOne(ctx, cfg, c, it)
 		item := addBatchItem{Key: it.Key, Created: res.Created, Changed: res.Changed, Status: res.Status}
+		if cErr != nil {
+			err = cErr
+		}
 		if err != nil {
 			item.Error = err.Error()
 		}
@@ -762,6 +786,7 @@ func (s *mcpServer) patch(ctx context.Context, req *mcp.CallToolRequest, in patc
 	if strings.TrimSpace(in.Key) == "" {
 		return nil, patchOutput{}, errors.New("memento_patch: key is required")
 	}
+	in.Key = strings.TrimSpace(in.Key)
 	cfg, cerr := s.loadConfig()
 	if cerr != nil {
 		return nil, patchOutput{}, storeError("memento_patch", cerr)
@@ -770,13 +795,13 @@ func (s *mcpServer) patch(ctx context.Context, req *mcp.CallToolRequest, in patc
 	// covers all of them, notes_append and reason included (a secret can
 	// arrive in a dated note as easily as in a value).
 	if err := guardCheck(cfg.SecretGuard, in.ConfirmSecret,
-		guardField{"key", in.Key},
-		guardField{"value", in.Value},
-		guardField{"summary", in.Summary},
-		guardField{"notes", in.Notes},
-		guardField{"notes_append", in.NotesAppend},
-		guardField{"source", in.Source},
-		guardField{"reason", in.Reason}); err != nil {
+		guardField{Name: "key", Text: in.Key},
+		guardField{Name: "value", Text: in.Value},
+		guardField{Name: "summary", Text: in.Summary},
+		guardField{Name: "notes", Text: in.Notes},
+		guardField{Name: "notes_append", Text: in.NotesAppend},
+		guardField{Name: "source", Text: in.Source},
+		guardField{Name: "reason", Text: in.Reason}); err != nil {
 		return nil, patchOutput{}, err
 	}
 	c, err := s.clientFromConfig(ctx, cfg)
@@ -852,7 +877,14 @@ func (s *mcpServer) list(ctx context.Context, req *mcp.CallToolRequest, in listI
 		}
 		facts = kept
 	}
-	return nil, factsOutput{Count: len(facts), Truncated: rawLen > client.NavSizeCap, Skipped: meta.Skipped, Facts: newFactViews(facts, in.IncludeHistory, compact)}, nil
+	out := factsOutput{Count: len(facts), Truncated: rawLen > client.NavSizeCap, Skipped: meta.Skipped, Facts: newFactViews(facts, in.IncludeHistory, compact)}
+	if out.Count == 0 {
+		// Same contract as search: a bare 0 invites guessing; name the next
+		// right move. The status filter runs client-side, so an all-obsolete
+		// project legitimately lands here at the verified default.
+		out.Hint = "0 facts: the default hides obsolete facts — try status:'any'; drop or widen the prefix; memento_keys navigates keys across projects; a brand-new project is a legitimate 0"
+	}
+	return nil, out, nil
 }
 
 type keysInput struct {
@@ -915,7 +947,7 @@ func (s *mcpServer) obsolete(ctx context.Context, req *mcp.CallToolRequest, in o
 		return nil, obsoleteOutput{}, storeError("memento_obsolete", cerr)
 	}
 	if err := guardCheck(cfg.SecretGuard, in.ConfirmSecret,
-		guardField{"reason", in.Reason}); err != nil {
+		guardField{Name: "reason", Text: in.Reason}); err != nil {
 		return nil, obsoleteOutput{}, err
 	}
 	c, err := s.clientFromConfig(ctx, cfg)
@@ -1183,6 +1215,13 @@ func (s *mcpServer) fetchDoc(ctx context.Context, req *mcp.CallToolRequest, in f
 		// store write: the repo mapping is machine-specific and must never
 		// enter the shared index.
 		return nil, fetchDocOutput{Local: true, Path: p}, nil
+	}
+	// The project tag is agent-supplied text that lands in a shared index,
+	// and the cache-hit path re-tags a stored doc WITHOUT the content
+	// guard (guardFetch gates only the fresh path): scan the tag here.
+	if err := guardCheck(cfg.SecretGuard, in.ConfirmSecret,
+		guardField{Name: "project", Text: in.Project}); err != nil {
+		return nil, fetchDocOutput{}, err
 	}
 	c, err := client.NewClient(cfg) // FetchDoc ensures the docs index itself
 	if err != nil {

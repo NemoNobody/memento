@@ -171,7 +171,8 @@ func TestPatchResurrectSetsObservedAt(t *testing.T) {
 	}
 }
 
-// TestPatchObsoleteWithReasonJournals: reason folds into notes and the
+// TestPatchObsoleteWithReasonJournals: reason folds into notes ATOMICALLY
+// (reason_append inside the script), the journal entry carries it, and the
 // transition is journaled (audit symmetry with memento_obsolete).
 func TestPatchObsoleteWithReasonJournals(t *testing.T) {
 	var body string
@@ -187,11 +188,22 @@ func TestPatchObsoleteWithReasonJournals(t *testing.T) {
 		t.Errorf("res = %+v, want Changed=true Status=obsolete", res)
 	}
 	params := patchParams(t, body)
-	if params["notes"] != "n\nfile deleted" {
-		t.Errorf("notes = %v, want the reason folded in", params["notes"])
+	// The reason appends inside the script (atomic), never as a Go-side
+	// notes replace that would race a concurrent notes_append.
+	if params["reason_append"] != "file deleted" {
+		t.Errorf("reason_append = %v, want 'file deleted'", params["reason_append"])
 	}
-	if !fake.sawAnyPrefix("/memento-history-") {
-		t.Error("obsolete via patch must journal the transition")
+	if v, ok := params["notes"]; !ok || v != nil {
+		t.Errorf("notes must stay null on retire-with-reason (the script appends), got %v", params["notes"])
+	}
+	// The journal entry carries the reason: "why did this die" must be
+	// answerable from the log (audit symmetry with memento_obsolete).
+	appends := fake.requestsFor(http.MethodPost, "/memento-history-"+time.Now().UTC().Format("2006.01")+"/_doc")
+	if len(appends) != 1 {
+		t.Fatalf("journal appends = %d, want 1", len(appends))
+	}
+	if !strings.Contains(appends[0].Body, "n\\nfile deleted") {
+		t.Errorf("journal entry must carry the folded reason: %s", appends[0].Body)
 	}
 }
 
@@ -222,5 +234,29 @@ func TestPatchValidation(t *testing.T) {
 	if _, err := notFound.Patch(ctx, "nope", PatchFields{NotesAppend: "x"}); err == nil ||
 		!strings.Contains(err.Error(), "not found") {
 		t.Errorf("missing fact: err = %v, want a not-found refusal", err)
+	}
+}
+
+// TestPatchRetireEmptyNotes: the reason join must not produce a leading
+// blank line when notes are empty (the painless append and the journal
+// snapshot both use the same conditional join).
+func TestPatchRetireEmptyNotes(t *testing.T) {
+	var body string
+	c, fake := newFakeClient(t, patchRespond(
+		`{"key":"k","value":"v","category":"config","project":"p","status":"verified"}`,
+		&body))
+	if _, err := c.Patch(context.Background(), "k", PatchFields{Status: "obsolete", Reason: "gone"}); err != nil {
+		t.Fatalf("Patch: %v", err)
+	}
+	appends := fake.requestsFor(http.MethodPost, "/memento-history-"+time.Now().UTC().Format("2006.01")+"/_doc")
+	if len(appends) != 1 {
+		t.Fatalf("journal appends = %d, want 1", len(appends))
+	}
+	var je map[string]any
+	if err := json.Unmarshal([]byte(appends[0].Body), &je); err != nil {
+		t.Fatalf("journal body: %v", err)
+	}
+	if je["notes"] != "gone" {
+		t.Errorf("journal notes = %q, want exactly 'gone' (no leading newline)", je["notes"])
 	}
 }
