@@ -98,7 +98,7 @@ func childEnv(overrides []string) []string {
 
 var wantTools = []string{
 	"memento_status", "memento_search", "memento_get",
-	"memento_add", "memento_add_batch", "memento_patch", "memento_list", "memento_keys",
+	"memento_add", "memento_add_batch", "memento_patch", "memento_patch_batch", "memento_list", "memento_keys",
 	"memento_prune", "memento_obsolete",
 	"memento_journal", "memento_history_info",
 	"memento_fetch_doc", "memento_get_doc", "memento_search_docs",
@@ -742,6 +742,11 @@ func TestMCPServerM1ValidationOffline(t *testing.T) {
 		{"memento_add_batch", map[string]any{"items": []any{
 			map[string]any{"key": " k ", "value": "v", "category": "config"},
 			map[string]any{"key": "k", "value": "w", "category": "config"},
+		}}, "duplicate key"},
+		{"memento_patch_batch", map[string]any{"items": []any{}}, "1..10"},
+		{"memento_patch_batch", map[string]any{"items": []any{
+			map[string]any{"key": "k", "notes_append": "a"},
+			map[string]any{"key": " k ", "notes_append": "b"},
 		}}, "duplicate key"},
 		// The project label is agent-supplied identity text in the shared
 		// index: the fact path gates it exactly like the fetch path.

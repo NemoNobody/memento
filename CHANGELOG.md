@@ -59,6 +59,9 @@ MCP ergonomics (context economy, partial updates, batch):
 - New `memento_add_batch` (1..10 facts per call, the session-end ritual in
   one round-trip): per-item guard and `confirm_secret`, duplicate keys
   rejected, partial success reported per item.
+- New `memento_patch_batch` (1..10 patches per call): the same batch shape
+  and per-item contract as `memento_add_batch`, `memento_patch` field
+  semantics per item (never creates).
 - `memento_get` accepts `keys: [...]` (up to 10) for batch reads
   (`items[]` with per-key `found`).
 - `memento_add` answers say what happened: `created`, `changed` (false =

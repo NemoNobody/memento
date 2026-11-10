@@ -157,6 +157,17 @@ func runMCPServer(confPath string) error {
 	}, s.patch)
 
 	mcp.AddTool(srv, &mcp.Tool{
+		Name: "memento_patch_batch",
+		Description: "Patch 1..10 existing facts in one call (the session-end " +
+			"ritual when the facts already exist: dated notes, status flips, " +
+			"git-state corrections in a single round-trip). Per-item guard and " +
+			"confirm_secret (one approved false positive never whitewashes the " +
+			"rest); duplicate keys are rejected; partial success is legal — the " +
+			"per-item answer says changed/status/error for each. Same semantics as " +
+			"memento_patch.",
+	}, s.patchBatch)
+
+	mcp.AddTool(srv, &mcp.Tool{
 		Name: "memento_list",
 		Description: "List the facts stored for a project. Defaults to trusted " +
 			"('verified') facts only. prefix keeps only keys starting with it " +
@@ -823,16 +834,33 @@ type patchOutput struct {
 	Key     string `json:"key" jsonschema:"the patched key"`
 	Changed bool   `json:"changed" jsonschema:"true = new version accepted (value change, status transition; journal entry written); false = qualifier-only touch"`
 	Status  string `json:"status" jsonschema:"status of the fact after the patch"`
+	Note    string `json:"note,omitempty" jsonschema:"set on a qualifier-only touch: observed_at and age untouched, the journal not appended"`
 }
 
 func (s *mcpServer) patch(ctx context.Context, req *mcp.CallToolRequest, in patchInput) (*mcp.CallToolResult, patchOutput, error) {
+	// Shape first: a malformed patch is the caller's problem, answered before
+	// config, guard and any store contact (the list/search/keys contract).
 	if strings.TrimSpace(in.Key) == "" {
 		return nil, patchOutput{}, errors.New("memento_patch: key is required")
 	}
-	in.Key = strings.TrimSpace(in.Key)
-	// Shape first: a malformed patch is the caller's problem, answered before
-	// config, guard and any store contact (the list/search/keys contract).
-	fields := client.PatchFields{
+	if err := client.ValidatePatchFields(patchFields(in)); err != nil {
+		return nil, patchOutput{}, err
+	}
+	cfg, cerr := s.loadConfig()
+	if cerr != nil {
+		return nil, patchOutput{}, storeError("memento_patch", cerr)
+	}
+	out, err := s.patchOne(ctx, cfg, nil, nil, in)
+	if err != nil {
+		return nil, patchOutput{}, err
+	}
+	return nil, out, nil
+}
+
+// patchFields maps the MCP input onto the client's patch shape (one place,
+// shared by the single and batch paths).
+func patchFields(in patchInput) client.PatchFields {
+	return client.PatchFields{
 		Value:       in.Value,
 		Summary:     in.Summary,
 		Notes:       in.Notes,
@@ -841,12 +869,21 @@ func (s *mcpServer) patch(ctx context.Context, req *mcp.CallToolRequest, in patc
 		Status:      in.Status,
 		Reason:      in.Reason,
 	}
-	if err := client.ValidatePatchFields(fields); err != nil {
-		return nil, patchOutput{}, err
+}
+
+// patchOne is the shared write path of memento_patch and memento_patch_batch
+// (the addOne contract): validate → guard → write. c is the shared client
+// (a batch reuses one connection); nil means "create one". cErr is a
+// client-creation failure the batch already paid for: the item still runs
+// validation and guard and reports the failure WITHOUT a store attempt.
+func (s *mcpServer) patchOne(ctx context.Context, cfg *config.Config, c *client.Client, cErr error, in patchInput) (patchOutput, error) {
+	in.Key = strings.TrimSpace(in.Key)
+	if in.Key == "" {
+		return patchOutput{}, errors.New("memento_patch: key is required")
 	}
-	cfg, cerr := s.loadConfig()
-	if cerr != nil {
-		return nil, patchOutput{}, storeError("memento_patch", cerr)
+	fields := patchFields(in)
+	if err := client.ValidatePatchFields(fields); err != nil {
+		return patchOutput{}, err
 	}
 	// Every provided field is user-supplied text on a write path — the guard
 	// covers all of them, notes_append and reason included (a secret can
@@ -859,17 +896,89 @@ func (s *mcpServer) patch(ctx context.Context, req *mcp.CallToolRequest, in patc
 		guardField{Name: "notes_append", Text: in.NotesAppend},
 		guardField{Name: "source", Text: in.Source},
 		guardField{Name: "reason", Text: in.Reason}); err != nil {
-		return nil, patchOutput{}, err
+		return patchOutput{}, err
 	}
-	c, err := s.clientFromConfig(ctx, cfg)
-	if err != nil {
-		return nil, patchOutput{}, storeError("memento_patch", err)
+	if cErr != nil {
+		return patchOutput{}, cErr
+	}
+	if c == nil {
+		var cerr error
+		c, cerr = s.clientFromConfig(ctx, cfg)
+		if cerr != nil {
+			return patchOutput{}, storeError("memento_patch", cerr)
+		}
 	}
 	res, err := c.Patch(ctx, in.Key, fields)
 	if err != nil {
-		return nil, patchOutput{}, storeError("memento_patch", err)
+		return patchOutput{}, storeError("memento_patch", err)
 	}
-	return nil, patchOutput{Key: in.Key, Changed: res.Changed, Status: res.Status}, nil
+	out := patchOutput{Key: in.Key, Changed: res.Changed, Status: res.Status}
+	if !res.Changed {
+		out.Note = "qualifier-only touch: observed_at and the journal untouched, the fact keeps aging (re-verify when stale)"
+	}
+	return out, nil
+}
+
+// patchBatchInput carries patch-shaped items; confirm_secret is per item
+// (the add_batch rule): one approved false positive never whitewashes the
+// next item.
+type patchBatchInput struct {
+	Items []patchInput `json:"items" jsonschema:"1..10 patch-shaped items (key, value/notes_append/status, ...); duplicate keys are rejected"`
+}
+
+type patchBatchOutput struct {
+	Count int `json:"count" jsonschema:"number of items processed"`
+	// Summary counters (the add_batch rule): what the batch actually did.
+	Changed int              `json:"changed" jsonschema:"items that accepted a new version (value change, status transition)"`
+	Touched int              `json:"touched" jsonschema:"items patched on qualifiers only (no journal entry)"`
+	Items   []patchBatchItem `json:"items" jsonschema:"per-item outcome in request order; a failed item does not roll back the others"`
+}
+
+type patchBatchItem struct {
+	Key     string `json:"key" jsonschema:"the item's key"`
+	Changed bool   `json:"changed" jsonschema:"see memento_patch"`
+	Status  string `json:"status,omitempty" jsonschema:"status of the fact after the patch"`
+	Error   string `json:"error,omitempty" jsonschema:"this item's failure (guard/validation/store); other items were processed regardless"`
+}
+
+func (s *mcpServer) patchBatch(ctx context.Context, req *mcp.CallToolRequest, in patchBatchInput) (*mcp.CallToolResult, patchBatchOutput, error) {
+	if len(in.Items) == 0 || len(in.Items) > maxAddBatchItems {
+		return nil, patchBatchOutput{}, fmt.Errorf("memento_patch_batch: items must be 1..%d", maxAddBatchItems)
+	}
+	// Duplicate keys are ambiguous in a patch batch too: the second item
+	// patches the first item's fresh state (order-dependent journaled
+	// transitions). Reject the shape — on the TRIMMED key.
+	seen := make(map[string]bool, len(in.Items))
+	for _, it := range in.Items {
+		k := strings.TrimSpace(it.Key)
+		if seen[k] {
+			return nil, patchBatchOutput{}, fmt.Errorf("memento_patch_batch: duplicate key %q in one batch", k)
+		}
+		seen[k] = true
+	}
+	cfg, cerr := s.loadConfig()
+	if cerr != nil {
+		return nil, patchBatchOutput{}, storeError("memento_patch_batch", cerr)
+	}
+	c, cErr := s.clientFromConfig(ctx, cfg)
+	if cErr != nil {
+		cErr = storeError("memento_patch_batch", cErr)
+	}
+	out := patchBatchOutput{Items: make([]patchBatchItem, 0, len(in.Items))}
+	for _, it := range in.Items {
+		res, err := s.patchOne(ctx, cfg, c, cErr, it)
+		item := patchBatchItem{Key: strings.TrimSpace(it.Key), Changed: res.Changed, Status: res.Status}
+		if err != nil {
+			item.Error = err.Error()
+		} else if res.Changed {
+			out.Changed++
+		} else {
+			out.Touched++
+		}
+		out.Items = append(out.Items, item)
+	}
+	out.Count = len(out.Items)
+	return nil, out, nil
 }
 
 type listInput struct {
