@@ -406,6 +406,59 @@ func TestAddEmptyNotesPreservesNotes(t *testing.T) {
 	}
 }
 
+// TestAddEmptySourcePreservesSource pins the same "empty means not given"
+// rule for source (the Patch contract): a CLI `add --source ""` touch or
+// correction must not silently erase the stored qualifier — on the touch
+// path source is not kept in history, so the wipe would be irreversible.
+func TestAddEmptySourcePreservesSource(t *testing.T) {
+	var updateBody string
+	c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+		switch {
+		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
+			return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
+				"fact_id":"existing-id","key":"k","value":"same","source":"doc:README",
+				"created_at":"2020-01-01T00:00:00Z","updated_at":"2020-01-01T00:00:00Z",
+				"observed_at":"2020-01-01T00:00:00Z"}}`
+		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+			updateBody = r.Body
+			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+		}
+		return http.StatusInternalServerError, `{"status":500,"error":"unexpected"}`
+	})
+
+	if _, err := c.Add(context.Background(), model.NewFact("k", "same", "config", "p", "", "")); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if strings.Contains(updateBody, `"source"`) {
+		t.Errorf("empty source must not be written over the stored source: %s", updateBody)
+	}
+
+	// The scripted correction path guards source the same way it guards notes.
+	updateBody = ""
+	c2, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+		if code, body := journalRoutesOK(r); code != http.StatusInternalServerError {
+			return code, body
+		}
+		switch {
+		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
+			return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
+				"fact_id":"existing-id","key":"k","value":"old","source":"doc:README",
+				"created_at":"2020-01-01T00:00:00Z","updated_at":"2020-01-01T00:00:00Z",
+				"observed_at":"2020-01-01T00:00:00Z"}}`
+		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+			updateBody = r.Body
+			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+		}
+		return http.StatusInternalServerError, `{"status":500,"error":"unexpected"}`
+	})
+	if _, err := c2.Add(context.Background(), model.NewFact("k", "new value", "config", "p", "", "")); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if !strings.Contains(updateBody, "params.source != ''") {
+		t.Errorf("correction script must guard source replacement: %s", updateBody)
+	}
+}
+
 // TestAddSendsRefreshWaitForForNewFacts checks the same refresh guarantee on the
 // create path, where no previous document exists.
 func TestAddSendsRefreshWaitForForNewFacts(t *testing.T) {
@@ -527,17 +580,24 @@ func TestAddBlockedWriteIsActionable(t *testing.T) {
 // removed count. Journal-era keys are pruned in the journal (journal_test).
 func TestPruneScriptedUpdate(t *testing.T) {
 	var updateBody string
+	updated := false // the fake array reflects the script's tail after the update
 	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
 		if code, body := journalRoutesOK(r); code != http.StatusInternalServerError {
 			return code, body
 		}
 		switch {
 		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
+			if !updated {
+				return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
+					"key":"k","value":"v","category":"config","project":"p","status":"verified",
+					"history":[{"value":"h1"},{"value":"h2"},{"value":"h3"},{"value":"h4"},{"value":"h5"}]}}`
+			}
 			return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
 				"key":"k","value":"v","category":"config","project":"p","status":"verified",
-				"history":[{"value":"h1"},{"value":"h2"},{"value":"h3"},{"value":"h4"},{"value":"h5"}]}}`
+				"history":[{"value":"h4"},{"value":"h5"}]}}`
 		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
 			updateBody = r.Body
+			updated = true
 			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected"}`

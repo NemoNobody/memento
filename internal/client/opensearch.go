@@ -238,7 +238,7 @@ const addCorrectionScript = `
 ctx._source.value = params.value;
 ctx._source.category = params.category;
 ctx._source.observed_at = params.observed_at;
-ctx._source.source = params.source;
+if (params.source != null && params.source != '') { ctx._source.source = params.source; }
 if (params.notes != null && params.notes != '') { ctx._source.notes = params.notes; }
 ctx._source.status = 'verified';
 ctx._source.summary = params.summary;
@@ -347,7 +347,6 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 		// is not "dead": it stays a plain touch).
 		resurrect := existing.Status == "obsolete"
 		doc := map[string]interface{}{
-			"source":     f.Source,
 			"category":   f.Category,
 			"status":     "verified",
 			"updated_by": c.resolveAuthor(ctx).Author,
@@ -367,6 +366,13 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 			}
 			doc["observed_at"] = observed.Format(time.RFC3339)
 			doc["current_ref"] = ref
+		}
+		// source follows the notes rule: empty means "not given", never
+		// "erase" (Patch's contract). The qualifier is not kept in history on
+		// the touch path, so an unconditional write of an empty source would
+		// be an irreversible silent wipe.
+		if f.Source != "" {
+			doc["source"] = f.Source
 		}
 		if f.Notes != "" {
 			doc["notes"] = f.Notes
@@ -645,7 +651,12 @@ func (c *Client) Obsolete(ctx context.Context, key, reason string) error {
 	reason = strings.Join(strings.Fields(reason), " ")
 	// The journal snapshot carries the notes as of journal time (a concurrent
 	// atomic append that lands after this Get lags one line; the doc stays
-	// right — see the Patch journal contract).
+	// right — see the Patch journal contract). The already-obsolete refusal
+	// above is computed from the stale read, exactly like Patch's: two racing
+	// retires both pass the check, so each journals an entry and each appends
+	// the reason — at worst a duplicated notes line and an extra journal entry
+	// per race (the journal records every accepted write, so the audit trail
+	// stays truthful about the events even then).
 	notes := appendNote(existing.Notes, reason)
 	currentRef := existing.CurrentRef
 	if existing.Status != "obsolete" {
@@ -982,6 +993,17 @@ func (c *Client) Prune(ctx context.Context, key string, keep int) (int, error) {
 			return 0, fmt.Errorf("prune %w: %q", ErrNotFound, key)
 		}
 		return 0, wrapWriteError("prune fact", err)
+	}
+	// The script trims the REAL array; the pre-read snapshot can lag a
+	// concurrent write, so the reported count is recomputed from the stored
+	// doc ("dropped N" must not be a snapshot guess — legacy path only,
+	// journal-backed keys report exactly).
+	after, gErr := c.Get(ctx, key)
+	if gErr != nil {
+		return removed, nil // write succeeded; the recount is best effort here
+	}
+	if removed = len(existing.History) - len(after.History); removed < 0 {
+		removed = 0
 	}
 	return removed, nil
 }
