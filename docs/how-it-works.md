@@ -301,6 +301,9 @@ Guarantees and limits:
   stored in redacted form — the redaction must therefore out-cover a reject.
   For the shared plaintext docs store this is the accepted product decision:
   the secret never ships to agents, the documentation survives.
+- The guard gates every route equally: a page rendered through the obscura
+  fallback (README, "JS rendering") flows through the same hook — the
+  renderer changes how the HTML arrives, not what is allowed into the store.
 
 ## Auth
 

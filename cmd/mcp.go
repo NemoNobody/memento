@@ -229,7 +229,8 @@ func runMCPServer(confPath string) error {
 			"Requests send no cookies and no credentials; a host outside " +
 			"fetch_allow_hosts is rejected before the request. GitHub URLs that " +
 			"match a local clone resolve to a local path (local=true) with no " +
-			"network and no store write.",
+			"network and no store write. Bot-walled sites (403/422/429) may be " +
+			"retried through the opt-in obscura renderer (via=obscura).",
 	}, s.fetchDoc)
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -1133,6 +1134,7 @@ type fetchDocOutput struct {
 	Stale     bool                `json:"stale,omitempty" jsonschema:"past TTL: re-fetch with memento_fetch_doc before quoting"`
 	Cached    bool                `json:"cached,omitempty" jsonschema:"true when the stored snapshot was returned without a network request"`
 	Truncated bool                `json:"truncated,omitempty" jsonschema:"extraction hit a limit: the stored text is a prefix"`
+	Via       string              `json:"via,omitempty" jsonschema:"route that served the fetch when not direct: proxy | obscura (audit; obscura means the content was browser-rendered)"`
 	Sections  []docSectionOutline `json:"sections,omitempty" jsonschema:"outline: pull a section with memento_get_doc(hash, section)"`
 
 	// Redactions: high-confidence credential spans edited out of the stored
@@ -1144,6 +1146,15 @@ type fetchDocOutput struct {
 	// GitHub local-clone resolution: the answer is a file on this machine.
 	Local bool   `json:"local,omitempty" jsonschema:"true when the url resolved to a file in a local git clone: Path is the file; nothing was fetched"`
 	Path  string `json:"path,omitempty" jsonschema:"local clone file path when local=true"`
+}
+
+// viaOut hides the default route (direct) from the contract: it carries
+// information only when the fetch did NOT go straight to the target.
+func viaOut(doc *model.Doc) string {
+	if doc.Via == client.ViaDirect {
+		return ""
+	}
+	return doc.Via
 }
 
 type redactionView struct {
@@ -1196,6 +1207,7 @@ func (s *mcpServer) fetchDoc(ctx context.Context, req *mcp.CallToolRequest, in f
 		Stale:     doc.Stale(now),
 		Cached:    cached,
 		Truncated: doc.Truncated,
+		Via:       viaOut(doc),
 		Sections:  newDocOutline(doc),
 	}
 	if len(doc.Redactions) > 0 {

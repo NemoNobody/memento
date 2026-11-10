@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -25,9 +26,60 @@ const maxFetchRedirects = 5
 
 // Via routes recorded on a doc: which path actually served the fetch.
 const (
-	ViaDirect = "direct"
-	ViaProxy  = "proxy"
+	ViaDirect  = "direct"
+	ViaProxy   = "proxy"
+	ViaObscura = "obscura"
 )
+
+// FetchError classes why a fetch failed, so the render fallback can decide
+// on the REASON (the raw status 0 is too wide: it hides "the host is not
+// allowed" behind "the network is down"). The classes that justify handing
+// the URL to a browser renderer are the ones where the client — not the
+// document — is the problem: network/DNS/timeout/TLS failures and the
+// IP-ban statuses.
+type FetchError struct {
+	Class  string // network | status | redirect | policy | oversize
+	Status int    // set for Class==status
+	Err    error
+}
+
+func (e *FetchError) Error() string { return e.Err.Error() }
+func (e *FetchError) Unwrap() error { return e.Err }
+
+// Fetch failure classes.
+const (
+	ClassNetwork  = "network"  // no HTTP response: DNS, connect, timeout, TLS
+	ClassStatus   = "status"   // an HTTP status >= 400 (see Status)
+	ClassRedirect = "redirect" // the redirect chain hit its bound
+	ClassPolicy   = "policy"   // allowlist / SSRF refusals: the proxy and the renderer see the same wall
+	ClassOversize = "oversize" // the document is larger than fetch_max_bytes
+)
+
+// Sentinels wrapped into CheckRedirect refusals so the class survives
+// net/http's url.Error wrapping.
+var (
+	ErrRedirectLimit = errors.New("redirect limit")
+	ErrFetchPolicy   = errors.New("fetch policy")
+)
+
+// renderEligible answers: should a failed plain fetch be retried through the
+// configured browser renderer? Network failures and IP-ban statuses are
+// eligible (a real browser from a new route may get in). Redirect limits,
+// policy refusals, 404/401 and oversize are not: the renderer faces the
+// same wall, the same document, or a wall the operator put up on purpose.
+func renderEligible(err error) bool {
+	var fe *FetchError
+	if !errors.As(err, &fe) {
+		return false
+	}
+	switch fe.Class {
+	case ClassNetwork:
+		return true
+	case ClassStatus:
+		return ipBlockStatuses[fe.Status]
+	}
+	return false
+}
 
 // ipBlockStatuses are the responses of sites that ban client IP ranges
 // (403 forbidden, 422 unprocessable used by some frontends). The same client
@@ -351,18 +403,18 @@ func fetchHTTP(ctx context.Context, cfg *config.Config, normalizedURL string) (c
 		httpc := &http.Client{Timeout: timeout, Transport: tr}
 		httpc.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 			if len(via) > maxFetchRedirects {
-				return fmt.Errorf("fetch: more than %d redirects", maxFetchRedirects)
+				return fmt.Errorf("fetch: more than %d redirects: %w", maxFetchRedirects, ErrRedirectLimit)
 			}
 			// The allowlist must hold for every hop: an allowed host that
 			// 302s to a loopback/link-local target must not be fetched
 			// (SSRF via redirect would silently break the privacy guarantee).
 			if err := HostAllowed(cfg, req.URL.String()); err != nil {
-				return fmt.Errorf("fetch: redirect chain: %w", err)
+				return fmt.Errorf("fetch: redirect chain: %v: %w", err, ErrFetchPolicy)
 			}
 			if !cfg.FetchAllowPrivate && blockedHost(strings.ToLower(req.URL.Hostname())) {
 				// Hostname(), not Host: a Location header can carry userinfo,
 				// and the message reaches agent context.
-				return fmt.Errorf("fetch: redirect chain: %s is not a public address", req.URL.Hostname())
+				return fmt.Errorf("fetch: redirect chain: %s is not a public address: %w", req.URL.Hostname(), ErrFetchPolicy)
 			}
 			return nil
 		}
@@ -379,25 +431,35 @@ func fetchHTTP(ctx context.Context, cfg *config.Config, normalizedURL string) (c
 
 		resp, err := httpc.Do(req)
 		if err != nil {
-			return "", nil, "", 0, fmt.Errorf("fetch %s: %w", normalizedURL, err)
+			// Classify the no-response failures for the render fallback; the
+			// message keeps the target for operators.
+			switch {
+			case errors.Is(err, ErrRedirectLimit):
+				return "", nil, "", 0, &FetchError{Class: ClassRedirect, Err: fmt.Errorf("fetch %s: %w", normalizedURL, err)}
+			case errors.Is(err, ErrFetchPolicy):
+				return "", nil, "", 0, &FetchError{Class: ClassPolicy, Err: fmt.Errorf("fetch %s: %w", normalizedURL, err)}
+			default:
+				return "", nil, "", 0, &FetchError{Class: ClassNetwork, Err: fmt.Errorf("fetch %s: %w", normalizedURL, err)}
+			}
 		}
 		defer func() { _ = resp.Body.Close() }()
 		final := resp.Request.URL.String()
 
 		if resp.StatusCode >= 400 {
 			return "", nil, final, resp.StatusCode,
-				fmt.Errorf("fetch %s: HTTP %d", normalizedURL, resp.StatusCode)
+				&FetchError{Class: ClassStatus, Status: resp.StatusCode,
+					Err: fmt.Errorf("fetch %s: HTTP %d", normalizedURL, resp.StatusCode)}
 		}
 		ct := resp.Header.Get("Content-Type")
 		// Read one byte past the cap to tell "exactly at cap" from "over cap".
 		body, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxBytes)+1))
 		if err != nil {
-			return "", nil, final, resp.StatusCode, fmt.Errorf("fetch %s: read body: %w", normalizedURL, err)
+			return "", nil, final, resp.StatusCode, &FetchError{Class: ClassNetwork, Err: fmt.Errorf("fetch %s: read body: %w", normalizedURL, err)}
 		}
 		if len(body) > maxBytes {
-			return "", nil, final, resp.StatusCode, fmt.Errorf(
+			return "", nil, final, resp.StatusCode, &FetchError{Class: ClassOversize, Err: fmt.Errorf(
 				"fetch %s: body exceeds fetch_max_bytes (%d); the page is too large to cache",
-				normalizedURL, maxBytes)
+				normalizedURL, maxBytes)}
 		}
 		return ct, body, final, resp.StatusCode, nil
 	}
@@ -468,7 +530,19 @@ func FetchPage(ctx context.Context, cfg *config.Config, normalizedURL string,
 	}
 	ct, body, finalURL, via, err := fetchHTTP(ctx, cfg, normalizedURL)
 	if err != nil {
-		return nil, err
+		// Render fallback (opt-in): only for failures the renderer can
+		// plausibly beat (network walls, IP-ban statuses). On render failure
+		// the answer names BOTH reasons: the plain wall the operator hit, and
+		// what the renderer said.
+		if cfg.FetchRender == config.RenderObscura && renderEligible(err) {
+			rbody, rerr := renderObscura(ctx, cfg, normalizedURL)
+			if rerr != nil {
+				return nil, fmt.Errorf("fetch %s: plain fetch: %v; obscura render: %w", normalizedURL, err, rerr)
+			}
+			body, ct, finalURL, via = rbody, "text/html", normalizedURL, ViaObscura
+		} else {
+			return nil, err
+		}
 	}
 	media := strings.ToLower(strings.TrimSpace(strings.Split(ct, ";")[0]))
 

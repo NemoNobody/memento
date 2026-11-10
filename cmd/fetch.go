@@ -293,6 +293,12 @@ func printDocOutline(w io.Writer, doc *model.Doc, cached bool, now time.Time) er
 	b.WriteString("stale: ")
 	b.WriteString(strconv.FormatBool(doc.Stale(now)))
 	b.WriteString("\n")
+	if doc.Via != "" && doc.Via != client.ViaDirect {
+		// The route is audit: proxy/obscura fetched this, not the direct path.
+		b.WriteString("via: ")
+		b.WriteString(doc.Via)
+		b.WriteString("\n")
+	}
 	if doc.Project != "" {
 		b.WriteString("project: ")
 		b.WriteString(doc.Project)

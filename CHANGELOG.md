@@ -88,10 +88,28 @@ Fetch guard triage and fetch v1 fixes:
   not honored (a hostile server could park the client).
 - `text/markdown` / `text/x-markdown` responses extract as plain text (raw
   README endpoints are documentation); the request Accept advertises it.
-- New config: `fetch_render` (`off`|`obscura`, default `off`),
+- New config keys `fetch_render` (`off`|`obscura`, default `off`),
   `fetch_obscura_path` (default `obscura`), `fetch_obscura_stealth`
   (default `true`); env `MEMENTO_FETCH_RENDER`, `MEMENTO_FETCH_OBSCURA_PATH`,
-  `MEMENTO_FETCH_OBSCURA_STEALTH`. See JS rendering below.
+  `MEMENTO_FETCH_OBSCURA_STEALTH`.
+
+JS rendering (opt-in, obscura):
+- `fetch_render: "obscura"` adds a browser-render fallback for fetches refused
+  the way bot walls refuse (network failures, 403/422/429 — NOT 404/401, not
+  allowlist refusals, redirect limits, oversize): the URL goes to the
+  [obscura](https://github.com/h4ckf0r0day/obscura) headless browser
+  (Chrome-shaped stealth TLS/HTTP2 fingerprint), and the rendered HTML flows
+  through the same extract + guard + store pipeline; the doc is stored
+  `via: obscura`. Render failures surface BOTH reasons (plain + renderer).
+- Third-party by design: ~75 MB binary, executes page JS locally, linux
+  x86_64 glibc 2.35+. `make obscura` installs the sha256-pinned 0.2.6
+  stealth build into `~/.local/bin`. The renderer is serialized (one render
+  at a time); `robots.txt` (when respected) gates both paths; a proxy URL
+  with credentials is never forwarded (argv hygiene); a typo in
+  `fetch_render` is a loud startup error.
+- v1 limits: rendered docs store `final_url` = the requested URL (the dump
+  mode does not report redirects); success = exit 0 + non-empty dump.
+  README “JS rendering” and docs/setup.md §8.
 - Docs: least-privilege store user guide for clusters with the security
   plugin (role/user/role-mapping recipes; the app role cannot delete the
   facts index; `indices:admin/get` + per-pattern create/settings/update

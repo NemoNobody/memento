@@ -104,7 +104,9 @@ options (`memento fetch`): `MEMENTO_DOCS_INDEX`, `MEMENTO_DOCS_TTL_DAYS`,
 `MEMENTO_FETCH_TIMEOUT`, `MEMENTO_FETCH_MAX_BYTES`, `MEMENTO_FETCH_HOSTS`,
 `MEMENTO_FETCH_USER_AGENT`, `MEMENTO_FETCH_PROXY_URL`,
 `MEMENTO_FETCH_PROXY_FALLBACK`, `MEMENTO_FETCH_RESPECT_ROBOTS`,
-`MEMENTO_FETCH_ALLOW_PRIVATE`, `MEMENTO_LOCAL_REPO_ROOTS`,
+`MEMENTO_FETCH_ALLOW_PRIVATE`, `MEMENTO_FETCH_RENDER`,
+`MEMENTO_FETCH_OBSCURA_PATH`, `MEMENTO_FETCH_OBSCURA_STEALTH`,
+`MEMENTO_LOCAL_REPO_ROOTS`,
 `MEMENTO_REPO_SCAN_DEPTH`.
 
 The password resolves from `OPENSEARCH_PASSWORD`, then the OS keyring (service
@@ -205,6 +207,35 @@ agents and humans, not a guarantee: the store is plaintext, and the
 best-effort secret guard (default `reject`) scans writes for credential-like
 text, but a secret with no known shape passes. The rule stays the first line
 of defense.
+
+## JS rendering (obscura, opt-in)
+
+Some documentation sites answer a plain fetch with 403/422/429 — they gate
+on the TLS/HTTP2 fingerprint, not the content. `fetch_render: "obscura"`
+enables a fallback: when a plain fetch fails the way bot walls fail (network
+walls, IP-ban statuses — not 404/401, not the allowlist, not oversize), the
+URL goes to [obscura](https://github.com/h4ckf0r0day/obscura), a lightweight
+headless browser with a Chrome-shaped stealth fingerprint. The rendered HTML
+flows through the exact same extract + guard + store pipeline (`via:
+obscura`).
+
+It is opt-in by design: obscura is a third-party binary (~75 MB, linux
+x86_64, glibc 2.35+) that **executes page JS locally**. Install it pinned:
+
+```
+make obscura   # sha256-pinned v0.2.6 stealth build → ~/.local/bin
+```
+
+then set `fetch_render: "obscura"` (env `MEMENTO_FETCH_RENDER`).
+`fetch_obscura_path` points at the binary (default: `obscura` via PATH);
+`fetch_obscura_stealth` (default `true`) passes `--stealth`.
+
+v1 limits, stated plainly: the dump mode does not report the post-redirect
+URL, so a rendered doc stores `final_url` = the requested URL; the renderer
+is serialized (one render at a time); `robots.txt` (when
+`fetch_respect_robots` is on) gates both the plain and the render path; the
+URL is visible in the renderer's argv (`/proc`) — pages fetched with secrets
+in query strings stay a plain-fetch concern.
 
 ## Platform notes
 

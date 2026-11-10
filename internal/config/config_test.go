@@ -692,3 +692,20 @@ func TestFindConfigPath(t *testing.T) {
 		t.Errorf("no-file path = %q, want empty", p)
 	}
 }
+
+// TestNormalizeRender: typos in fetch_render are refused loudly — silently
+// ignoring "obscure" would run plain fetches while the operator believes
+// pages are JS-rendered.
+func TestNormalizeRender(t *testing.T) {
+	for _, ok := range []string{"off", "obscura", " Off ", "OBSCURA"} {
+		v, err := normalizeRender(ok)
+		if err != nil || (v != RenderOff && v != RenderObscura) {
+			t.Errorf("normalizeRender(%q) = %q, %v", ok, v, err)
+		}
+	}
+	for _, bad := range []string{"obscure", "js", "browser", ""} {
+		if _, err := normalizeRender(bad); err == nil {
+			t.Errorf("normalizeRender(%q) must be refused", bad)
+		}
+	}
+}

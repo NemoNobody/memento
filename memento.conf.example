@@ -18,11 +18,14 @@
   "fetch_timeout_seconds": 30,
   "fetch_max_bytes": 2000000,
   "fetch_allow_hosts": [],
-  "fetch_user_agent": "memento/fetch (+OpenSearch docs cache)",
+  "fetch_user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
   "fetch_proxy_url": "",
   "fetch_proxy_fallback": false,
   "fetch_allow_private": false,
   "fetch_respect_robots": false,
+  "fetch_render": "off",
+  "fetch_obscura_path": "obscura",
+  "fetch_obscura_stealth": true,
   "local_repo_roots": [],
   "local_repo_scan_depth": 2
 }

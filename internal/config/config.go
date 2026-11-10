@@ -112,7 +112,8 @@ type Config struct {
 	// target host is consulted before fetching, matched by the
 	// fetch_user_agent token. Off by default: v1 fetches single
 	// user-initiated pages (browser semantics); on is the courteous setting
-	// for public/shared infrastructure. v2 browser-render ignores robots.
+	// for public/shared infrastructure. The robots verdict gates the whole
+	// fetch: the plain path AND the browser render (one contract).
 	FetchRespectRobots bool `json:"fetch_respect_robots"`
 
 	// FetchProxyURL routes fetches through a proxy (http/socks5). Empty means

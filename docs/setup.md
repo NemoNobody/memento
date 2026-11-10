@@ -146,6 +146,8 @@ lists the active ones by name, never by value):
 `MEMENTO_FETCH_MAX_BYTES`, `MEMENTO_FETCH_HOSTS`, `MEMENTO_FETCH_USER_AGENT`,
 `MEMENTO_FETCH_PROXY_URL`, `MEMENTO_FETCH_PROXY_FALLBACK`,
 `MEMENTO_FETCH_RESPECT_ROBOTS`, `MEMENTO_FETCH_ALLOW_PRIVATE`,
+`MEMENTO_FETCH_RENDER`, `MEMENTO_FETCH_OBSCURA_PATH`,
+`MEMENTO_FETCH_OBSCURA_STEALTH`,
 `MEMENTO_LOCAL_REPO_ROOTS`, `MEMENTO_REPO_SCAN_DEPTH`.
 
 ## 4. Verify
@@ -301,6 +303,27 @@ Then set `opensearch_user: "memento"` in the config and run `memento creds set`
 
 The dev compose (`make dev-opensearch`) runs with the security plugin off and
 no auth at all — that is the documented dev posture (localhost-only bind).
+
+## 8. JS rendering (optional, obscura)
+
+Sites that gate on TLS/HTTP fingerprints answer plain fetches with
+403/422/429. `fetch_render: "obscura"` adds a fallback through the obscura
+headless browser (Chrome-shaped stealth fingerprint). It is opt-in: a
+third-party binary (~75 MB, linux x86_64, glibc 2.35+) that executes page
+JS locally.
+
+```
+make obscura
+```
+
+installs `obscura` and `obscura-worker` into `~/.local/bin` (keep them in
+one directory) from the sha256-pinned 0.2.6 stealth release; put the
+directory on PATH or point `fetch_obscura_path` at the binary. Enable with
+`fetch_render: "obscura"` (env `MEMENTO_FETCH_RENDER`); a typo in the value
+is a startup error, never a silent plain fetch. Rendered docs are marked
+`via: obscura`; rendered pages flow through the same robots gate, guard and
+TTL pipeline as plain fetches. v1 limitation: `final_url` of a rendered doc
+is the requested URL (the dump mode does not report redirects).
 
 ## Troubleshooting
 
