@@ -342,6 +342,9 @@ func TestCLIStatusAndLimitShapeBeforeStore(t *testing.T) {
 		{"search", "q", "--status", "bogus"},
 		{"search", "q", "--limit", "-1"},
 		{"keys", "k", "--status", "bogus"},
+		{"list", "p", "--prefix", "a*b"},
+		{"doc", ""},
+		{"docs", "  "},
 	}
 	for _, args := range cases {
 		out, code := runCLISubprocess(t, fake.URL, args...)

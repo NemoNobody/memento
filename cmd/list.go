@@ -26,6 +26,14 @@ func ListCmd() *cobra.Command {
 			if project == "" {
 				fatalErr(errors.New("project is required"))
 			}
+			// The prefix normalizes before any store contact (the keys
+			// contract): a bad prefix is answered as a caller error, not as a
+			// store failure after the index ensure.
+			normPrefix, pErr := client.NormalizePrefix(listFlags.prefix)
+			if pErr != nil {
+				fatalErr(pErr)
+			}
+			listFlags.prefix = normPrefix
 			ctx := context.Background()
 			c, err := newClient()
 			if err != nil {

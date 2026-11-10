@@ -875,6 +875,16 @@ type listInput struct {
 func (s *mcpServer) list(ctx context.Context, req *mcp.CallToolRequest, in listInput) (*mcp.CallToolResult, factsOutput, error) {
 	// Project labels are stored trimmed; the term filter is whitespace-exact.
 	in.Project = strings.TrimSpace(in.Project)
+	// The prefix normalizes before any store contact (the keys contract):
+	// a bad prefix is the caller's problem, and its shape error must not come
+	// back wrapped in the availability advice — or never come back at all when
+	// the store is unreachable. NormalizePrefix is idempotent, so the store
+	// sees exactly what was checked.
+	normPrefix, pErr := client.NormalizePrefix(in.Prefix)
+	if pErr != nil {
+		return nil, factsOutput{}, fmt.Errorf("memento_list: %w", pErr)
+	}
+	in.Prefix = normPrefix
 	compact := true
 	if in.Compact != nil {
 		compact = *in.Compact

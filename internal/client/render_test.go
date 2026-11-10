@@ -283,7 +283,7 @@ func TestRenderSSRFCheck(t *testing.T) {
 		"http://localhost:8080/",
 		"http://169.254.169.254/latest/meta-data/",
 		"http://10.0.0.5/x",
-		"http://192.168.88.37:8080/",
+		"http://192.168.1.37:8080/",
 		"http://[::1]/x",
 		"http://app.internal/x",
 	}

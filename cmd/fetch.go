@@ -118,8 +118,13 @@ func DocCmd() *cobra.Command {
 		Args:  cobra.RangeArgs(1, 2),
 		Run: func(cmd *cobra.Command, args []string) {
 			// Hashes are looked up exactly; trim the argument like every
-			// other key-shaped edge so " <hash> " finds the document.
+			// other key-shaped edge so " <hash> " finds the document. An empty
+			// hash is refused here, not by the store (the MCP get_doc contract):
+			// a store-side miss reads like a corrupt index, not a caller error.
 			hash := strings.TrimSpace(args[0])
+			if hash == "" {
+				fatalErr(errors.New("hash is required"))
+			}
 			section := docFlags.section
 			if len(args) == 2 {
 				n, err := strconv.Atoi(args[1])
@@ -177,12 +182,19 @@ func DocsCmd() *cobra.Command {
 		Short: "Search stored documents by text",
 		Args:  cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
+			// Shape before store contact (the MCP search_docs contract): an
+			// empty query is a caller error, and a padded one would answer a
+			// silent zero against the doc terms.
+			query := strings.TrimSpace(args[0])
+			if query == "" {
+				fatalErr(errors.New("query is required"))
+			}
 			ctx := context.Background()
 			c, err := newClient()
 			if err != nil {
 				fatalErr(err)
 			}
-			docs, meta, err := c.SearchDocs(ctx, args[0], strings.TrimSpace(docsFlags.project), docsFlags.limit)
+			docs, meta, err := c.SearchDocs(ctx, query, strings.TrimSpace(docsFlags.project), docsFlags.limit)
 			if err != nil {
 				fatalErr(err)
 			}

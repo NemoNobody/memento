@@ -727,6 +727,8 @@ func TestMCPServerM1ValidationOffline(t *testing.T) {
 		// wrapped in the availability advice (round-8 parity with list/keys).
 		{"memento_patch", map[string]any{"key": "k", "status": "bogus"}, "status must be verified|obsolete"},
 		{"memento_patch", map[string]any{"key": "k", "reason": "gone"}, "reason is only accepted"},
+		// The list prefix normalizes before the store too (the keys contract).
+		{"memento_list", map[string]any{"project": "p", "prefix": "a*b"}, "trailing *"},
 		{"memento_get", map[string]any{"key": "k", "keys": []any{"k"}}, "exactly one"},
 		{"memento_get", map[string]any{}, "exactly one"},
 	} {
