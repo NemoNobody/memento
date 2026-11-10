@@ -99,7 +99,7 @@ func runMCPServer(confPath string) error {
 			"be treated as current. History ships only on full rows " +
 			"(include_history=true with compact=false); memento_journal is the " +
 			"history tool. " +
-			"compact=true drops full values (rows scan cheap; memento_get reads). " +
+			"compact is TRUE by default (rows scan cheap; memento_get reads the value); compact=false restores full values. " +
 			"Answers carry age_days/stale: a stale fact " +
 			"must be re-verified against the source before being trusted.",
 	}, s.search)
@@ -488,8 +488,11 @@ type searchInput struct {
 	Category       string `json:"category,omitempty" jsonschema:"limit results to this category"`
 	Status         string `json:"status,omitempty" jsonschema:"limit results to this status: verified (default), obsolete, or any"`
 	Limit          int    `json:"limit,omitempty" jsonschema:"max hits to return (default 10, cap 50): the context budget for search results"`
-	IncludeHistory bool   `json:"include_history,omitempty" jsonschema:"include the full history chain (default: current value only)"`
-	Compact        bool   `json:"compact,omitempty" jsonschema:"compact rows (no value/authorship; notes truncated): default false, full values — a hit IS the answer; set true when scanning many hits"`
+	IncludeHistory bool   `json:"include_history,omitempty" jsonschema:"include the full history chain (default: current value only); ships only on full rows (compact=false)"`
+	// Compact defaults to true (the memento_list rule): a search hit is
+	// navigation — the summary is the table of contents, the full value is
+	// one memento_get away. compact=false restores full rows.
+	Compact *bool `json:"compact,omitempty" jsonschema:"compact rows (no value/authorship; notes truncated): DEFAULT true — memento_get reads the value; compact=false restores full rows (~5x the tokens)"`
 }
 
 func (s *mcpServer) search(ctx context.Context, req *mcp.CallToolRequest, in searchInput) (*mcp.CallToolResult, factsOutput, error) {
@@ -515,6 +518,10 @@ func (s *mcpServer) search(ctx context.Context, req *mcp.CallToolRequest, in sea
 	if serr != nil {
 		return nil, factsOutput{}, serr
 	}
+	compact := true
+	if in.Compact != nil {
+		compact = *in.Compact
+	}
 	// Shape before store contact (the list/keys contract): an invalid status
 	// must not pay for a client build and an index ensure.
 	c, err := s.newClient(ctx)
@@ -529,12 +536,15 @@ func (s *mcpServer) search(ctx context.Context, req *mcp.CallToolRequest, in sea
 		Count:     len(facts),
 		Truncated: meta.Total > len(facts)+meta.Skipped,
 		Skipped:   meta.Skipped,
-		Facts:     newFactViews(facts, in.IncludeHistory, in.Compact),
+		Facts:     newFactViews(facts, in.IncludeHistory, compact),
 	}
 	if out.Count == 0 {
 		// A bare 0 invites URL-style guessing and tool churn; name the next
 		// right move instead.
 		out.Hint = "0 hits: this search reads values/notes/summaries, not keys — for key lookup use memento_keys (prefix/match); for a project overview memento_list; try shorter terms"
+	} else if compact {
+		// Compact is the default now: say where the full value lives.
+		out.Hint = "compact rows: memento_get(key) reads the full value; compact=false restores full rows"
 	}
 	return nil, out, nil
 }

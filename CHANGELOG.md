@@ -68,7 +68,9 @@ MCP ergonomics (context economy, partial updates, batch):
   heading, snippet}` centered on the match) — `memento_get_doc(section=order)`
   reads it in full; doc-level snippet remains the fallback.
 - `memento_search`/`memento_list` zero-hit answers carry a navigation `hint`;
-  `memento_search` gained `compact: true` for value-free rows.
+  `memento_search` is **compact by default** (`compact: false` restores full
+  rows; a hit's summary is the table of contents, the value is one
+  `memento_get` away). **Breaking** for clients relying on full search rows.
 - `memento_status` reports `mcp_version`, `commit`, `started_at` (the running
   binary, not the repo on disk); `version` renamed to `opensearch_version`.
   **Breaking** for clients reading `version`.
