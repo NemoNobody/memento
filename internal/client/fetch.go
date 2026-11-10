@@ -579,18 +579,19 @@ func FetchPage(ctx context.Context, cfg *config.Config, normalizedURL string,
 	host, _ := os.Hostname()
 	now := time.Now().UTC()
 	doc := &model.Doc{
-		URL:       normalizedURL,
-		URLHash:   URLHash(normalizedURL),
-		FinalURL:  finalURL,
-		Title:     title,
-		FetchedAt: now,
-		SizeRaw:   len(body),
-		Truncated: truncated,
-		FetchedBy: host,
-		Via:       via,
-		HTML:      string(body),
-		Sections:  sections,
-		Images:    images,
+		URL:         normalizedURL,
+		URLHash:     URLHash(normalizedURL),
+		FinalURL:    finalURL,
+		Title:       title,
+		ContentType: media,
+		FetchedAt:   now,
+		SizeRaw:     len(body),
+		Truncated:   truncated,
+		FetchedBy:   host,
+		Via:         via,
+		HTML:        string(body),
+		Sections:    sections,
+		Images:      images,
 	}
 	if hook != nil {
 		redactions, herr := hook(doc)

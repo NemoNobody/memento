@@ -49,6 +49,12 @@ type Doc struct {
 	Title       string `json:"title"`
 	Project     string `json:"project,omitempty"`
 
+	// ContentType is the server's media type (normalized: no parameters).
+	// It routes the write-time secret guard: documentation types tolerate
+	// medium-confidence token shapes in page content (see guardFetch), API
+	// types do not.
+	ContentType string `json:"content_type,omitempty"`
+
 	FetchedAt time.Time `json:"fetched_at"`
 	// ExpiresAt is the TTL boundary; the zero value means "never expires".
 	// Past it the doc is stale: the web moved, the agent must re-fetch.
@@ -79,6 +85,12 @@ type Doc struct {
 	// edited out of the agent-visible fields (high-confidence shapes only).
 	// The stored HTML is redacted too; it is never served to agents.
 	Redactions []Redaction `json:"redactions,omitempty"`
+
+	// GuardMediumIgnored counts the medium-confidence shapes the doc-route
+	// guard left in the content on purpose (asset hashes, quoted SHAs).
+	// Set only on a fresh fetch; surfaced in the outline so the operator
+	// sees that leniency happened without re-scanning.
+	GuardMediumIgnored int `json:"guard_medium_ignored,omitempty"`
 }
 
 // Stale reports whether the doc is past its TTL and must be re-fetched before

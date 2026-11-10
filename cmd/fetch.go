@@ -242,10 +242,18 @@ func DocsCmd() *cobra.Command {
 //     kept by the redaction), and the documentation page is saved. The
 //     stored raw HTML is redacted the same way (agents never read it).
 //   - medium-confidence findings in the agent-visible fields REFUSE the
-//     write: these shapes fire on ordinary content (git SHAs, asset hashes,
-//     config names), so silent redaction would mangle real documentation.
-//     At secret_guard=ask a finding can be confirmed as a false positive
-//     (--allow-secret / confirm_secret); at reject there is no bypass.
+//     write when the body is API-shaped (JSON/XML: real credentials live in
+//     API responses): these shapes fire on ordinary content, so silent
+//     redaction would mangle the data. At secret_guard=ask a finding can be
+//     confirmed as a false positive (--allow-secret / confirm_secret); at
+//     reject there is no bypass.
+//   - on the DOC route (html/markdown/plain) medium findings in page-derived
+//     content do NOT refuse the write: documentation is full of the shapes
+//     that fire medium (asset hashes, quoted SHAs, config names), and the
+//     user asked to read documentation. They are counted in
+//     doc.GuardMediumIgnored and surfaced in the outline instead. Identity
+//     fields (url, final_url, the user-supplied project tag) keep the strict
+//     policy on every route.
 //   - allow: no scan at all (the operator opted out).
 //
 // Deliberate tradeoff (documented in README): high-confidence secrets end up
@@ -301,13 +309,16 @@ func guardFetch(doc *model.Doc, level string, allowed bool) ([]model.Redaction, 
 		// target that bears credentials (admin:S3cr3t@host) is not a document
 		// — refuse the doc, do not redact the audit trail.
 		{Name: "final_url", Text: doc.FinalURL, HighOnly: true},
+		// The project tag is user/agent-supplied text, not page content: it is
+		// guarded strictly on every route (the cmd entry pre-scan already
+		// refuses it; this is the second net, not a softer one).
 		{Name: "project", Text: doc.Project},
-		{Name: "title", Text: doc.Title},
 	}
+	content := []guardField{{Name: "title", Text: doc.Title}}
 	for i := range doc.Sections {
 		doc.Sections[i].Heading = redact("section "+strconv.Itoa(i)+" heading", doc.Sections[i].Heading)
 		doc.Sections[i].Text = redact("section "+strconv.Itoa(i), doc.Sections[i].Text)
-		fields = append(fields,
+		content = append(content,
 			guardField{Name: "section " + strconv.Itoa(i) + " heading", Text: doc.Sections[i].Heading},
 			guardField{Name: "section " + strconv.Itoa(i), Text: doc.Sections[i].Text})
 	}
@@ -319,17 +330,50 @@ func guardFetch(doc *model.Doc, level string, allowed bool) ([]model.Redaction, 
 		doc.Images[i].URL = redact("image "+strconv.Itoa(i)+" url", doc.Images[i].URL)
 		doc.Images[i].Alt = redact("image "+strconv.Itoa(i)+" alt", doc.Images[i].Alt)
 		doc.Images[i].Title = redact("image "+strconv.Itoa(i)+" title", doc.Images[i].Title)
-		fields = append(fields,
+		content = append(content,
 			guardField{Name: "image " + strconv.Itoa(i) + " alt", Text: doc.Images[i].Alt},
 			guardField{Name: "image " + strconv.Itoa(i) + " title", Text: doc.Images[i].Title})
 	}
 
-	// The post-redaction scan sees only medium shapes (the high spans are
-	// already markers): refuse per the ask/reject policy.
+	// Route policy on the post-redaction scan. High spans are already
+	// markers in the content fields, so what remains there is medium shapes.
+	if isAPIContentType(doc.ContentType) {
+		// API payload: medium findings stay actionable (ask/reject) — an API
+		// body quoting a token is a real leak class, not documentation noise.
+		if err := guardCheck(level, allowed, append(fields, content...)...); err != nil {
+			return nil, err
+		}
+		return redactions, nil
+	}
+	// Doc route: count the medium shapes left in page content (leniency must
+	// be visible, not silent). A leftover high shape in content is still
+	// refused — defensive: redact above is expected to have removed them all.
+	for _, f := range content {
+		for _, fd := range secretguard.Scan(f.Name, f.Text) {
+			if fd.Confidence == secretguard.ConfHigh {
+				fields = append(fields, guardField{Name: f.Name, Text: f.Text})
+				break
+			}
+			doc.GuardMediumIgnored++
+		}
+	}
 	if err := guardCheck(level, allowed, fields...); err != nil {
 		return nil, err
 	}
 	return redactions, nil
+}
+
+// isAPIContentType reports whether the server declared an API-shaped body:
+// JSON/XML payloads (including +json/+xml suffixed vendor types) may carry
+// real credentials; html/markdown/plain bodies are documentation and their
+// medium-shape noise is the content the user asked to read.
+func isAPIContentType(ct string) bool {
+	media := strings.ToLower(strings.TrimSpace(strings.Split(ct, ";")[0]))
+	switch media {
+	case "application/json", "application/xml", "text/xml":
+		return true
+	}
+	return strings.HasSuffix(media, "+json") || strings.HasSuffix(media, "+xml")
 }
 
 // printDocOutline renders the title + section table: the context-cheap view an
@@ -370,6 +414,11 @@ func printDocOutline(w io.Writer, doc *model.Doc, cached bool, now time.Time) er
 	}
 	if doc.Truncated {
 		b.WriteString("truncated: true (extraction hit a limit; the stored text is a prefix)\n")
+	}
+	if doc.GuardMediumIgnored > 0 {
+		b.WriteString("guard: ")
+		b.WriteString(strconv.Itoa(doc.GuardMediumIgnored))
+		b.WriteString(" medium-confidence token shape(s) left in the content on purpose (documentation route; high-confidence secrets were redacted, not ignored)\n")
 	}
 	if len(doc.Redactions) > 0 {
 		b.WriteString("redacted: ")

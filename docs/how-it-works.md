@@ -316,17 +316,29 @@ Guarantees and limits:
   the length) — the matched text is never echoed back into the caller's
   context. Echoing it would leak the secret a second time.
 - Detection is regex-based best effort: a secret without a recognizable shape
-  passes. A false positive is possible too — a 40-character git SHA in notes
-  matches `long-hex` (medium); at `ask` the confirmation flag is the escape
-  hatch.
-- The fetched-page path uses the confidence split as policy: high-confidence
+  passes. A false positive is possible too — an unnamed 40-character hex
+  string in notes matches `long-hex` (medium); at `ask` the confirmation flag
+  is the escape hatch. A generic token shape that sits next to a word that
+  NAMES it (`sha256:`, `revision`, `commit`, `checksum`, SRI `=sha384,…`) is
+  a content fingerprint, not a credential: the three generic shapes
+  (long-hex/long-base64/long-opaque) are skipped inside such a hash context
+  (±40 bytes of a hint word). Vendor-prefixed shapes and assignments never
+  take the exemption: a real credential beside the word "commit" is still
+  caught by the assignment rule.
+- The fetched-page path uses the confidence split as policy and routes on the
+  server's content type: HTML/markdown/plain is DOCUMENTATION, `application/
+  json|xml` and `+json`/`+xml` types are API payloads. High-confidence
   shapes in the agent-visible fields (title, section text/headings, image
   alt/title) and in the stored raw HTML are REDACTED in place (`[memento-
   redacted:pattern]`) and the page is stored — the answer lists `redactions`
   (field/pattern/size, never a preview). Medium findings in the agent-visible
-  text REFUSE the write (they fire on ordinary documentation too; silent
-  redaction would mangle it): at `ask` a finding can be confirmed, at
-  `reject` there is no bypass. Redaction runs before the stored `size` and
+  text: on the DOCUMENTATION route they do not refuse the write (documentation
+  is full of asset hashes, quoted SHAs and config names — refusing made pages
+  unusable); they are counted and surfaced (`guard: N` in the CLI outline,
+  `guard_medium_ignored: N` in the MCP answer) so the leniency is visible, not
+  silent. On the API route medium findings still REFUSE the write (an API body
+  quoting a token is a real leak class): at `ask` a finding can be confirmed,
+  at `reject` there is no bypass. Redaction runs before the stored `size` and
   `content_hash` are computed, so the metadata describes exactly the text
   that ships. Every redacted field (agent-visible text and the stored raw
   HTML) is redacted in a high-confidence pass applied twice: the second pass
@@ -346,8 +358,9 @@ Guarantees and limits:
   link). The agent/user-supplied `project` tag is scanned at the call sites,
   before the store (the cache-hit re-tag path never sees the content guard),
   on fact writes (`memento_add`/`memento_add_batch`/CLI add) exactly as on the
-  fetch path. The project is graded like the visible text (not HighOnly):
-  labels are short identity text where a credential has no business appearing;
+  fetch path. The project is graded like the visible text (not HighOnly) and
+  stays strict on every content route: labels are short identity text where
+  a credential has no business appearing;
   a SHA-named project refuses its own fetch — keep labels human-readable.
   The `redactions` field is dynamically mapped, not filtered — the docs
   index is small and the audit trail is worth the mapping.

@@ -85,8 +85,12 @@ Fetch guard triage and fetch v1 fixes:
   in place (marker `[memento-redacted:pattern]`) and the page is stored — the
   answer lists `redactions` (field/pattern/size, no preview) plus a `warning`;
   redaction runs before `size`/`content_hash`, so metadata matches the stored
-  text. Medium findings in visible text refuse the write (confirmable at `ask`,
-  no bypass at `reject`) — silent redaction would mangle real documentation.
+  text. Medium findings in visible text route on the stored `content_type`:
+  documentation types (html/markdown/plain) keep the page and surface
+  `guard_medium_ignored: N` (CLI outline, MCP field) — refusing on asset
+  hashes and quoted SHAs made documentation unreadable; API types
+  (`application/json|xml`, `+json`/`+xml`) still refuse the write (confirmable
+  at `ask`, no bypass at `reject`).
   The URL and the post-redirect `final_url` are scanned high-confidence only
   (identity fields: a git SHA in a GitHub path is ordinary; a
   credential-bearing redirect target refuses the doc); image hrefs are
@@ -168,6 +172,18 @@ Fetch guard triage and fetch v1 fixes:
   `fetch_obscura_path` (default `obscura`), `fetch_obscura_stealth`
   (default `true`); env `MEMENTO_FETCH_RENDER`, `MEMENTO_FETCH_OBSCURA_PATH`,
   `MEMENTO_FETCH_OBSCURA_STEALTH`.
+
+Named-hash context exemption:
+- The three generic token shapes (`long-hex`, `long-base64`,
+  `long-opaque-token`) are skipped when a word NAMES them within 40 bytes
+  (`sha256:`, `md5`, `hash`, `digest`, `checksum`, `revision`, `rev`,
+  `commit`, `hex`, `git`, `blob`, `tree`, `tag`, `sum`): a hash the author
+  labels is a content fingerprint, not a credential. Vendor-prefixed shapes
+  and the assignment rule never take the exemption (a labeled secret stays
+  a secret; a real credential beside "commit" still meets the assignment
+  rule). Applies uniformly to fact writes and fetched pages.
+- Documents store `content_type` (the server media type), the input the
+  fetch guard routes on.
 
 JS rendering (opt-in, obscura):
 - `fetch_render: "obscura"` adds a browser-render fallback for fetches refused

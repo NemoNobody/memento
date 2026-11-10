@@ -1262,6 +1262,11 @@ type fetchDocOutput struct {
 	Redactions []redactionView `json:"redactions,omitempty" jsonschema:"credential spans redacted out of the stored snapshot (no preview)"`
 	Warning    string          `json:"warning,omitempty" jsonschema:"set when redactions happened: the stored text is edited, quote from it with that in mind"`
 
+	// GuardMediumIgnored surfaces the doc-route leniency: medium-confidence
+	// token shapes left in documentation content on purpose (asset hashes,
+	// quoted SHAs). High-confidence secrets are redacted, never ignored.
+	GuardMediumIgnored int `json:"guard_medium_ignored,omitempty" jsonschema:"medium-confidence shapes left in documentation content on purpose (documentation route only); high-confidence secrets are always redacted"`
+
 	// GitHub local-clone resolution: the answer is a file on this machine.
 	Local bool   `json:"local,omitempty" jsonschema:"true when the url resolved to a file in a local git clone: Path is the file; nothing was fetched"`
 	Path  string `json:"path,omitempty" jsonschema:"local clone file path when local=true"`
@@ -1338,6 +1343,8 @@ func (s *mcpServer) fetchDoc(ctx context.Context, req *mcp.CallToolRequest, in f
 		Truncated: doc.Truncated,
 		Via:       viaOut(doc),
 		Sections:  newDocOutline(doc),
+
+		GuardMediumIgnored: doc.GuardMediumIgnored,
 	}
 	if len(doc.Redactions) > 0 {
 		out.Redactions = make([]redactionView, 0, len(doc.Redactions))

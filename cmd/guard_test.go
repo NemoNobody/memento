@@ -124,7 +124,9 @@ func TestGuardFetchRedactsStoredHTML(t *testing.T) {
 	// A medium shape in the agent-visible text refuses at reject, and the
 	// confirmation flag does NOT bypass there. The habitat is neutral ("value
 	// "): a named hash beside a hint word is exempt by design (long-hex
-	// ctxExempt), so the test must use an unnamed opaque blob.
+	// ctxExempt), so the test must use an unnamed opaque blob. ContentType is
+	// API-shaped: the doc route ignores medium content by design.
+	doc.ContentType = "application/json"
 	doc.Sections = []model.Section{{Order: 0, Heading: "H", Text: "value " + strings.Repeat("k", 48)}}
 	if _, err := guardFetch(doc, config.GuardReject, true); err == nil {
 		t.Fatal("secret_guard=reject has no confirmation bypass for medium findings")
@@ -138,9 +140,10 @@ func TestGuardFetchRedactsStoredHTML(t *testing.T) {
 	}
 }
 
-// The URL is identity: it cannot be redacted, and medium shapes are ordinary
-// in it (git SHAs in GitHub paths). Only the deterministic high shapes may
-// refuse a doc, and the HTML redactions join the audit trail.
+// TestGuardFetchURLIsHighOnly: the URL is identity: it cannot be redacted,
+// and medium shapes are ordinary in it (git SHAs in GitHub paths). Only the
+// deterministic high shapes may refuse a doc, and the HTML redactions join
+// the audit trail.
 func TestGuardFetchURLIsHighOnly(t *testing.T) {
 	// A git SHA (long-hex, medium) in the URL must not reject at reject — the
 	// URL is an identity field and GitHub commit links are legitimate.
@@ -153,8 +156,10 @@ func TestGuardFetchURLIsHighOnly(t *testing.T) {
 	if _, err := guardFetch(doc, config.GuardReject, false); err != nil {
 		t.Fatalf("medium shape in the URL must not reject: %v", err)
 	}
-	// The same shape in the agent-visible text does refuse (control). Neutral
-	// habitat: named-hash contexts are exempt for the generic shapes.
+	// The same shape in the agent-visible text does refuse (control), on the
+	// API route. Neutral habitat: named-hash contexts are exempt for the
+	// generic shapes.
+	doc.ContentType = "application/json"
 	doc.Sections = []model.Section{{Order: 0, Heading: "H", Text: "value " + strings.Repeat("k", 48)}}
 	if _, err := guardFetch(doc, config.GuardReject, false); err == nil {
 		t.Fatal("medium shape in visible text must refuse at reject")
@@ -181,6 +186,59 @@ func TestGuardFetchURLIsHighOnly(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("the html redaction must be reported: %+v", redactions)
+	}
+}
+
+// The doc route (html/markdown/plain) does not refuse on medium shapes in
+// page-derived content: documentation is full of asset hashes, quoted SHAs
+// and config names, and the user asked to read documentation. The count is
+// surfaced (doc.GuardMediumIgnored), high-confidence redaction and the strict
+// identity fields are untouched, and the API route keeps refusing.
+func TestGuardFetchDocRouteIgnoresMedium(t *testing.T) {
+	mk := func() *model.Doc {
+		return &model.Doc{
+			Title:       "Guide",
+			URL:         "https://example.com/guide",
+			ContentType: "text/html",
+			Sections:    []model.Section{{Order: 0, Heading: "H", Text: "value " + strings.Repeat("k", 48)}},
+			HTML:        "<html></html>",
+		}
+	}
+	// reject with no bypass: the doc route still stores the page.
+	doc := mk()
+	if _, err := guardFetch(doc, config.GuardReject, false); err != nil {
+		t.Fatalf("doc route must not refuse on medium content: %v", err)
+	}
+	if doc.GuardMediumIgnored != 1 {
+		t.Errorf("the ignored medium finding must be counted, got %d", doc.GuardMediumIgnored)
+	}
+	// High confidence in content is still redacted in place on the doc route.
+	doc = mk()
+	doc.Sections[0].Text = "the key is " + guardSentinel
+	redactions, err := guardFetch(doc, config.GuardReject, false)
+	if err != nil {
+		t.Fatalf("high shape in doc-route content must be redacted, not refused: %v", err)
+	}
+	if len(redactions) == 0 || strings.Contains(doc.Sections[0].Text, guardSentinel) {
+		t.Errorf("high shape survived the doc-route redaction: %+v", doc.Sections)
+	}
+	// A high shape in the URL still refuses on every route.
+	doc = mk()
+	doc.URL = "https://example.com/o/r?token=" + guardSentinel
+	if _, err := guardFetch(doc, config.GuardReject, true); err == nil {
+		t.Fatal("doc route must keep the URL high-shape refusal")
+	}
+	// The user-supplied project tag stays strict on the doc route.
+	doc = mk()
+	doc.Project = "password = Xk9#mQ2$vL7@pR4!tW8&nZ5"
+	if _, err := guardFetch(doc, config.GuardReject, true); err == nil {
+		t.Fatal("doc route must keep the project tag strict")
+	}
+	// Vendor-suffixed API types route to the strict policy too.
+	doc = mk()
+	doc.ContentType = "application/vnd.github.raw+json"
+	if _, err := guardFetch(doc, config.GuardReject, false); err == nil {
+		t.Fatal("+json content type must keep the medium refusal")
 	}
 }
 

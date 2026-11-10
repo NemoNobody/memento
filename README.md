@@ -206,7 +206,11 @@ OpenSearch snapshot API): [docs/backup.md](docs/backup.md).
 agents and humans, not a guarantee: the store is plaintext, and the
 best-effort secret guard (default `reject`) scans writes for credential-like
 text, but a secret with no known shape passes. The rule stays the first line
-of defense.
+of defense. Fetched pages get the same guard: high-confidence credential
+shapes are redacted out of the stored snapshot; on documentation pages the
+unnamed token shapes are ordinary content and are kept (counted in the
+answer as `guard_medium_ignored`), while API payloads (JSON/XML) refuse the
+write. Details: [docs/how-it-works.md](docs/how-it-works.md).
 
 ## JS rendering (obscura, opt-in)
 
