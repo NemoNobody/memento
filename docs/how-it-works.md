@@ -38,6 +38,9 @@ document keyed by its `key` (the key is the document ID).
 - `key` should be stable, unique per fact, and written in **predictable English**
   (`project:area:location:detail`) — a later session must be able to guess it
   without searching.
+- Keys are **trimmed at every edge** (add, patch, get, journal, obsolete,
+  prune; the batch dupe check runs on the trimmed key): `" k "` and `"k"`
+  must never become two docs with diverging history.
 - `value` is the human-readable fact.
 
 ## Commands
@@ -130,6 +133,13 @@ Marks the fact `obsolete` because its subject is gone (file deleted, endpoint
 removed). The value and `observed_at` are kept; the reason is appended to
 `notes`. Use `add` instead when the value merely changed — corrections journal
 the new value.
+
+The write is scripted (painless): the reason appends **inside** the script, so
+a concurrent `notes_append` cannot be dropped by a read-modify-write from the
+stale read, and status/`current_ref` land in the same atomic update. The
+journal entry carries the reason in notes (audit symmetry with
+`memento_patch`). A reason with `memento_patch` on an already-obsolete fact is
+refused — the reason belongs to the transition.
 
 ## The journal (history)
 
@@ -305,9 +315,17 @@ Guarantees and limits:
   field `html` — the raw HTML is never served to agents, but the surgery on
   the store is reported. The document URL is scanned high-confidence only:
   it is identity (redaction is impossible) and medium shapes are ordinary in
-  it (git SHAs in GitHub paths). The agent/user-supplied `project` tag is
-  scanned at the call sites, before the store: the cache-hit re-tag path
-  never sees the content guard, so the tag is gated where both paths begin.
+  it (git SHAs in GitHub paths). The post-redirect `final_url` carries the
+  same identity role: scanned high-confidence only, and a credential-bearing
+  redirect target (admin:secret@host) refuses the doc — a URL with credentials
+  is never a document. Image hrefs are documentation: the high-confidence
+  shapes are redacted in place (a credential-bearing src is a leak, not a
+  link). The agent/user-supplied `project` tag is scanned at the call sites,
+  before the store (the cache-hit re-tag path never sees the content guard),
+  on fact writes (`memento_add`/`memento_add_batch`/CLI add) exactly as on the
+  fetch path. The project is graded like the visible text (not HighOnly):
+  labels are short identity text where a credential has no business appearing;
+  a SHA-named project refuses its own fetch — keep labels human-readable.
   The `redactions` field is dynamically mapped, not filtered — the docs
   index is small and the audit trail is worth the mapping.
 - Deliberate tradeoff: a high-confidence secret on a fetched page ends up

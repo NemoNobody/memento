@@ -587,11 +587,29 @@ func appendNote(base, line string) string {
 	return base + "\n" + line
 }
 
+// obsoleteScript retires a fact atomically: the reason appends INSIDE the
+// script (read-modify-write of notes from the Go side would race a
+// concurrent notes_append and silently drop it — the same contract as
+// patchScript), and status/current_ref/updated_* land in the same write.
+const obsoleteScript = `
+if (params.reason_append != null) {
+  String n = ctx._source.notes == null ? '' : ctx._source.notes.toString();
+  ctx._source.notes = n.isEmpty() ? params.reason_append : n + '\n' + params.reason_append;
+}
+ctx._source.status = params.status;
+ctx._source.current_ref = params.current_ref;
+ctx._source.updated_at = params.updated_at;
+ctx._source.updated_by = params.updated_by;
+`
+
 func (c *Client) Obsolete(ctx context.Context, key, reason string) error {
 	existing, err := c.Get(ctx, key)
 	if err != nil {
 		return fmt.Errorf("obsolete fact: %w", err)
 	}
+	// The journal snapshot carries the notes as of journal time (a concurrent
+	// atomic append that lands after this Get lags one line; the doc stays
+	// right — see the Patch journal contract).
 	notes := appendNote(existing.Notes, reason)
 	currentRef := existing.CurrentRef
 	if existing.Status != "obsolete" {
@@ -603,12 +621,21 @@ func (c *Client) Obsolete(ctx context.Context, key, reason string) error {
 		}
 		currentRef = ref
 	}
+	params := map[string]interface{}{
+		"reason_append": nil,
+		"status":        "obsolete",
+		"current_ref":   currentRef,
+		"updated_at":    time.Now().UTC().Format(time.RFC3339),
+		"updated_by":    c.resolveAuthor(ctx).Author,
+	}
+	if reason != "" {
+		params["reason_append"] = reason
+	}
 	body, _ := json.Marshal(map[string]interface{}{
-		"doc": map[string]interface{}{
-			"status":      "obsolete",
-			"notes":       notes,
-			"current_ref": currentRef,
-			"updated_at":  time.Now().UTC().Format(time.RFC3339),
+		"script": map[string]interface{}{
+			"lang":   "painless",
+			"source": obsoleteScript,
+			"params": params,
 		},
 	})
 	_, err = c.api.Update(ctx, opensearchapi.UpdateReq{
@@ -723,7 +750,13 @@ func (c *Client) Patch(ctx context.Context, key string, p PatchFields) (PatchRes
 	}
 	journalNotes := newNotes
 	retireReason := ""
-	if p.Status == "obsolete" && p.Reason != "" {
+	if p.Reason != "" && p.Status == "obsolete" && !statusChanged {
+		// The reason belongs to the transition. Re-retiring an already
+		// obsolete fact would append a duplicate notes line with no journal
+		// entry (no state was accepted) — a silent audit lie.
+		return PatchResult{}, fmt.Errorf("patch: fact %q is already obsolete (a reason belongs to the verified→obsolete transition)", key)
+	}
+	if statusChanged && p.Status == "obsolete" && p.Reason != "" {
 		retireReason = p.Reason
 		journalNotes = appendNote(journalNotes, retireReason)
 	}

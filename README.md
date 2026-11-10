@@ -230,6 +230,13 @@ then set `fetch_render: "obscura"` (env `MEMENTO_FETCH_RENDER`).
 `fetch_obscura_path` points at the binary (default: `obscura` via PATH);
 `fetch_obscura_stealth` (default `true`) passes `--stealth`.
 
+Egress rules: the proxy (`fetch_proxy_url`, validated at config load — every
+command, not just fetch) and the environment proxy are honored by the
+renderer; a proxy it cannot forward fails the render loudly, never a direct
+render behind it. A direct render resolves the target through the same
+public-address rule as the plain fetch (no internal addresses). See
+docs/setup.md §8 for the full egress and SSRF model.
+
 v1 limits, stated plainly: the dump mode does not report the post-redirect
 URL, so a rendered doc stores `final_url` = the requested URL; the renderer
 is serialized (one render at a time); `robots.txt` (when

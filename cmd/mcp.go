@@ -168,7 +168,7 @@ func runMCPServer(confPath string) error {
 			"updated (newest activity first: 'what moved since last session'; note " +
 			"a same-value touch moves updated_at without changing age/stale); " +
 			"sort=key for stable navigation. History ships only on full rows " +
-			"(include_history=true with compact=false); memento_journal is the " +
+			"(include_history: true with compact: false); memento_journal is the " +
 			"history tool. A zero-hit answer carries a hint naming the next " +
 			"right move.",
 	}, s.list)
@@ -550,7 +550,13 @@ type itemGet struct {
 
 func (s *mcpServer) get(ctx context.Context, req *mcp.CallToolRequest, in getInput) (*mcp.CallToolResult, getOutput, error) {
 	// Validate the shape before any store contact: exactly one of key/keys.
-	hasKey := strings.TrimSpace(in.Key) != ""
+	// Keys are trimmed at this edge: the store holds trimmed keys, and a
+	// lookup/echo on " k " would miss the fact it names.
+	in.Key = strings.TrimSpace(in.Key)
+	for i, k := range in.Keys {
+		in.Keys[i] = strings.TrimSpace(k)
+	}
+	hasKey := in.Key != ""
 	if hasKey == (len(in.Keys) > 0) {
 		return nil, getOutput{}, fmt.Errorf("memento_get: provide exactly one of key or keys (up to %d)", maxGetKeys)
 	}
@@ -631,7 +637,7 @@ func (s *mcpServer) add(ctx context.Context, req *mcp.CallToolRequest, in addInp
 	if cerr != nil {
 		return nil, addOutput{}, storeError("memento_add", cerr)
 	}
-	out, err := s.addOne(ctx, cfg, nil, in)
+	out, err := s.addOne(ctx, cfg, nil, nil, in)
 	if err != nil {
 		return nil, addOutput{}, err
 	}
@@ -644,9 +650,13 @@ func (s *mcpServer) add(ctx context.Context, req *mcp.CallToolRequest, in addInp
 // per item without re-reading config per call.
 // addOne is the shared write path of memento_add and memento_add_batch.
 // c is the shared client (a batch reuses one connection and one EnsureIndex);
-// nil means "create one for this single call". The key is trimmed at this
-// edge: "k " and "k" must not become two docs with diverging history.
-func (s *mcpServer) addOne(ctx context.Context, cfg *config.Config, c *client.Client, in addInput) (addOutput, error) {
+// nil means "create one for this single call". cErr is a client-creation
+// failure the batch already paid for: the item runs validation and guard and
+// reports it WITHOUT a store attempt (a slow store must not cost the batch
+// ten timeouts and ten identical per-item client creations). The key is
+// trimmed at this edge: "k " and "k" must not become two docs with
+// diverging history.
+func (s *mcpServer) addOne(ctx context.Context, cfg *config.Config, c *client.Client, cErr error, in addInput) (addOutput, error) {
 	// Validate the shape before guard and store: an empty key produces a
 	// cryptic store error, and an unknown category never ages (silent rot).
 	in.Key = strings.TrimSpace(in.Key)
@@ -670,14 +680,20 @@ func (s *mcpServer) addOne(ctx context.Context, cfg *config.Config, c *client.Cl
 		in.Source = "tool:mcp"
 	}
 	// The guard runs before any store contact: a rejected write must be
-	// rejected even when OpenSearch is down.
+	// rejected even when OpenSearch is down. The project label is agent-supplied
+	// identity text stored in the shared index (the fetch path gates it the same
+	// way) — the default "global" is inert.
 	if err := guardCheck(cfg.SecretGuard, in.ConfirmSecret,
 		guardField{Name: "key", Text: in.Key},
 		guardField{Name: "value", Text: in.Value},
+		guardField{Name: "project", Text: in.Project},
 		guardField{Name: "notes", Text: in.Notes},
 		guardField{Name: "summary", Text: in.Summary},
 		guardField{Name: "source", Text: in.Source}); err != nil {
 		return addOutput{}, err
+	}
+	if cErr != nil {
+		return addOutput{}, cErr
 	}
 	if c == nil {
 		var cerr error
@@ -746,11 +762,10 @@ func (s *mcpServer) addBatch(ctx context.Context, req *mcp.CallToolRequest, in a
 	}
 	out := addBatchOutput{Items: make([]addBatchItem, 0, len(in.Items))}
 	for _, it := range in.Items {
-		res, err := s.addOne(ctx, cfg, c, it)
-		item := addBatchItem{Key: it.Key, Created: res.Created, Changed: res.Changed, Status: res.Status}
-		if cErr != nil {
-			err = cErr
-		}
+		res, err := s.addOne(ctx, cfg, c, cErr, it)
+		// The echo carries the TRIMMED key: it is what the store holds, and a
+		// caller reconciling answers against the store must not miss on " k ".
+		item := addBatchItem{Key: strings.TrimSpace(it.Key), Created: res.Created, Changed: res.Changed, Status: res.Status}
 		if err != nil {
 			item.Error = err.Error()
 		}
@@ -942,6 +957,10 @@ func (s *mcpServer) obsolete(ctx context.Context, req *mcp.CallToolRequest, in o
 	// The config is the guard's policy: a load failure must fail the write
 	// (as in add), never silently skip the scan of a credential-like reason.
 	// Loaded once and reused: a locked wallet is not prompted twice per write.
+	in.Key = strings.TrimSpace(in.Key)
+	if in.Key == "" {
+		return nil, obsoleteOutput{}, errors.New("memento_obsolete: key is required")
+	}
 	cfg, cerr := s.loadConfig()
 	if cerr != nil {
 		return nil, obsoleteOutput{}, storeError("memento_obsolete", cerr)
@@ -983,6 +1002,10 @@ type pruneOutput struct {
 // confirm=true the plan is returned and nothing is written. An agent must
 // relay the plan to the user and re-call only after explicit approval.
 func (s *mcpServer) prune(ctx context.Context, req *mcp.CallToolRequest, in pruneInput) (*mcp.CallToolResult, pruneOutput, error) {
+	in.Key = strings.TrimSpace(in.Key)
+	if in.Key == "" {
+		return nil, pruneOutput{}, errors.New("memento_prune: key is required")
+	}
 	c, cfg, err := s.newClientWithConfig(ctx)
 	if err != nil {
 		return nil, pruneOutput{}, storeError("memento_prune", err)
@@ -1081,6 +1104,10 @@ type journalOutput struct {
 }
 
 func (s *mcpServer) journal(ctx context.Context, req *mcp.CallToolRequest, in journalInput) (*mcp.CallToolResult, journalOutput, error) {
+	in.Key = strings.TrimSpace(in.Key)
+	if in.Key == "" {
+		return nil, journalOutput{}, errors.New("memento_journal: key is required")
+	}
 	c, err := s.newClient(ctx)
 	if err != nil {
 		return nil, journalOutput{}, storeError("memento_journal", err)
@@ -1114,6 +1141,10 @@ type historyInfoOutput struct {
 }
 
 func (s *mcpServer) historyInfo(ctx context.Context, req *mcp.CallToolRequest, in historyInfoInput) (*mcp.CallToolResult, historyInfoOutput, error) {
+	in.Key = strings.TrimSpace(in.Key)
+	if in.Key == "" {
+		return nil, historyInfoOutput{}, errors.New("memento_history_info: key is required")
+	}
 	c, err := s.newClient(ctx)
 	if err != nil {
 		return nil, historyInfoOutput{}, storeError("memento_history_info", err)

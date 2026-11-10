@@ -131,8 +131,8 @@ func TestLoadConfigFetchFileFields(t *testing.T) {
 func TestValidateProxyURL(t *testing.T) {
 	ok := []string{"", "http://p:3128", "https://p.example:8443", "socks5://127.0.0.1:1080", "socks5h://p:1080"}
 	for _, v := range ok {
-		if err := validateProxyURL(v); err != nil {
-			t.Errorf("validateProxyURL(%q) = %v, want ok", v, err)
+		if err := ValidateProxyURL(v); err != nil {
+			t.Errorf("ValidateProxyURL(%q) = %v, want ok", v, err)
 		}
 	}
 	bad := []string{
@@ -143,8 +143,8 @@ func TestValidateProxyURL(t *testing.T) {
 		"not a url ://",         // syntax
 	}
 	for _, v := range bad {
-		if err := validateProxyURL(v); err == nil {
-			t.Errorf("validateProxyURL(%q) = nil, want refusal", v)
+		if err := ValidateProxyURL(v); err == nil {
+			t.Errorf("ValidateProxyURL(%q) = nil, want refusal", v)
 		}
 	}
 }

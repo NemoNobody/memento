@@ -246,10 +246,13 @@ func guardFetch(doc *model.Doc, level string, allowed bool) ([]model.Redaction, 
 	// trail (field "html": never served to agents, but the store surgery is
 	// reported).
 	var htmlFindings []secretguard.Finding
-	var more []secretguard.Finding
 	doc.HTML, htmlFindings = secretguard.Redact("html", doc.HTML)
-	doc.HTML, more = secretguard.Redact("html", doc.HTML)
-	htmlFindings = append(htmlFindings, more...)
+	if len(htmlFindings) > 0 {
+		// The second pass only has work when the first one rewrote spans.
+		var more []secretguard.Finding
+		doc.HTML, more = secretguard.Redact("html", doc.HTML)
+		htmlFindings = append(htmlFindings, more...)
+	}
 	for _, f := range htmlFindings {
 		redactions = append(redactions, model.Redaction{Field: "html", Pattern: f.Pattern, Chars: f.Length})
 	}
@@ -267,6 +270,10 @@ func guardFetch(doc *model.Doc, level string, allowed bool) ([]model.Redaction, 
 		// ordinary in URLs (git SHAs in GitHub paths). Only the deterministic
 		// credential shapes may refuse it.
 		{Name: "url", Text: doc.URL, HighOnly: true},
+		// The post-redirect URL carries the same identity role, and a redirect
+		// target that bears credentials (admin:S3cr3t@host) is not a document
+		// — refuse the doc, do not redact the audit trail.
+		{Name: "final_url", Text: doc.FinalURL, HighOnly: true},
 		{Name: "project", Text: doc.Project},
 		{Name: "title", Text: doc.Title},
 	}
@@ -278,6 +285,11 @@ func guardFetch(doc *model.Doc, level string, allowed bool) ([]model.Redaction, 
 			guardField{Name: "section " + strconv.Itoa(i), Text: doc.Sections[i].Text})
 	}
 	for i := range doc.Images {
+		// An href is documentation: the high-confidence credential shapes are
+		// redacted in place (a basic-auth URL in src is a leak, not a link);
+		// medium shapes (asset hashes) stay — refusing on them was the
+		// false-positive class that made pages unusable.
+		doc.Images[i].URL = redact("image "+strconv.Itoa(i)+" url", doc.Images[i].URL)
 		doc.Images[i].Alt = redact("image "+strconv.Itoa(i)+" alt", doc.Images[i].Alt)
 		doc.Images[i].Title = redact("image "+strconv.Itoa(i)+" title", doc.Images[i].Title)
 		fields = append(fields,

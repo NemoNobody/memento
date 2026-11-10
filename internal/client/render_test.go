@@ -3,11 +3,14 @@ package client
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/NemoNobody/memento/internal/config"
 )
@@ -47,6 +50,11 @@ func renderCfg(stub string) *config.Config {
 	cfg := config.DefaultConfig()
 	cfg.FetchRender = config.RenderObscura
 	cfg.FetchObscuraPath = stub
+	// The stub renders run offline: the SSRF gate resolves the target before
+	// spawning, and the stub suite must not depend on DNS. The gate itself is
+	// unit-tested on literal addresses (TestRenderSSRFCheck); the stub path
+	// runs with the documented self-hosted opt-in on.
+	cfg.FetchAllowPrivate = true
 	return cfg
 }
 
@@ -258,5 +266,122 @@ func TestFetchPageRenderOff(t *testing.T) {
 	}
 	if readLog(t, logPath) != "" {
 		t.Error("renderer invoked with fetch_render=off")
+	}
+}
+
+// TestRenderSSRFCheck pins the render path's SSRF gate: the plain fetch
+// refuses non-public dial addresses, and a host refused that way is
+// render-ELIGIBLE — obscura must not become the bypass (DNS rebinding, a
+// redirect target, a literal internal address).
+func TestRenderSSRFCheck(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.FetchRender = config.RenderObscura
+	blocked := []string{
+		"http://127.0.0.1/x",
+		"http://localhost:8080/",
+		"http://169.254.169.254/latest/meta-data/",
+		"http://10.0.0.5/x",
+		"http://192.168.88.37:8080/",
+		"http://[::1]/x",
+		"http://app.internal/x",
+	}
+	for _, u := range blocked {
+		if err := renderSSRFCheck(context.Background(), cfg, u); err == nil {
+			t.Errorf("renderSSRFCheck(%q) = nil, want refusal", u)
+		}
+	}
+	// The documented self-hosted opt-in opens the gate (fetch_allow_private).
+	priv := config.DefaultConfig()
+	priv.FetchAllowPrivate = true
+	for _, u := range []string{"http://127.0.0.1/x", "http://localhost:8080/"} {
+		if err := renderSSRFCheck(context.Background(), priv, u); err != nil {
+			t.Errorf("fetch_allow_private must open the gate for %q: %v", u, err)
+		}
+	}
+}
+
+// TestRenderObscuraSSRFGateIntegration: the gate runs before the spawn — a
+// blocked target never reaches the renderer at all.
+func TestRenderObscuraSSRFGateIntegration(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "argv.log")
+	stub := writeObscuraStub(t, logPath)
+	t.Setenv("STUB_MODE", "ok")
+	cfg := renderCfg(stub)
+	cfg.FetchAllowPrivate = false // gate on: the target is checked, not stubbed
+	if _, err := renderObscura(context.Background(), cfg, "http://127.0.0.1/admin"); err == nil {
+		t.Fatal("the renderer ran on a loopback target")
+	} else if !strings.Contains(err.Error(), "not a public address") {
+		t.Errorf("want the SSRF refusal, got: %v", err)
+	}
+	if readLog(t, logPath) != "" {
+		t.Error("obscura was spawned for a blocked target")
+	}
+}
+
+// TestRenderEgressProxy pins the egress contract: the explicit proxy wins,
+// the environment proxy is the operator's intent and is forwarded, a proxy
+// that cannot be forwarded fails the render, and no proxy means direct
+// (the caller gates the route).
+func TestRenderEgressProxy(t *testing.T) {
+	cfg := config.DefaultConfig()
+	fixed := func(want string) func(*http.Request) (*url.URL, error) {
+		return func(*http.Request) (*url.URL, error) {
+			if want == "" {
+				return nil, nil
+			}
+			u, err := url.Parse(want)
+			return u, err
+		}
+	}
+
+	// Explicit wins over env.
+	cfg.FetchProxyURL = "http://explicit:3128"
+	p, err := renderEgressProxyWith(cfg, "https://example.com/x", fixed("http://env:3128"))
+	if err != nil || p != "http://explicit:3128" {
+		t.Errorf("explicit proxy: %q %v", p, err)
+	}
+	cfg.FetchProxyURL = ""
+
+	// The env proxy is forwarded (the plain transport honored it; the render
+	// must not run direct behind it).
+	p, err = renderEgressProxyWith(cfg, "https://example.com/x", fixed("http://env:3128"))
+	if err != nil || p != "http://env:3128" {
+		t.Errorf("env proxy: %q %v", p, err)
+	}
+
+	// NO_PROXY coverage: the env decision says "direct for this target".
+	p, err = renderEgressProxyWith(cfg, "https://example.com/x", fixed(""))
+	if err != nil || p != "" {
+		t.Errorf("no proxy: %q %v", p, err)
+	}
+
+	// A credential proxy is never forwarded to argv — and the render fails
+	// rather than going direct behind it.
+	if _, err := renderEgressProxyWith(cfg, "https://example.com/x", fixed("http://user:sekret@env:3128")); err == nil {
+		t.Error("a credential env proxy must fail the render")
+	} else if strings.Contains(err.Error(), "sekret") {
+		t.Errorf("the proxy URL leaked into the error: %v", err)
+	}
+}
+
+// TestRenderSlotIsCtxAware pins the semaphore: a caller that already gave up
+// must not queue behind a busy renderer (the render window is minutes; the
+// queue is cancelable).
+func TestRenderSlotIsCtxAware(t *testing.T) {
+	stub := writeObscuraStub(t, filepath.Join(t.TempDir(), "argv.log"))
+	cfg := renderCfg(stub)
+	obscuraSem <- struct{}{} // the slot is busy
+	defer func() { <-obscuraSem }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	_, err := renderObscura(ctx, cfg, "https://example.com/x")
+	if err == nil || !strings.Contains(err.Error(), "render slot") {
+		t.Fatalf("want the slot-wait refusal, got: %v", err)
+	}
+	if time.Since(start) > time.Second {
+		t.Errorf("the queue ignored the cancelled context (%v)", time.Since(start))
 	}
 }

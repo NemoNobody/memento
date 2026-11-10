@@ -480,20 +480,22 @@ func loadConfig(explicitPath string, finder func() string) (*Config, error) {
 		return nil, fmt.Errorf("opensearch_url carries user info; put the user in opensearch_user and the password in the keyring/env (url: %s)", RedactURL(cfg.OpenSearchURL))
 	}
 	resolvePassword(cfg)
-	if err := validateProxyURL(cfg.FetchProxyURL); err != nil {
+	if err := ValidateProxyURL(cfg.FetchProxyURL); err != nil {
 		return nil, fmt.Errorf("fetch_proxy_url: %w", err)
 	}
 	return cfg, nil
 }
 
-// validateProxyURL is the load-time contract for fetch_proxy_url: a
-// scheme+host a client can actually dial. A scheme-less value ("host:3128")
+// ValidateProxyURL is the load-time contract for fetch_proxy_url: a
+// scheme+host a client can actually dial. It is exported for the render
+// path, which re-arms the same rule for environment proxies and Config
+// values built in code (one rule, one test table). A scheme-less value ("host:3128")
 // parses as a bogus scheme and fails at fetch time as a NETWORK error —
 // which would silently steer the obscura render fallback into direct egress
 // (the proxy is the operator's chosen route, never to be bypassed).
 // Credentials in a proxy URL are refused at load (argv hygiene: the render
 // path must not forward secrets, and the value surfaces in errors).
-func validateProxyURL(v string) error {
+func ValidateProxyURL(v string) error {
 	if v == "" {
 		return nil
 	}

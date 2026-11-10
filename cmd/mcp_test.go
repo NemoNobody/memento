@@ -517,6 +517,13 @@ func TestNewFactViewCarriesTimeAndHistory(t *testing.T) {
 	if len(off.History) != 0 {
 		t.Errorf("history must be stripped by default, got %v", off.History)
 	}
+	// History is a full-row-only option: compact=true never ships it, even
+	// when include_history asks (compact rows are navigation; the journal
+	// tools read history).
+	compact := newFactView(f, true, true)
+	if len(compact.History) != 0 {
+		t.Errorf("compact must strip history, got %v", compact.History)
+	}
 	if off.Value != "v" {
 		t.Errorf("stripping history must not strip the current value, got %q", off.Value)
 	}
@@ -703,6 +710,16 @@ func TestMCPServerM1ValidationOffline(t *testing.T) {
 			map[string]any{"key": "k", "value": "v", "category": "config"},
 			map[string]any{"key": "k", "value": "w", "category": "config"},
 		}}, "duplicate key"},
+		// The dupe check runs on the TRIMMED key (what the store gets):
+		// " k " and "k" are one fact, and a batch of two is the silent
+		// correction the contract refuses.
+		{"memento_add_batch", map[string]any{"items": []any{
+			map[string]any{"key": " k ", "value": "v", "category": "config"},
+			map[string]any{"key": "k", "value": "w", "category": "config"},
+		}}, "duplicate key"},
+		// The project label is agent-supplied identity text in the shared
+		// index: the fact path gates it exactly like the fetch path.
+		{"memento_add", map[string]any{"key": "k", "value": "v", "category": "config", "project": "rel " + guardSentinel}, "secret-guard"},
 		{"memento_patch", map[string]any{"key": ""}, "key is required"},
 		{"memento_get", map[string]any{"key": "k", "keys": []any{"k"}}, "exactly one"},
 		{"memento_get", map[string]any{}, "exactly one"},

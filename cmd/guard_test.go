@@ -180,3 +180,48 @@ func TestGuardFetchURLIsHighOnly(t *testing.T) {
 		t.Errorf("the html redaction must be reported: %+v", redactions)
 	}
 }
+
+// The post-redirect URL carries the same identity role as the URL: a git SHA
+// in the chain is ordinary (pass), a credential-bearing redirect target is
+// not a document (refuse). Image hrefs are documentation: the high-confidence
+// credential shapes are redacted in place, the audit trail reports them.
+func TestGuardFetchFinalURLAndImages(t *testing.T) {
+	doc := &model.Doc{
+		Title:    "Page",
+		URL:      "https://example.com/x",
+		FinalURL: "https://github.com/o/r/commit/0123456789abcdef0123456789abcdef01234567",
+		Sections: []model.Section{{Order: 0, Heading: "H", Text: "clean"}},
+		HTML:     "<html></html>",
+	}
+	if _, err := guardFetch(doc, config.GuardReject, false); err != nil {
+		t.Fatalf("a SHA in the redirect chain must not reject: %v", err)
+	}
+
+	// A redirect target that bears credentials is refused: it is identity
+	// (redaction is impossible) and never a document.
+	doc.FinalURL = "http://admin:S3cr3tPw@media.internal/x"
+	if _, err := guardFetch(doc, config.GuardReject, true); err == nil {
+		t.Fatal("a basic-auth redirect target must refuse the doc")
+	}
+
+	// An image src with credentials is redacted in place (a leak, not a
+	// link); the redaction joins the audit trail.
+	doc.FinalURL = ""
+	doc.Images = []model.ImageRef{{URL: "http://admin:S3cr3tPw@cdn.example/i.png", Alt: "logo"}}
+	redactions, err := guardFetch(doc, config.GuardReject, false)
+	if err != nil {
+		t.Fatalf("the image URL shape must be redacted, not refused: %v", err)
+	}
+	if strings.Contains(doc.Images[0].URL, "S3cr3tPw") {
+		t.Errorf("the credential survived the image URL redaction: %s", doc.Images[0].URL)
+	}
+	reported := false
+	for _, r := range redactions {
+		if r.Field == "image 0 url" {
+			reported = true
+		}
+	}
+	if !reported {
+		t.Errorf("the image URL redaction must be reported: %+v", redactions)
+	}
+}

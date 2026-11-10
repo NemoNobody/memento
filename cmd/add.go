@@ -56,6 +56,7 @@ func AddCmd() *cobra.Command {
 			if err := guardCheck(cfg.SecretGuard, addFlags.allowSecret,
 				guardField{Name: "key", Text: key},
 				guardField{Name: "value", Text: value},
+				guardField{Name: "project", Text: addFlags.project},
 				guardField{Name: "notes", Text: addFlags.notes},
 				guardField{Name: "summary", Text: addFlags.summary},
 				guardField{Name: "source", Text: addFlags.source}); err != nil {

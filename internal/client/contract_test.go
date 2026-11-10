@@ -623,7 +623,8 @@ func TestPruneMissingFactIsNotFound(t *testing.T) {
 
 // TestObsoleteKeepsValueAndAppendsReason pins the obsolete contract: the value
 // and observed_at are left untouched (there is no new observation), the reason
-// is appended to notes so earlier qualifiers survive, and the transition is
+// appends INSIDE the script (a doc-side notes replace from the stale Get
+// would race a concurrent notes_append and drop it), and the transition is
 // journaled (audit symmetry with memento_add/memento_patch).
 func TestObsoleteKeepsValueAndAppendsReason(t *testing.T) {
 	var updateBody string
@@ -650,28 +651,24 @@ func TestObsoleteKeepsValueAndAppendsReason(t *testing.T) {
 	if len(updates) != 1 {
 		t.Fatalf("expected one update, got %d", len(updates))
 	}
-	var req map[string]any
-	if err := json.Unmarshal([]byte(updateBody), &req); err != nil {
-		t.Fatalf("update body is not JSON: %v (%s)", err, updateBody)
+	params := patchParams(t, updateBody) // obsolete must be scripted, like patch
+	if params["status"] != "obsolete" {
+		t.Errorf("status = %v, want obsolete", params["status"])
 	}
-	doc, ok := req["doc"].(map[string]any)
-	if !ok {
-		t.Fatalf("update body has no doc: %s", updateBody)
+	if params["reason_append"] != "file deleted" {
+		t.Errorf("reason_append = %v, want the reason appended inside the script", params["reason_append"])
 	}
-	if doc["status"] != "obsolete" {
-		t.Errorf("status = %v, want obsolete", doc["status"])
+	if v, has := params["notes"]; has && v != nil {
+		t.Errorf("notes must not be a doc-side replace (the concurrent-append race): %v", v)
 	}
-	if want := "old note\nfile deleted"; doc["notes"] != want {
-		t.Errorf("notes = %v, want %q", doc["notes"], want)
-	}
-	if _, has := doc["value"]; has {
+	if v, has := params["value"]; has && v != nil {
 		t.Error("obsolete must not overwrite the value — there is no new observation")
 	}
-	if _, has := doc["observed_at"]; has {
+	if v, has := params["observed_at"]; has && v != nil {
 		t.Error("obsolete must not touch observed_at")
 	}
-	if doc["current_ref"] != "journal-entry-1" {
-		t.Errorf("current_ref = %v, want journal-entry-1: the transition must be journaled", doc["current_ref"])
+	if params["current_ref"] != "journal-entry-1" {
+		t.Errorf("current_ref = %v, want journal-entry-1: the transition must be journaled", params["current_ref"])
 	}
 	journalPath := "/memento-history-" + time.Now().UTC().Format("2006.01") + "/_doc"
 	appends := fake.requestsFor(http.MethodPost, journalPath)

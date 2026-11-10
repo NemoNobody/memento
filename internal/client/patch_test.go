@@ -260,3 +260,20 @@ func TestPatchRetireEmptyNotes(t *testing.T) {
 		t.Errorf("journal notes = %q, want exactly 'gone' (no leading newline)", je["notes"])
 	}
 }
+
+// TestPatchRetireOnObsoleteFactIsRejected: a reason belongs to the
+// verified→obsolete transition. Re-retiring an already obsolete fact with a
+// reason would append a duplicate notes line with no journal entry (no state
+// was accepted) — a silent audit lie, so it fails loudly.
+func TestPatchRetireOnObsoleteFactIsRejected(t *testing.T) {
+	var body string
+	c, fake := newFakeClient(t, patchRespond(
+		`{"key":"k","value":"v","category":"config","project":"p","status":"obsolete"}`, &body))
+	_, err := c.Patch(context.Background(), "k", PatchFields{Status: "obsolete", Reason: "gone"})
+	if err == nil || !strings.Contains(err.Error(), "already obsolete") {
+		t.Errorf("re-retire with a reason must fail loudly: %v", err)
+	}
+	if len(fake.requestsFor(http.MethodPost, "/memento/_update/k")) != 0 {
+		t.Error("the rejected patch must not touch the doc")
+	}
+}

@@ -326,10 +326,24 @@ TTL pipeline as plain fetches. v1 limitation: `final_url` of a rendered doc
 is the requested URL (the dump mode does not report redirects).
 
 The proxy is the operator's chosen egress and the renderer must not bypass
-it: when `fetch_proxy_url` is set, obscura is passed `--proxy` and a proxy
-URL that cannot be forwarded (credentials in the URL, a scheme-less value
-like `host:3128`) is a **config load error** — the render never falls back
-to direct egress behind your back.
+it: when `fetch_proxy_url` is set, obscura is passed `--proxy`; when only the
+standard `HTTP_PROXY`/`HTTPS_PROXY` environment is configured, the renderer
+consults it for the target (the plain transport honors it, so the render must
+not run direct behind it). A proxy URL that cannot be forwarded (credentials
+in the URL, a scheme-less value like `host:3128`) is a **config load error**
+for every command — the render never falls back to direct egress behind your
+back.
+
+SSRF: the plain fetch refuses internal addresses at dial time (loopback,
+RFC1918, link-local/cloud metadata), and a host refused that way fails as a
+network error — which makes it render-eligible. The renderer dials on its
+own, so a **direct** render resolves the target through the same rule and
+refuses a non-public answer (`fetch_allow_private: true` is the documented
+opt-in for self-hosted targets). With a proxy the proxy is the egress and
+enforces the policy — run the renderer behind a proxy if you need the
+allowlist and the internal-address rule enforced on the render route: obscura
+follows redirects on its own, and a DNS-rebinding window between the
+pre-check and obscura's dial cannot be closed from memento's side.
 
 Time budget of one `memento fetch` / `memento_fetch_doc`, worst case: the
 polite 429 retry (a ~2 s pause + one more request) plus the proxy fallback

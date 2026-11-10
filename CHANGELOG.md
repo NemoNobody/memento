@@ -68,6 +68,9 @@ MCP ergonomics (context economy, partial updates, batch):
 - `memento_status` reports `mcp_version`, `commit`, `started_at` (the running
   binary, not the repo on disk); `version` renamed to `opensearch_version`.
   **Breaking** for clients reading `version`.
+- Keys are trimmed at every edge (add/patch/get/keys/journal/obsolete/prune;
+  the batch dupe check uses the trimmed key): `" k "` and `"k"` never become
+  two docs. A compact answer never ships history (full rows only).
 - 15 MCP tools.
 
 Fetch guard triage and fetch v1 fixes:
@@ -79,8 +82,14 @@ Fetch guard triage and fetch v1 fixes:
   the page is stored — the answer lists `redactions` (field/pattern/size, no
   preview) plus a `warning`; redaction runs before `size`/`content_hash`, so
   metadata matches the stored text. Medium findings in visible text refuse the
-  write (confirmable at `ask`, no bypass at `reject`) — silent redaction would
-  mangle real documentation. The same graded set scans fact writes. The
+  the write (confirmable at `ask`, no bypass at `reject`) — silent redaction would
+  mangle real documentation. The same graded set scans fact writes. The stored
+  HTML is redacted in a second pass (the overlap tail) and its redactions join
+  the audit trail (field `html`); the URL and the post-redirect `final_url` are
+  scanned high-confidence only (a credential-bearing redirect target refuses
+  the doc); image hrefs are redacted in place; the credential-assignment rule
+  reads quoted JSON/YAML config lines; the agent-supplied `project` tag is
+  guard-scanned on every write path (facts and docs). The
   credential-assignment rule reads quoted JSON/YAML lines (`"api_key":
   "S3cr3t"`). The stored raw HTML is redacted twice (the second pass closes
   the overlap tail), its redactions are reported as field `html`; the
@@ -112,10 +121,18 @@ JS rendering (opt-in, obscura):
   stealth build into `~/.local/bin`. The renderer is serialized (one render
   at a time, cancel-aware); `robots.txt` (when respected) gates both paths;
   the renderer keeps the operator's egress — `fetch_proxy_url` is validated
-  at config load, and a proxy that cannot be forwarded (credentials, a
-  scheme-less value) is a load error: the render never runs direct behind it
-  (argv hygiene: a credential proxy is never forwarded to the subprocess);
-  a typo in `fetch_render` is a loud startup error.
+  at config load (every command fails on a bad value: the proxy is a route,
+  not a fetch decoration), the environment proxy (`HTTP_PROXY`) is consulted
+  for the render target too, and a proxy that cannot be forwarded
+  (credentials, a scheme-less value) is a load error: the render never runs
+  direct behind it (argv hygiene: a credential proxy is never forwarded to
+  the subprocess); a typo in `fetch_render` is a loud startup error.
+- SSRF: a **direct** render resolves the target through the same public-address
+  rule as the plain fetch and refuses internal addresses (the render is the
+  SSRF gate for its own route; `fetch_allow_private` opens it). With a proxy
+  the proxy enforces the policy. Known limit: obscura follows redirects on
+  its own, and a DNS-rebinding window between the pre-check and obscura's
+  dial remains — run the renderer behind a proxy for policy-enforced egress.
 - v1 limits: rendered docs store `final_url` = the requested URL (the dump
   mode does not report redirects); success = exit 0 + non-empty dump.
   README “JS rendering” and docs/setup.md §8.
@@ -126,6 +143,12 @@ JS rendering (opt-in, obscura):
   this release), linked from SECURITY.md.
 
 Fixed:
+- `memento_obsolete` (CLI and MCP) writes are scripted: the reason appends
+  inside the painless script, so a concurrent atomic `notes_append` can no
+  longer be dropped by the read-modify-write from the stale read (the
+  contract `memento_patch` already had). A `reason` with `memento_patch` on
+  an already-obsolete fact is refused (it would append a duplicate line with
+  no journal entry).
 - Journal infrastructure: a failed first install (403, network blip) is
   no longer remembered as "installed" — appends retry it until it lands,
   so a long-lived MCP server never journals without the template and the

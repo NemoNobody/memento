@@ -3,11 +3,14 @@ package client
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/NemoNobody/memento/internal/config"
@@ -68,18 +71,26 @@ func renderObscura(ctx context.Context, cfg *config.Config, normalizedURL string
 	}
 
 	// The proxy is the operator's chosen egress: when fetch_proxy_url is set,
-	// the renderer MUST go through it. A value that cannot be forwarded
-	// (credentials, bogus scheme) is a loud config error — rendering DIRECT
-	// from the machine's real IP behind the operator's back is the failure
-	// mode this path must never take. (validateProxyURL already refuses
-	// userinfo and scheme-less values at config load; this check re-arms the
-	// rule for callers that build Config in code.)
-	proxyArg := ""
-	if cfg.FetchProxyURL != "" {
-		if verr := validateProxyURLForRender(cfg.FetchProxyURL); verr != nil {
-			return nil, fmt.Errorf("obscura: %w", verr)
+	// the renderer MUST go through it. The environment proxy (HTTP_PROXY,
+	// honored by the plain transport) is the same operator intent, so the
+	// renderer consults it too — falling back to DIRECT from the machine's
+	// real IP behind the operator's back is the failure mode this path must
+	// never take. A proxy that cannot be forwarded (credentials, bogus
+	// scheme) is a loud error, never a silent direct render. (Config load
+	// already validates fetch_proxy_url; this check re-arms the rule for
+	// env proxies and Config values built in code.)
+	proxyArg, err := renderEgressProxy(cfg, normalizedURL)
+	if err != nil {
+		return nil, fmt.Errorf("obscura: %w", err)
+	}
+	if proxyArg == "" {
+		// Direct render: obscura resolves, dials and follows redirects on its
+		// own, so the render is the SSRF gate for this route — the plain
+		// fetch refused the same target at dial time (which is what made it
+		// render-eligible), and obscura must not become the bypass.
+		if err := renderSSRFCheck(ctx, cfg, normalizedURL); err != nil {
+			return nil, fmt.Errorf("obscura: %w", err)
 		}
-		proxyArg = cfg.FetchProxyURL
 	}
 
 	select {
@@ -149,24 +160,80 @@ func renderObscura(ctx context.Context, cfg *config.Config, normalizedURL string
 	return data, nil
 }
 
-// validateProxyURLForRender mirrors config.validateProxyURL for Config
-// values built in code (tests, embedding): the render path re-arms the
-// egress rule itself instead of trusting the load pipeline.
-func validateProxyURLForRender(v string) error {
-	u, err := url.Parse(v)
+// renderEgressProxy returns the proxy the renderer must use for rawURL ("")
+// means "render direct, and guard the route yourself"). The explicit
+// fetch_proxy_url wins; otherwise the environment proxy the plain transport
+// honors (HTTP_PROXY/HTTPS_PROXY/NO_PROXY) is the operator's egress for this
+// target and is forwarded to the renderer. A proxy that config.ValidateProxyURL
+// refuses (credentials, scheme-less, bogus scheme) fails the render loudly:
+// the renderer never runs direct behind a proxy it cannot forward, and
+// argv never carries credentials (visible in /proc).
+func renderEgressProxy(cfg *config.Config, rawURL string) (string, error) {
+	return renderEgressProxyWith(cfg, rawURL, http.ProxyFromEnvironment)
+}
+
+// renderEgressProxyWith takes the env-proxy decision as a parameter: the
+// production wiring is http.ProxyFromEnvironment (whose config is cached for
+// the process lifetime), and tests inject the same decision shape. The
+// contract under test is the render's, not the stdlib's.
+func renderEgressProxyWith(cfg *config.Config, rawURL string, envProxy func(*http.Request) (*url.URL, error)) (string, error) {
+	proxy := cfg.FetchProxyURL
+	if proxy == "" {
+		u, perr := url.Parse(rawURL)
+		if perr != nil {
+			return "", nil // NormalizeURL validated the URL; no env decision
+		}
+		evu, eerr := envProxy(&http.Request{Method: http.MethodGet, URL: u})
+		if eerr != nil {
+			return "", fmt.Errorf("reading the environment proxy: %v (refusing to render direct)", eerr)
+		}
+		if evu == nil {
+			return "", nil
+		}
+		proxy = evu.String()
+	}
+	if verr := config.ValidateProxyURL(proxy); verr != nil {
+		return "", fmt.Errorf("%v; refusing to render direct", verr)
+	}
+	return proxy, nil
+}
+
+// renderSSRFCheck is the render path's SSRF gate for direct renders: the
+// plain transport refuses non-public dial addresses (guardedDialContext),
+// and a host refused that way fails as a network error — which makes it
+// render-eligible. obscura resolves and dials on its own, so without this
+// pre-check the render would be the SSRF bypass (DNS rebinding, a 302 to
+// loopback, RFC1918 or 169.254.169.254). Direct renders resolve the target
+// through the same blockedIP rule and refuse a non-public answer. With a
+// proxy the proxy is the egress and enforces the policy (the documented
+// model), so memento does not resolve the name locally.
+//
+// Known limitation (documented): obscura dials after this check, so a
+// DNS-rebinding window between the resolution here and obscura's own dial
+// remains; for a policy-enforced egress run the renderer behind a proxy.
+func renderSSRFCheck(ctx context.Context, cfg *config.Config, rawURL string) error {
+	if cfg.FetchAllowPrivate {
+		return nil // the documented opt-in to self-hosted targets
+	}
+	u, err := url.Parse(rawURL)
 	if err != nil {
-		return fmt.Errorf("fetch_proxy_url has invalid syntax (its text is not echoed); the renderer refuses to run direct behind it")
+		return nil // NormalizeURL validated the URL
 	}
-	switch u.Scheme {
-	case "http", "https", "socks5", "socks5h":
-	default:
-		return fmt.Errorf("fetch_proxy_url scheme %q is not forwardable to the renderer (want http/https/socks5/socks5h); refusing to render direct", u.Scheme)
+	host := strings.ToLower(u.Hostname())
+	if host == "" {
+		return fmt.Errorf("refusing to render: empty host")
 	}
-	if u.Hostname() == "" {
-		return fmt.Errorf("fetch_proxy_url has no host; refusing to render direct")
+	if blockedHost(host) {
+		return fmt.Errorf("refusing to render %s: not a public address (the plain fetch refuses it at dial time)", host)
 	}
-	if u.User != nil {
-		return fmt.Errorf("fetch_proxy_url carries user info; a credential proxy is never forwarded to argv; refusing to render direct")
+	ips, rerr := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if rerr != nil {
+		return fmt.Errorf("refusing to render: cannot verify %s is public: %v", host, rerr)
+	}
+	for _, ip := range ips {
+		if blockedIP(ip.IP) {
+			return fmt.Errorf("refusing to render %s: it resolves to the non-public address %s", host, ip.IP)
+		}
 	}
 	return nil
 }
