@@ -165,7 +165,10 @@ chmod 600 ~/.memento.conf
   re-checks the existing facts/docs indices and the journal template against
   the current topology and corrects drift — an install that grows from one
   node into a cluster self-heals. In auto mode nothing is changed while the
-  health probe fails (an unknown topology is never "fixed" toward 0).
+  health probe fails (an unknown topology is never "fixed" toward 0). The
+  realignment is uniform across history periods — per-period cold-tiering
+  (replicas=0 on old periods) is not a supported layout; if you want the
+  whole store pinned, set an explicit `index_replicas`.
 - The history journal is created automatically on the first accepted write: an
   ingest pipeline `<index>-journal-ts` (stamps entries with the server clock),
   a composable index template `<index>-journal`, and dated journal indices
