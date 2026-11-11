@@ -217,8 +217,9 @@ func runMCPServer(confPath string) error {
 		Name: "memento_journal",
 		Description: "Read the journal for a key: the append-only history of " +
 			"accepted values (newest first, bounded by limit; changes = writes-1). " +
-			"op=write is an accepted value; op=rediscovery is reserved for " +
-			"same-value re-confirmation by a different author. Counts after an " +
+			"op=write is an accepted value; op=rediscovery is a re-confirmation of " +
+			"the same value (memento_patch reverify); op=retire marks a " +
+			"verified→obsolete transition. Counts after an " +
 			"admin deleted old journal indices are lower bounds. Use " +
 			"memento_history_info first for the cheap overview, the full " +
 			"journal only when the history matters.",
@@ -960,7 +961,7 @@ type patchInput struct {
 
 type patchOutput struct {
 	Key        string `json:"key" jsonschema:"the patched key"`
-	Changed    bool   `json:"changed" jsonschema:"true = new version accepted (value change, status transition; journal entry written); false = qualifier-only touch"`
+	Changed    bool   `json:"changed" jsonschema:"true = a journaled event landed (new value, status transition, or a re-confirmation); false = qualifier-only touch"`
 	Status     string `json:"status" jsonschema:"status of the fact after the patch"`
 	Reverified bool   `json:"reverified,omitempty" jsonschema:"true when the patch re-confirmed the value in place (observed_at moved, op=rediscovery journaled, value unchanged)"`
 	Note       string `json:"note,omitempty" jsonschema:"set on a qualifier-only touch: observed_at and age untouched, the journal not appended"`
@@ -1072,16 +1073,18 @@ type patchBatchInput struct {
 type patchBatchOutput struct {
 	Count int `json:"count" jsonschema:"number of items processed"`
 	// Summary counters (the add_batch rule): what the batch actually did.
-	Changed int              `json:"changed" jsonschema:"items that accepted a new version (value change, status transition)"`
-	Touched int              `json:"touched" jsonschema:"items patched on qualifiers only (no journal entry)"`
-	Items   []patchBatchItem `json:"items" jsonschema:"per-item outcome in request order; a failed item does not roll back the others"`
+	Changed    int              `json:"changed" jsonschema:"items that journaled an event (value change, status transition, re-confirmation)"`
+	Reverified int              `json:"reverified,omitempty" jsonschema:"subset of changed: items that re-confirmed the value in place"`
+	Touched    int              `json:"touched" jsonschema:"items patched on qualifiers only (no journal entry)"`
+	Items      []patchBatchItem `json:"items" jsonschema:"per-item outcome in request order; a failed item does not roll back the others"`
 }
 
 type patchBatchItem struct {
-	Key     string `json:"key" jsonschema:"the item's key"`
-	Changed bool   `json:"changed" jsonschema:"see memento_patch"`
-	Status  string `json:"status,omitempty" jsonschema:"status of the fact after the patch"`
-	Error   string `json:"error,omitempty" jsonschema:"this item's failure (guard/validation/store); other items were processed regardless"`
+	Key        string `json:"key" jsonschema:"the item's key"`
+	Changed    bool   `json:"changed" jsonschema:"see memento_patch"`
+	Reverified bool   `json:"reverified,omitempty" jsonschema:"see memento_patch"`
+	Status     string `json:"status,omitempty" jsonschema:"status of the fact after the patch"`
+	Error      string `json:"error,omitempty" jsonschema:"this item's failure (guard/validation/store); other items were processed regardless"`
 }
 
 func (s *mcpServer) patchBatch(ctx context.Context, req *mcp.CallToolRequest, in patchBatchInput) (*mcp.CallToolResult, patchBatchOutput, error) {
@@ -1110,7 +1113,7 @@ func (s *mcpServer) patchBatch(ctx context.Context, req *mcp.CallToolRequest, in
 	out := patchBatchOutput{Items: make([]patchBatchItem, 0, len(in.Items))}
 	for i, it := range in.Items {
 		res, err := s.patchOne(ctx, cfg, c, cErr, it)
-		item := patchBatchItem{Key: strings.TrimSpace(it.Key), Changed: res.Changed, Status: res.Status}
+		item := patchBatchItem{Key: strings.TrimSpace(it.Key), Changed: res.Changed, Status: res.Status, Reverified: res.Reverified}
 		if err != nil {
 			// Batch label, same as memento_add_batch: the item failed, not
 			// the single-patch tool.
@@ -1120,6 +1123,9 @@ func (s *mcpServer) patchBatch(ctx context.Context, req *mcp.CallToolRequest, in
 		// did change the fact; the error names its lagged follow-up.
 		if res.Changed {
 			out.Changed++
+			if res.Reverified {
+				out.Reverified++
+			}
 		} else if err == nil {
 			out.Touched++
 		}

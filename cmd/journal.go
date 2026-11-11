@@ -27,8 +27,9 @@ func JournalCmd() *cobra.Command {
 		Long: `Read journal entries for a key, newest first.
 
 The journal is the history: every accepted value for the key is one entry
-(op=write; op=rediscovery is the reserved vocabulary for same-value
-re-confirmation by a different author). Counts after an admin deleted old
+(op=write; op=rediscovery records a re-confirmation of the same value,
+written by memento_patch reverify; op=retire marks a verified→obsolete
+transition). Counts after an admin deleted old
 journal indices are lower bounds — the surviving journal, not the lifetime.`,
 		Args: cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
