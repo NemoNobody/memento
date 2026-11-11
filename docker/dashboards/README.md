@@ -50,8 +50,14 @@ Bundle invariants (OSD 3.x quirks, all learned live):
   renders completely empty; entries must NOT carry a `"type"` field —
   with `"type":"visualization"` present OSD 3.x collapses every panel to
   a 1x1 tile (the UI itself writes type-less entries);
-- the classic grid is **12 columns** wide: keep `x+w<=12`, overflowing
-  panels stack/squash near the origin;
+- the classic grid is **48 columns** wide in OSD 3.x (ground truth: the UI
+  saved `w=48` for a panel stretched to full width; the old bundle maxed at
+  x+w=48 too): full width = 48, halves = 24, quarters = 12;
+- `gridData.i` must equal `String(panelIndex)` — with a mismatched `i` the
+  layout cannot be matched to the panel and every tile collapses to 1x1;
+- do NOT hand-write terms `orderBy: {"<metricId>":"desc"}` — OSD 3.x can
+  translate it into a malformed ES order path ("failed to parse field
+  [order]"); vislib already orders by the metric descending by default;
 - patterns must list the `_index` meta field explicitly (aggregatable
   "string", esType `_index`) for aggs on it (gen_fields.py META_FIELDS);
 - `visState` aggs live at the TOP level (`{"title","type","params",
