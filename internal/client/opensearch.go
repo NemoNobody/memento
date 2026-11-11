@@ -140,8 +140,9 @@ func isAlreadyExists(err error) bool {
 //   - no index-creation-race signature anywhere in the body: the race
 //     writes NO document, so reading it as a doc collision would fake a
 //     journal append and dangle current_ref. The race names
-//     resource_already_exists_exception (type or reason, including the
-//     root_cause array) or carries the "index ["+"already exists"
+//     race names resource_already_exists_exception (type or reason, at
+//     the top level or in the nested root_cause/caused_by detail) or
+//     carries the "index ["+"already exists"
 //     marker pair; doc-level collisions name the document id, never
 //     "index [".
 //
@@ -154,7 +155,7 @@ func isAlreadyExists(err error) bool {
 func isVersionConflict(err error) bool {
 	var ste *opensearch.StructError
 	if errors.As(err, &ste) {
-		return conflictAnswer(ste.Status, ste.Err.Type, ste.Err.Reason, rootCauseNamesIndexRace(ste.Err.RootCause))
+		return conflictAnswer(ste.Status, ste.Err.Type, ste.Err.Reason, rootCauseHasRace(ste.Err))
 	}
 	var se *opensearch.StringError
 	return errors.As(err, &se) && conflictAnswer(se.Status, "", se.Err, false)
@@ -174,19 +175,29 @@ func conflictAnswer(status int, typ, text string, raceInRootCause bool) bool {
 			strings.Contains(text, "already exists"))
 }
 
-// rootCauseNamesIndexRace catches a middlebox that rewrote the
-// top-level type and reason off the race signature but left the engine
-// naming the index race in the root_cause array — same signature the
-// top-level guards use (exception name or the marker pair).
-func rootCauseNamesIndexRace(causes []opensearch.RootCause) bool {
-	for _, rc := range causes {
-		if rc.Type == "resource_already_exists_exception" ||
-			strings.Contains(rc.Reason, "resource_already_exists") ||
-			(strings.Contains(rc.Reason, "index [") && strings.Contains(rc.Reason, "already exists")) {
+// rootCauseHasRace scans the engine's nested error detail — the
+// root_cause array and every caused_by chain — for the race
+// signature. A middlebox may rewrite the top-level type and reason
+// off it while leaving the engine naming resource_already_exists or
+// carrying the marker pair in the nested detail.
+func rootCauseHasRace(err opensearch.Err) bool {
+	for _, rc := range err.RootCause {
+		if raceSignature(rc.Type, rc.Reason) {
+			return true
+		}
+	}
+	for cb := err.CausedBy; cb != nil; cb = cb.CausedBy {
+		if raceSignature(cb.Type, cb.Reason) {
 			return true
 		}
 	}
 	return false
+}
+
+func raceSignature(typ, reason string) bool {
+	return typ == "resource_already_exists_exception" ||
+		strings.Contains(reason, "resource_already_exists") ||
+		(strings.Contains(reason, "index [") && strings.Contains(reason, "already exists"))
 }
 
 // isClusterBlock reports whether the error is OpenSearch refusing a write

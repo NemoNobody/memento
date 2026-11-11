@@ -479,8 +479,14 @@ func TestJournalCollisionStringShape(t *testing.T) {
 			`{"error":{"type":"version_conflict_engine_exception","reason":"index [memento-history-2026-11/uuid] already exists"},"status":409}`,
 			// struct shape: top type AND reason rewritten off the race
 			// signature, but the root_cause array still names the index
-			// race — the guard must read it too
-			`{"error":{"type":"mapper_parsing_exception","reason":"[k2] already exists","root_cause":[{"type":"resource_already_exists_exception","reason":"index [memento-history-2026-11/uuid] already exists"}]},"status":409}`,
+			// race — the guard must read it too (three bodies, one per
+			// root_cause signature, marker-free where the signature is
+			// the name/type so each disjunct is pinned alone)
+			`{"error":{"type":"mapper_parsing_exception","reason":"[k2] already exists","root_cause":[{"type":"resource_already_exists_exception","reason":"[k2] cannot create"}]},"status":409}`,
+			`{"error":{"type":"mapper_parsing_exception","reason":"[k2] already exists","root_cause":[{"type":"engine_exception","reason":"resource_already_exists_exception for [k2]"}]},"status":409}`,
+			`{"error":{"type":"mapper_parsing_exception","reason":"[k2] already exists","root_cause":[{"type":"engine_exception","reason":"index [memento-history-2026-11/uuid] already exists"}]},"status":409}`,
+			// struct shape: the race lives only in the caused_by chain
+			`{"error":{"type":"mapper_parsing_exception","reason":"[k2] already exists","caused_by":{"type":"resource_already_exists_exception","reason":"index [memento-history-2026-11/uuid] already exists"}},"status":409}`,
 		} {
 			c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
 				if code, b := journalInfraOK(r); code != http.StatusInternalServerError {
