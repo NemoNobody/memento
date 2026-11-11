@@ -58,7 +58,10 @@ type Doc struct {
 	FetchedAt time.Time `json:"fetched_at"`
 	// ExpiresAt is the TTL boundary; the zero value means "never expires".
 	// Past it the doc is stale: the web moved, the agent must re-fetch.
-	ExpiresAt time.Time `json:"expires_at,omitempty"`
+	// omitzero (not omitempty): time.Time is a struct, and omitempty does not
+	// omit structs — a never-expiring snapshot used to store year 1, which a
+	// range filter and a reader both then treated as an expiry in the past.
+	ExpiresAt time.Time `json:"expires_at,omitzero"`
 
 	// Size is the extracted text length in runes (what reads ship into
 	// context); SizeRaw is the stored body in bytes (disk accounting).
@@ -103,8 +106,12 @@ type Doc struct {
 
 // Stale reports whether the doc is past its TTL and must be re-fetched before
 // being quoted. A doc without an expiry is never stale.
+// Stale reports whether the document is past its TTL. A snapshot without an
+// expiry never goes stale. The year-1 guard covers copies stored before
+// omitzero existed: the zero time was serialized verbatim, and reading it back
+// as a real past date would make every access re-fetch the page forever.
 func (d *Doc) Stale(now time.Time) bool {
-	if d.ExpiresAt.IsZero() {
+	if d.ExpiresAt.IsZero() || d.ExpiresAt.Year() <= 1 {
 		return false
 	}
 	return now.After(d.ExpiresAt)

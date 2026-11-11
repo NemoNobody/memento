@@ -2,6 +2,7 @@ package model
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -35,5 +36,29 @@ func TestDocNullExpiryIsNeverStale(t *testing.T) {
 	}
 	if d.Stale(time.Now().UTC()) {
 		t.Error("a null expiry must mean never expires")
+	}
+}
+
+// TestDocZeroExpirySerializesAbsent pins the writer side: a never-expiring
+// snapshot must not carry an expiry at all. time.Time is a struct, so
+// omitempty left year 1 in the document, and both a range filter and a reader
+// then saw an expiry in the distant past.
+func TestDocZeroExpirySerializesAbsent(t *testing.T) {
+	raw, err := json.Marshal(&Doc{URL: "u"})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(raw), "expires_at") {
+		t.Errorf("zero expiry must be omitted, got: %s", raw)
+	}
+
+	// The legacy shape (year 1 stored verbatim by older builds) must read back
+	// as "never expires", not as a date in the past.
+	var legacy Doc
+	if err := json.Unmarshal([]byte(`{"url":"u","expires_at":"0001-01-01T00:00:00Z"}`), &legacy); err != nil {
+		t.Fatalf("unmarshal legacy: %v", err)
+	}
+	if legacy.Stale(time.Now().UTC()) {
+		t.Error("a year-1 expiry means \"never set\": it must not be stale")
 	}
 }
