@@ -71,6 +71,7 @@ func AddCmd() *cobra.Command {
 				guardField{Name: "project", Text: project},
 				guardField{Name: "notes", Text: addFlags.notes},
 				guardField{Name: "summary", Text: addFlags.summary},
+				guardField{Name: "keywords", Text: strings.Join(addFlags.keywords, " ")},
 				guardField{Name: "source", Text: addFlags.source}); err != nil {
 				fatalErr(err)
 			}

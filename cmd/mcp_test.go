@@ -266,6 +266,10 @@ func TestMCPServerAddValidatesShapeOffline(t *testing.T) {
 		{map[string]any{"key": "k", "value": "  ", "category": "config"}, "value is required"},
 		{map[string]any{"key": "k", "value": "v", "category": "secrets"}, "category"},
 		{map[string]any{"key": "k", "value": "v", "category": ""}, "category"},
+		// The tag array is agent-supplied text in the same plaintext index:
+		// the guard must scan it too (a credential-shaped tag used to slip
+		// through because only key/value/notes/summary/source were scanned).
+		{map[string]any{"key": "k", "value": "v", "category": "config", "keywords": []any{"token=AKIAIOSFODNN7EXAMPLE"}}, "keywords"},
 	} {
 		res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "memento_add", Arguments: tc.args})
 		if err != nil {

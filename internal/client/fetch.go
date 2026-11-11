@@ -612,6 +612,15 @@ type fetchCondition struct {
 	lastModified string
 }
 
+// fetchMeta reports what the origin said about a retrieval beyond the document
+// body: a 304 (the caller revalidates its copy) and the validators it answered
+// with — an origin may rotate them on a 304.
+type fetchMeta struct {
+	notModified  bool
+	etag         string
+	lastModified string
+}
+
 // fetchOutcome is one retrieval's result. notModified (HTTP 304) carries no
 // body: the caller revalidates its cached copy instead.
 type fetchOutcome struct {
@@ -651,7 +660,7 @@ func FetchPage(ctx context.Context, cfg *config.Config, normalizedURL string,
 // captured through the renderer carries no validators (the render response is
 // not what the origin's validator covers), so it re-fetches in full.
 func RevalidatePage(ctx context.Context, cfg *config.Config, normalizedURL string, prior *model.Doc,
-	hook func(*model.Doc) ([]model.Redaction, error)) (*model.Doc, bool, error) {
+	hook func(*model.Doc) ([]model.Redaction, error)) (*model.Doc, fetchMeta, error) {
 	cond := fetchCondition{}
 	if prior != nil && prior.Via != ViaObscura {
 		cond.etag, cond.lastModified = prior.ETag, prior.LastModified
@@ -660,9 +669,9 @@ func RevalidatePage(ctx context.Context, cfg *config.Config, normalizedURL strin
 }
 
 func fetchPage(ctx context.Context, cfg *config.Config, normalizedURL string,
-	cond fetchCondition, hook func(*model.Doc) ([]model.Redaction, error)) (*model.Doc, bool, error) {
+	cond fetchCondition, hook func(*model.Doc) ([]model.Redaction, error)) (*model.Doc, fetchMeta, error) {
 	if err := CheckRobots(ctx, cfg, normalizedURL); err != nil {
-		return nil, false, err
+		return nil, fetchMeta{}, err
 	}
 	out, err := fetchHTTP(ctx, cfg, normalizedURL, cond)
 	ct, body, finalURL, via := "", []byte(nil), "", ""
@@ -674,15 +683,15 @@ func fetchPage(ctx context.Context, cfg *config.Config, normalizedURL string,
 		if cfg.FetchRender == config.RenderObscura && renderEligible(err) {
 			rbody, rerr := renderObscura(ctx, cfg, normalizedURL)
 			if rerr != nil {
-				return nil, false, fmt.Errorf("fetch %s: plain fetch: %v; obscura render: %w", normalizedURL, err, rerr)
+				return nil, fetchMeta{}, fmt.Errorf("fetch %s: plain fetch: %v; obscura render: %w", normalizedURL, err, rerr)
 			}
 			body, ct, finalURL, via = rbody, "text/html", normalizedURL, ViaObscura
 		} else {
-			return nil, false, err
+			return nil, fetchMeta{}, err
 		}
 	} else {
 		if out.notModified {
-			return nil, true, nil
+			return nil, fetchMeta{notModified: true, etag: out.etag, lastModified: out.lastModified}, nil
 		}
 		ct, body, finalURL, via = out.contentType, out.body, out.finalURL, out.via
 	}
@@ -698,16 +707,16 @@ func fetchPage(ctx context.Context, cfg *config.Config, normalizedURL string,
 			// badge: the documented media types are the gate, and storing it
 			// as HTML would hand the API route's medium-finding strictness to
 			// the documentation leniency.
-			return nil, false, fmt.Errorf("fetch: no content type declared and the body is JSON: only text/html, text/plain, text/markdown are stored")
+			return nil, fetchMeta{}, fmt.Errorf("fetch: no content type declared and the body is JSON: only text/html, text/plain, text/markdown are stored")
 		}
 		sections, images, truncated = ExtractSections(string(body))
 	case "text/plain", "text/markdown", "text/x-markdown":
 		sections, truncated = ExtractPlainText(string(body))
 	default:
-		return nil, false, fmt.Errorf("fetch: content type %q is not supported (text/html, text/plain, text/markdown only)", media)
+		return nil, fetchMeta{}, fmt.Errorf("fetch: content type %q is not supported (text/html, text/plain, text/markdown only)", media)
 	}
 	if len(sections) == 0 {
-		return nil, false, fmt.Errorf("fetch %s: no readable text extracted (content type %q)", normalizedURL, media)
+		return nil, fetchMeta{}, fmt.Errorf("fetch %s: no readable text extracted (content type %q)", normalizedURL, media)
 	}
 
 	title := ExtractTitle(string(body))
@@ -745,7 +754,7 @@ func fetchPage(ctx context.Context, cfg *config.Config, normalizedURL string,
 	if hook != nil {
 		redactions, herr := hook(doc)
 		if herr != nil {
-			return nil, false, herr
+			return nil, fetchMeta{}, herr
 		}
 		doc.Redactions = redactions
 	}
@@ -766,7 +775,7 @@ func fetchPage(ctx context.Context, cfg *config.Config, normalizedURL string,
 	if cfg.DocsTTLDays > 0 {
 		doc.ExpiresAt = now.AddDate(0, 0, cfg.DocsTTLDays)
 	}
-	return doc, false, nil
+	return doc, fetchMeta{}, nil
 }
 
 // resolveImageRefs resolves relative img srcs against the final URL, so the

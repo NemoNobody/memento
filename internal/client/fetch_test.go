@@ -339,6 +339,9 @@ func newFetchTarget(t *testing.T) *fetchTarget {
 		ft.inm = append(ft.inm, r.Header.Get("If-None-Match"))
 		w.Header().Set("ETag", `"v1"`)
 		if r.Header.Get("If-None-Match") == `"v1"` {
+			// The origin rotates the validator on a 304: the cache must keep
+			// the fresh one or the next revalidation downloads a full body.
+			w.Header().Set("ETag", `"v2"`)
 			w.WriteHeader(http.StatusNotModified)
 			return
 		}
@@ -871,12 +874,15 @@ func TestRevalidatePage304KeepsCopy(t *testing.T) {
 		t.Fatalf("ETag = %q, want \"v1\" captured from the origin", doc.ETag)
 	}
 
-	doc2, notModified, err := RevalidatePage(ctx, cfg, url, doc, nil)
+	doc2, meta, err := RevalidatePage(ctx, cfg, url, doc, nil)
 	if err != nil {
 		t.Fatalf("RevalidatePage: %v", err)
 	}
-	if !notModified || doc2 != nil {
-		t.Fatalf("revalidate = (%v, %v), want (nil doc, notModified=true)", doc2, notModified)
+	if !meta.notModified || doc2 != nil {
+		t.Fatalf("revalidate = (%v, %+v), want (nil doc, notModified=true)", doc2, meta)
+	}
+	if meta.etag != `"v2"` {
+		t.Errorf("meta.etag = %q, want the validator rotated on the 304", meta.etag)
 	}
 	if len(ft.inm) != 2 || ft.inm[0] != "" || ft.inm[1] != `"v1"` {
 		t.Errorf("If-None-Match sequence = %q, want [\"\" \"v1\"] (only the revalidation is conditional)", ft.inm)
@@ -893,12 +899,12 @@ func TestRevalidatePageSkipsValidatorsForRenderedCopy(t *testing.T) {
 	ctx := context.Background()
 
 	prior := &model.Doc{Via: ViaObscura, ETag: `"v1"`}
-	doc, notModified, err := RevalidatePage(ctx, cfg, ft.srv.URL+"/etag", prior, nil)
+	doc, meta, err := RevalidatePage(ctx, cfg, ft.srv.URL+"/etag", prior, nil)
 	if err != nil {
 		t.Fatalf("RevalidatePage: %v", err)
 	}
-	if notModified || doc == nil {
-		t.Fatalf("rendered prior must re-fetch in full, got notModified=%v doc=%v", notModified, doc)
+	if meta.notModified || doc == nil {
+		t.Fatalf("rendered prior must re-fetch in full, got meta=%+v doc=%v", meta, doc)
 	}
 	if len(ft.inm) != 1 || ft.inm[0] != "" {
 		t.Errorf("If-None-Match = %q, want none for a rendered copy", ft.inm)

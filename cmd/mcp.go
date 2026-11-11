@@ -779,6 +779,7 @@ func (s *mcpServer) addOne(ctx context.Context, cfg *config.Config, c *client.Cl
 		guardField{Name: "project", Text: in.Project},
 		guardField{Name: "notes", Text: in.Notes},
 		guardField{Name: "summary", Text: in.Summary},
+		guardField{Name: "keywords", Text: strings.Join(in.Keywords, " ")},
 		guardField{Name: "source", Text: in.Source}); err != nil {
 		return addOutput{}, err
 	}

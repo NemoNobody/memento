@@ -245,6 +245,8 @@ func TestFetchDocRevalidatesWithETag(t *testing.T) {
 		case r.Path == "/memento-docs" && r.Method == "PUT":
 			indexExists = true
 			return 200, `{"acknowledged":true}`
+		case r.Method == "POST" && strings.Contains(r.Path, "/memento-docs/_update/"):
+			return 200, `{"result":"updated"}`
 		case strings.HasPrefix(r.Path, "/memento-docs/_doc/"):
 			if r.Method == "GET" {
 				if stored == "" {
@@ -292,14 +294,31 @@ func TestFetchDocRevalidatesWithETag(t *testing.T) {
 	if !doc2.ExpiresAt.After(doc1.ExpiresAt) {
 		t.Errorf("expires_at must move forward on revalidation: %v -> %v", doc1.ExpiresAt, doc2.ExpiresAt)
 	}
-	puts := 0
+	// A 304 must move the metadata with a partial update, never rewrite the
+	// document: the copy was read with _source excludes (html), so a full
+	// PutDoc would silently delete the stored raw body.
+	puts, updates := 0, 0
+	var updateBody string
 	for _, r := range fake.requests {
 		if r.Method == "PUT" && strings.HasPrefix(r.Path, "/memento-docs/_doc/") {
 			puts++
 		}
+		if r.Method == "POST" && strings.Contains(r.Path, "/memento-docs/_update/") {
+			updates++
+			updateBody = r.Body
+		}
 	}
-	if puts != 2 {
-		t.Errorf("doc puts = %d, want 2 (first store + the timestamp bump); a 304 must not re-store a body", puts)
+	if puts != 1 {
+		t.Errorf("doc puts = %d, want 1 (the initial store); a 304 must not re-store the doc", puts)
+	}
+	if updates != 1 {
+		t.Fatalf("doc updates = %d, want 1 (the metadata bump)", updates)
+	}
+	if !strings.Contains(updateBody, `"fetched_at"`) || !strings.Contains(updateBody, `"etag":"\"v2\""`) {
+		t.Errorf("metadata update must carry the timestamps and the rotated validator: %s", updateBody)
+	}
+	if doc2.ETag != `"v2"` {
+		t.Errorf("returned ETag = %q, want the rotated \"v2\" persisted", doc2.ETag)
 	}
 	if len(ft.inm) != 2 || ft.inm[1] != `"v1"` {
 		t.Errorf("If-None-Match = %q, want the second request conditional", ft.inm)

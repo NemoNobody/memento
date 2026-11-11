@@ -215,6 +215,40 @@ func (c *Client) SearchDocs(ctx context.Context, query, project string, limit in
 	return docs, meta, nil
 }
 
+// revalidateDoc moves a stored snapshot's cache metadata after a 304 without
+// rewriting the document. The caller's copy came from GetDocByHash, which
+// excludes html on purpose; a full PutDoc would silently delete the raw body
+// the snapshot keeps for re-extraction (and, in a shared cache, one host's
+// 304 would erase what another host stored).
+func (c *Client) revalidateDoc(ctx context.Context, hash string, fetchedAt, expiresAt time.Time, project, etag, lastModified string) error {
+	fields := map[string]interface{}{
+		"fetched_at": fetchedAt.Format(time.RFC3339Nano),
+	}
+	if !expiresAt.IsZero() {
+		fields["expires_at"] = expiresAt.Format(time.RFC3339Nano)
+	}
+	if project != "" {
+		fields["project"] = project
+	}
+	if etag != "" {
+		fields["etag"] = etag
+	}
+	if lastModified != "" {
+		fields["last_modified"] = lastModified
+	}
+	body, _ := json.Marshal(map[string]interface{}{"doc": fields})
+	_, err := c.api.Update(ctx, opensearchapi.UpdateReq{
+		Index:      c.cfg.DocsIndexName,
+		DocumentID: hash,
+		Body:       bytes.NewReader(body),
+		Params:     opensearchapi.UpdateParams{Refresh: "wait_for"},
+	})
+	if err != nil {
+		return wrapWriteError("revalidate doc", err)
+	}
+	return nil
+}
+
 // tagDocProject rewrites only the project field of a stored doc (the cache-hit
 // retag). The doc id in the docs index is the url hash.
 func (c *Client) tagDocProject(ctx context.Context, hash, project string) error {
@@ -280,7 +314,7 @@ func (c *Client) FetchDoc(ctx context.Context, rawURL, project string, refresh b
 	}
 	// The project tag is part of the doc the guard inspects: the hook must
 	// see it, and the hook runs before the doc is finalized (see FetchPage).
-	doc, notModified, err := RevalidatePage(ctx, c.cfg, rawURL, prior, func(d *model.Doc) ([]model.Redaction, error) {
+	doc, meta, err := RevalidatePage(ctx, c.cfg, rawURL, prior, func(d *model.Doc) ([]model.Redaction, error) {
 		d.Project = project
 		if hook == nil {
 			return nil, nil
@@ -290,25 +324,35 @@ func (c *Client) FetchDoc(ctx context.Context, rawURL, project string, refresh b
 	if err != nil {
 		return nil, false, false, err
 	}
-	if notModified {
+	if meta.notModified {
 		if prior == nil {
 			// No validators were sent without a cached copy, so this is a
 			// protocol surprise, not a normal path.
 			return nil, false, false, fmt.Errorf("fetch doc: origin answered 304 for %s without a cached copy", rawURL)
 		}
-		// The origin confirmed the stored copy: move the timestamps only. The
-		// sections, content hash and raw HTML stay untouched — the file did
-		// not change.
+		// The origin confirmed the stored copy: move the timestamps (and the
+		// validators it may have rotated) only. A full rewrite is wrong here:
+		// the copy was read with _source excludes (html is not loaded), and
+		// PutDoc would silently drop the raw body the snapshot stores for
+		// re-extraction.
 		now := time.Now().UTC()
-		prior.FetchedAt = now
+		var expires time.Time
 		if c.cfg.DocsTTLDays > 0 {
-			prior.ExpiresAt = now.AddDate(0, 0, c.cfg.DocsTTLDays)
+			expires = now.AddDate(0, 0, c.cfg.DocsTTLDays)
 		}
-		if project != "" && prior.Project != project {
-			prior.Project = project
-		}
-		if err := c.PutDoc(ctx, prior); err != nil {
+		if err := c.revalidateDoc(ctx, hash, now, expires, project, meta.etag, meta.lastModified); err != nil {
 			return nil, false, false, err
+		}
+		prior.FetchedAt = now
+		prior.ExpiresAt = expires
+		if meta.etag != "" {
+			prior.ETag = meta.etag
+		}
+		if meta.lastModified != "" {
+			prior.LastModified = meta.lastModified
+		}
+		if project != "" {
+			prior.Project = project
 		}
 		return prior, true, true, nil
 	}
