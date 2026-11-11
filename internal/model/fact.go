@@ -192,8 +192,8 @@ func ValidTTLOverride(category string, ttl int) error {
 	if ttl <= 0 {
 		return fmt.Errorf("ttl_days must be positive, got %d", ttl)
 	}
-	if cap := TTLDays(category); cap > 0 && ttl > cap {
-		return fmt.Errorf("ttl_days %d exceeds the max for category %q (%dd): a writer may shorten a staleness window, never lengthen it past the category cap", ttl, strings.ToLower(category), cap)
+	if limit := TTLDays(category); limit > 0 && ttl > limit {
+		return fmt.Errorf("ttl_days %d exceeds the max for category %q (%dd): a writer may shorten a staleness window, never lengthen it past the category cap", ttl, strings.ToLower(category), limit)
 	}
 	return nil
 }
