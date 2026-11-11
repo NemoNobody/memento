@@ -186,10 +186,7 @@ func robotsAllowed(e robotsEntry, agent, path string) bool {
 // ignored, i.e. the crawler ignored a rule it appeared to honor.
 func matchRobotPath(rule, path string) bool {
 	endAnchor := strings.HasSuffix(rule, "$")
-	pattern := rule
-	if endAnchor {
-		pattern = pattern[:len(pattern)-1]
-	}
+	pattern := strings.TrimSuffix(rule, "$")
 	if !strings.Contains(pattern, "*") {
 		if endAnchor {
 			return path == pattern
@@ -201,6 +198,18 @@ func matchRobotPath(rule, path string) bool {
 		return false
 	}
 	rest := path[len(parts[0]):]
+	last := parts[len(parts)-1]
+	if endAnchor && last != "" {
+		// The anchored suffix is verified FIRST and cut away before the
+		// middle parts match: checking it after leftmost matching let a rule
+		// like "/*.php$" miss "/x.php.php" (the leftmost ".php" does not end
+		// the path), and left matching middle parts could overlap the suffix
+		// region and accept paths the rule does not cover.
+		if !strings.HasSuffix(rest, last) {
+			return false
+		}
+		rest = rest[:len(rest)-len(last)]
+	}
 	for _, part := range parts[1 : len(parts)-1] {
 		if part == "" {
 			continue
@@ -211,20 +220,12 @@ func matchRobotPath(rule, path string) bool {
 		}
 		rest = rest[i+len(part):]
 	}
-	last := parts[len(parts)-1]
-	if last == "" {
-		// A trailing '*' (with or without '$') absorbs everything that is
-		// left: the middle parts already matched in order.
+	if endAnchor || last == "" {
+		// A trailing '*' absorbs everything left; an anchored rule already
+		// verified its suffix.
 		return true
 	}
-	i := strings.Index(rest, last)
-	if i < 0 {
-		return false
-	}
-	if endAnchor {
-		return i+len(last) == len(rest)
-	}
-	return true
+	return strings.Contains(rest, last)
 }
 
 // uaToken extracts the RFC 9309 product token from a User-Agent string:

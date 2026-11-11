@@ -874,7 +874,9 @@ func (c *Client) Patch(ctx context.Context, key string, p PatchFields) (PatchRes
 
 	existing, err := c.Get(ctx, key)
 	if errors.Is(err, ErrNotFound) {
-		return PatchResult{}, fmt.Errorf("patch: fact %q not found — use add to create it", key)
+		// The chain must survive: edges classify this as "no such fact"
+		// (a clean answer), not as a store failure (Obsolete does the same).
+		return PatchResult{}, fmt.Errorf("patch: %w: fact %q not found — use add to create it", ErrNotFound, key)
 	}
 	if err != nil {
 		return PatchResult{}, fmt.Errorf("patch: %w", err)

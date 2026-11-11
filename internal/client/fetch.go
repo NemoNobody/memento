@@ -277,7 +277,10 @@ func NormalizeURL(raw string, allowPrivate bool) (string, error) {
 	// Query()/Encode round-trip re-quotes literals (a '+' inside a signed
 	// URL is a different string after re-encoding — the signature breaks)
 	// and reorders the parameters (some signed URLs are order-sensitive).
-	if strings.Contains(strings.ToLower(u.RawQuery), "utm_") {
+	// The trigger must look at parameter NAMES: a value that merely contains
+	// "utm_" (a redirect target, a signature fragment) must not pay the
+	// re-encode for nothing.
+	if hasUTMKey(u.RawQuery) {
 		q := u.Query()
 		for k := range q {
 			if strings.HasPrefix(strings.ToLower(k), "utm_") {
@@ -306,6 +309,20 @@ func NormalizeURL(raw string, allowPrivate bool) (string, error) {
 		u.Path = "/"
 	}
 	return u.String(), nil
+}
+
+// hasUTMKey reports whether the raw query carries a utm_* parameter NAME
+// (&-separated segment whose key, before the '=', starts with utm_ —
+// case-insensitive). It deliberately does not scan values: a signed URL
+// with "utm_" inside a value keeps its exact encoding and order.
+func hasUTMKey(rawQuery string) bool {
+	for _, seg := range strings.Split(rawQuery, "&") {
+		key, _, _ := strings.Cut(seg, "=")
+		if strings.HasPrefix(strings.ToLower(key), "utm_") {
+			return true
+		}
+	}
+	return false
 }
 
 // URLHash is the stable document id: first 16 hex chars of sha256 over the

@@ -298,6 +298,10 @@ func TestPatchValidation(t *testing.T) {
 	if _, err := notFound.Patch(ctx, "nope", PatchFields{NotesAppend: "x"}); err == nil ||
 		!strings.Contains(err.Error(), "not found") {
 		t.Errorf("missing fact: err = %v, want a not-found refusal", err)
+	} else if !errors.Is(err, ErrNotFound) {
+		// The MCP edge classifies this as "no such fact" (a clean answer) only
+		// if the chain survives the wrap; without %w it reads as a store failure.
+		t.Errorf("patch not-found must wrap ErrNotFound: %v", err)
 	}
 }
 

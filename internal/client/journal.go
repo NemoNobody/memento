@@ -447,13 +447,10 @@ func (c *Client) PruneJournal(ctx context.Context, key string, keep int) (int, e
 		return 0, err
 	}
 	if resp.Hits.Total.Value > len(resp.Hits.Hits) {
-		atLeast := ""
-		if resp.Hits.Total.Relation == "gte" {
-			// track_total_hits caps the reported total at 10000 by default:
-			// do not report a clipped number as an exact count.
-			atLeast = "at least "
-		}
-		return 0, fmt.Errorf("prune journal: %s%d entries for %q exceeds the readable cap %d", atLeast, resp.Hits.Total.Value, key, NavSizeCap)
+		// buildJournalEntriesBody pins track_total_hits, so Total is exact:
+		// more entries exist than the readable page can hold, and pruning
+		// blind past the cap would delete entries the operator never saw.
+		return 0, fmt.Errorf("prune journal: %d entries for %q exceeds the readable cap %d", resp.Hits.Total.Value, key, NavSizeCap)
 	}
 	if len(resp.Hits.Hits) <= keep {
 		return 0, nil

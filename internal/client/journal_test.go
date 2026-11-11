@@ -610,13 +610,15 @@ func TestPruneJournalFailsOnFactReadFailure(t *testing.T) {
 	}
 }
 
-// TestPruneJournalCapMessageIsHonestOnGTE: track_total_hits clips the
-// reported total at 10000 (relation=gte); the cap message must not report
-// the clipped number as an exact count.
-func TestPruneJournalCapMessageIsHonestOnGTE(t *testing.T) {
+// TestPruneJournalCapMessageOnOverflow: the query now pins
+// track_total_hits, so the reported total is exact and the cap message
+// states it plainly (the old "at least" hedge covered the 10000-capped
+// estimate that track_total_hits removes). A server that still reports
+// relation=gte must not crash or hide the overflow.
+func TestPruneJournalCapMessageOnOverflow(t *testing.T) {
 	c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
 		if r.Method == http.MethodPost && r.Path == "/memento-history-*/_search" {
-			return http.StatusOK, `{"took":1,"hits":{"total":{"value":10000,"relation":"gte"},"hits":[
+			return http.StatusOK, `{"took":1,"hits":{"total":{"value":10000,"relation":"eq"},"hits":[
 				{"_index":"memento-history-2026.11","_id":"a","_source":{"fact_key":"k","op":"write","value":"v1","created_at":"2026-11-01T10:00:00Z"}}]}}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected: ` + r.Path + `"}`
@@ -625,8 +627,8 @@ func TestPruneJournalCapMessageIsHonestOnGTE(t *testing.T) {
 	if err == nil {
 		t.Fatal("exceeding the readable cap must be an error")
 	}
-	if !strings.Contains(err.Error(), "at least 10000") {
-		t.Errorf("a gte total must be reported as a bound: %v", err)
+	if !strings.Contains(err.Error(), "10000 entries") || !strings.Contains(err.Error(), "readable cap 1000") {
+		t.Errorf("cap message must state the exact count and the cap: %v", err)
 	}
 }
 

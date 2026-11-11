@@ -81,9 +81,13 @@ func SearchCmd() *cobra.Command {
 				// The page is cut by the limit. Skipped hits are reported by
 				// noteSkipped and are NOT recoverable by raising --limit, so
 				// they must not count as "more matches to show".
+				advice := "narrow the query (the page is already at the cap)"
+				if searchFlags.limit < client.NavSizeCap {
+					advice = "raise --limit (0 = up to " + strconv.Itoa(client.NavSizeCap) + ") or narrow the query"
+				}
 				if err := writeLine(os.Stdout, "truncated: showing the first "+strconv.Itoa(len(facts))+
 					" of "+strconv.Itoa(meta.Total)+
-					" matches; raise --limit (0 = up to 1000) or narrow the query"); err != nil {
+					" matches; "+advice); err != nil {
 					fatalErr(err)
 				}
 			}

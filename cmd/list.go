@@ -18,12 +18,14 @@ func ListCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list <project>",
 		Short: "List all facts for a project",
-		Long: `List the facts of one project, sorted by key (stable navigation order).
+		Long: `List the facts of one project, sorted by key (stable navigation
+order), every status — obsolete rows included: the CLI list is the human's
+session-start view, and a retired fact's context belongs there (the MCP
+memento_list defaults to verified-only).
 
-The MCP memento_list defaults to updated_at desc instead — "what moved
-since the last session" — with sort: "key" for this CLI's order; the
-asymmetry is deliberate per audience, do not expect one to match the
-other by default.`,
+The MCP tool also defaults to updated_at desc — "what moved since the last
+session" — with sort: "key" for this CLI's order; the asymmetry is
+deliberate per audience, do not expect one to match the other by default.`,
 		Args: cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			// Project labels are stored trimmed (write edges); the term
@@ -73,10 +75,9 @@ other by default.`,
 	}
 	cmd.Flags().StringVar(&listFlags.prefix, "prefix", "",
 		"keep only keys starting with this prefix (trailing * allowed), e.g. \"<project>:state:\"")
-	// Deliberate asymmetry with memento_list (which defaults to verified): the
-	// CLI list is the human's session-start view, and obsolete rows carry the
-	// death context. Pinned here so the difference is a choice, not drift.
-	cmd.Long = "List all facts for a project (every status, obsolete included;\nthe memento_list MCP tool defaults to verified-only)."
+	// The status/sort asymmetry with memento_list (verified-only,
+	// updated-desc default) is a deliberate per-audience choice, stated in
+	// the Long above — not drift.
 	return cmd
 }
 

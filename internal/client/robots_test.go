@@ -179,8 +179,9 @@ func TestRobotsWildcards(t *testing.T) {
 	}{
 		{"/x.php", false},
 		{"/a/b.php", false},
-		{"/x.php?y=1", true}, // '$': the match must reach the path end
-		{"/x.php5", true},    // '$' end-anchor
+		{"/x.php.php", false}, // round 2: the leftmost ".php" ending mid-path must not rescue the URL
+		{"/x.php?y=1", true},  // '$': the match must reach the path end
+		{"/x.php5", true},     // '$' end-anchor
 		{"/private/x", false},
 		{"/public/a.jpg", true},
 		{"/public/a.png", true}, // no matching deny
@@ -202,5 +203,31 @@ func TestRobotsWildcards(t *testing.T) {
 	}
 	if robotsAllowed(e3, "memento", "/private/x") {
 		t.Error("the deny still covers the rest")
+	}
+}
+
+// Round 2: the anchored suffix is cut away BEFORE the middle parts match.
+// Leftmost checking let "/*.php$" miss "/x.php.php", and a left-matched
+// middle part could overlap the suffix region and deny paths the rule does
+// not cover.
+func TestMatchRobotPathAnchoredSuffix(t *testing.T) {
+	cases := []struct {
+		rule, path string
+		want       bool
+	}{
+		{"/*.php$", "/x.php.php", true}, // "*" absorbs "/x.php"
+		{"/*.php$", "/x.php", true},
+		{"/*.php$", "/x.php5", false},
+		{"*bc*abc$", "xabc", false}, // the middle must end before the suffix starts
+		{"*bc*abc$", "xbcabc", true},
+		{"/*", "/anything/at/all", true},
+		{"/a*b", "/axxb", true},
+		{"/a*b", "/axxbc", true}, // unanchored: the "b" only needs to appear after /a
+		{"/a*b", "/axxc", false},
+	}
+	for _, tc := range cases {
+		if got := matchRobotPath(tc.rule, tc.path); got != tc.want {
+			t.Errorf("matchRobotPath(%q, %q) = %v, want %v", tc.rule, tc.path, got, tc.want)
+		}
 	}
 }

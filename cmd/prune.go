@@ -62,7 +62,9 @@ their approval.`,
 			}
 			f, err := c.Get(ctx, key)
 			if err != nil {
-				fatalErr(err)
+				// The plan read names the missing key as itself: exit 3, the
+				// contract every named-key command now shares.
+				fatalIfNotFound(err)
 			}
 			// Journal-first: a key with journal entries is pruned in the
 			// journal; legacy in-doc arrays are only counted pre-migration.

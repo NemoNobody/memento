@@ -44,6 +44,14 @@ journal indices are lower bounds — the surviving journal, not the lifetime.`,
 			if err != nil {
 				fatalErr(err)
 			}
+			if journalFlags.limit > client.NavSizeCap {
+				// The client would clamp silently; say so, or a capped page
+				// reads like the whole journal (same contract as search).
+				journalFlags.limit = client.NavSizeCap
+				if err := writeLine(os.Stderr, "note: --limit clamped to "+strconv.Itoa(client.NavSizeCap)+" (the navigation cap of one page)"); err != nil {
+					fatalErr(err)
+				}
+			}
 			entries, meta, err := c.JournalEntries(ctx, key, journalFlags.limit)
 			if err != nil {
 				fatalErr(err)
@@ -57,9 +65,15 @@ journal indices are lower bounds — the surviving journal, not the lifetime.`,
 			if meta.Truncated {
 				b.WriteString(" — showing the newest ")
 				b.WriteString(strconv.Itoa(len(entries)))
-				b.WriteString(" (raise --limit, max ")
-				b.WriteString(strconv.Itoa(client.NavSizeCap))
-				b.WriteString(")")
+				if journalFlags.limit < client.NavSizeCap {
+					b.WriteString(" (raise --limit, max ")
+					b.WriteString(strconv.Itoa(client.NavSizeCap))
+					b.WriteString(")")
+				} else {
+					// The caller already asked for the ceiling: "raise --limit"
+					// would be advice that cannot be followed.
+					b.WriteString(" (at the navigation cap: use memento history-info for counts)")
+				}
 			}
 			if meta.Skipped > 0 {
 				b.WriteString(" — ")
