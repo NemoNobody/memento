@@ -35,6 +35,15 @@ Bundle invariants (OSD 3.x quirks, all learned live):
 - the dashboard pins `timeRestore` + `now-90d..now`, otherwise the
   default "last 15 minutes" renders it empty.
 
+Panel inventory: 4 metric KPIs (facts, journal entries, docs cached,
+facts with history), 3 time-area charts (facts updates / journal writes /
+docs fetched over time), journal ops histogram, journal entries per period
+index, three donuts (project/category/status), top fact keys horizontal bar.
+Index SIZES are deliberately absent: sizes live outside searchable data and
+Vega url data sources are GET-only (the OSD console proxy is POST-only).
+Sizes trend = roadmap item 30 (memento metrics). Live sizes meanwhile:
+Stack Management -> Index Management, or `memento status` for the cluster view.
+
 After a mapping change (new fact/journal/doc fields) regenerate the field
 lists from a live cluster and push again:
 
