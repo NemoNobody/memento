@@ -3,8 +3,12 @@
 # "Memento — store overview" dashboard) to an OpenSearch Dashboards instance.
 #
 # Re-runnable by design: every object carries a stable "memento-store-*" id
-# and the import runs with overwrite=true, so pushing again updates in place
-# instead of duplicating.
+# and each object is created (POST) or updated (PUT) directly through the
+# saved-objects API, in place. The _import endpoint is deliberately NOT used:
+# OSD 3.x import strips the index reference out of searchSourceJSON and the
+# visualization then fails with "Trying to initialize aggs without index
+# pattern". The per-object API stores the canonical UI shape (placeholder +
+# references) verbatim.
 #
 # Credential resolution (first hit wins):
 #   1. DASHBOARDS_USER / DASHBOARDS_PASSWORD environment variables
@@ -66,10 +70,49 @@ if [ "$code" = "000" ]; then
   exit 1
 fi
 
-resp=$(curl -s --max-time 30 -X POST "$URL/api/saved_objects/_import?overwrite=true" -H "osd-xsrf: true" "${AUTH[@]}" -F "file=@$OBJ")
-if printf '%s' "$resp" | grep -q '"success":true'; then
-  echo "imported to $URL: dashboard \"Memento — store overview\", index patterns memento / memento-history-* / memento-docs"
-else
-  echo "import failed: $resp" >&2
-  exit 4
-fi
+# Per-object create/update. Credentials travel through the environment: the
+# password never enters argv (ps shows command lines).
+DASH_URL="$URL" DASH_USER="${USER:-admin}" DASH_PASS="$PASS" DASH_OBJ="$OBJ" \
+python3 - <<'PY'
+import json, os, sys, urllib.request, urllib.error
+
+url = os.environ["DASH_URL"].rstrip("/")
+user = os.environ.get("DASH_USER") or "admin"
+pw = os.environ.get("DASH_PASS") or ""
+import base64
+auth = base64.b64encode(f"{user}:{pw}".encode()).decode() if pw else None
+
+def req(method, path, body=None):
+    r = urllib.request.Request(url + path, method=method)
+    r.add_header("osd-xsrf", "true")
+    r.add_header("Content-Type", "application/json")
+    if auth:
+        r.add_header("Authorization", "Basic " + auth)
+    if body is not None:
+        r.data = json.dumps(body).encode()
+    return r
+
+ok = 0
+failed = 0
+for line in open(os.environ["DASH_OBJ"], encoding="utf-8"):
+    o = json.loads(line)
+    path = f"/api/saved_objects/{o['type']}/{o['id']}"
+    body = {"attributes": o["attributes"], "references": o.get("references", [])}
+    try:
+        with urllib.request.urlopen(req("PUT", path, body), timeout=30):
+            ok += 1
+    except urllib.error.HTTPError as e:
+        if e.code == 404:  # first push: create with the explicit id
+            try:
+                with urllib.request.urlopen(req("POST", path, body), timeout=30):
+                    ok += 1
+            except urllib.error.HTTPError as e2:
+                failed += 1
+                print(f"create {o['type']}/{o['id']}: {e2.code} {e2.read().decode()[:200]}", file=sys.stderr)
+        else:
+            failed += 1
+            print(f"update {o['type']}/{o['id']}: {e.code} {e.read().decode()[:200]}", file=sys.stderr)
+
+print(f"pushed {ok} saved object(s) to {url}: index patterns memento / memento-history-* / memento-docs, dashboard \"Memento — store overview\"")
+sys.exit(1 if failed else 0)
+PY
