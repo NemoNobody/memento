@@ -350,7 +350,10 @@ func TestMCPServerAddBatchSurfacesPartialSuccess(t *testing.T) {
 	}
 	raw, _ := json.Marshal(res.StructuredContent)
 	var out struct {
-		Items []struct {
+		Created int `json:"created"`
+		Changed int `json:"changed"`
+		Touched int `json:"touched"`
+		Items   []struct {
 			Key     string `json:"key"`
 			Created bool   `json:"created"`
 			Error   string `json:"error"`
@@ -368,6 +371,12 @@ func TestMCPServerAddBatchSurfacesPartialSuccess(t *testing.T) {
 	}
 	if !it.Created {
 		t.Errorf("item.created = false, want true (the fact doc stored; only the journal lagged): %s", raw)
+	}
+	// The aggregate must agree with the row (the patch twin pins the same):
+	// a summary that contradicts what the item says is the audit lie the
+	// counters exist to prevent.
+	if out.Created != 1 || out.Changed != 1 || out.Touched != 0 {
+		t.Errorf("counters = created:%d changed:%d touched:%d, want 1/1/0: %s", out.Created, out.Changed, out.Touched, raw)
 	}
 }
 

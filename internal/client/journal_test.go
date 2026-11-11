@@ -356,6 +356,52 @@ func TestAddSameValueDoesNotAppendJournal(t *testing.T) {
 	}
 }
 
+// TestJournalCollisionStringShape pins the isVersionConflict gate at the
+// site where the predicate DECIDES SUCCESS: a middlebox-rewritten 409 in
+// string shape that names the collision (deterministic-id re-append of a
+// repair) is success; an unrelated 409 wording must not fake an append
+// that never happened.
+func TestJournalCollisionStringShape(t *testing.T) {
+	t.Run("collision wording is success", func(t *testing.T) {
+		c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+			if code, body := journalInfraOK(r); code != http.StatusInternalServerError {
+				return code, body
+			}
+			switch {
+			case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-"):
+				return http.StatusConflict, `{"error":"version conflict, document already exists","status":409}`
+			case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+				return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+			}
+			return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Method + " " + r.Path + `"}`
+		})
+		f := model.NewFact("k", "v", "config", "p", "s", "")
+		appended, err := c.MigrateFact(context.Background(), f, time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC))
+		if err != nil {
+			t.Fatalf("MigrateFact repair over a string-shaped collision: %v", err)
+		}
+		if appended != 1 {
+			t.Errorf("appended = %d, want 1 (collision-as-success)", appended)
+		}
+	})
+	t.Run("unrelated 409 wording is an honest failure", func(t *testing.T) {
+		c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+			if code, body := journalInfraOK(r); code != http.StatusInternalServerError {
+				return code, body
+			}
+			switch {
+			case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-"):
+				return http.StatusConflict, `{"error":"index blocked by policy","status":409}`
+			}
+			return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Method + " " + r.Path + `"}`
+		})
+		f := model.NewFact("k", "v", "config", "p", "s", "")
+		if _, err := c.MigrateFact(context.Background(), f, time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC)); err == nil {
+			t.Fatal("a 409 that does not name a collision must fail honestly, not fake the append")
+		}
+	})
+}
+
 func TestMigrateFactMovesArrayToJournal(t *testing.T) {
 	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
 		if code, body := journalInfraOK(r); code != http.StatusInternalServerError {

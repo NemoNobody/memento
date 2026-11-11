@@ -172,6 +172,23 @@ func TestAddCreateLinkIsConditional(t *testing.T) {
 	}
 }
 
+// TestAddTouchConflictStringShapedBody: a middlebox that rewrites the 409
+// body into the client's string-shaped error must still surface ErrConflict
+// (the gate names collisions by wording; the guidance contract survives).
+func TestAddTouchConflictStringShapedBody(t *testing.T) {
+	var got recordedRequest
+	c, _ := newFakeClient(t, casRespond(casSource, http.StatusConflict,
+		`{"error":"[k]: version conflict, required seq_no [5], primary_term [2], but was [6] [2]","status":409}`, &got))
+
+	_, err := c.Add(context.Background(), model.NewFact("k", "same", "config", "p", "test:cas", "retouched"))
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("error = %v, want ErrConflict (string-shaped collision body must classify as conflict)", err)
+	}
+	if !strings.Contains(err.Error(), "re-read and retry") {
+		t.Errorf("the conflict must state the remedy, got: %v", err)
+	}
+}
+
 func TestPatchValueChangeIsNotConditional(t *testing.T) {
 	var got recordedRequest
 	c, _ := newFakeClient(t, casRespond(casSource, http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`, &got))
