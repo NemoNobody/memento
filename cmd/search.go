@@ -82,7 +82,9 @@ func SearchCmd() *cobra.Command {
 				// noteSkipped and are NOT recoverable by raising --limit, so
 				// they must not count as "more matches to show".
 				advice := "narrow the query (the page is already at the cap)"
-				if searchFlags.limit < client.NavSizeCap {
+				// limit==0 means "the whole page": it already sits at the cap,
+				// so "raise --limit" would be advice that cannot be followed.
+				if searchFlags.limit != 0 && searchFlags.limit < client.NavSizeCap {
 					advice = "raise --limit (0 = up to " + strconv.Itoa(client.NavSizeCap) + ") or narrow the query"
 				}
 				if err := writeLine(os.Stdout, "truncated: showing the first "+strconv.Itoa(len(facts))+
