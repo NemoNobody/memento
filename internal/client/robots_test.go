@@ -63,11 +63,12 @@ Disallow: /private
 	}
 }
 
-// TestRobotsLastGroupWins (round 3, RFC 9309 §2.2.1): when the same agent
-// appears in several groups, the LAST matching group governs — robots files
-// commonly append extra groups, and first-wins silently ignores the
-// appended rules.
-func TestRobotsLastGroupWins(t *testing.T) {
+// TestRobotsGroupUnion (round 4, RFC 9309 2.2.1): when the same agent
+// appears in several groups, their rules are COMBINED into one — files
+// commonly append extra groups, and any single-group pick (first or last)
+// silently drops half the stated policy. The exact-agent class supersedes
+// the wildcard class entirely.
+func TestRobotsGroupUnion(t *testing.T) {
 	e := robotsEntry{groups: parseRobots(`
 User-agent: *
 Disallow: /old
@@ -82,19 +83,19 @@ User-agent: memento
 Disallow: /b
 `)}
 	if robotsAllowed(e, "anyone", "/new") {
-		t.Error("the last wildcard group's deny must apply")
+		t.Error("the later wildcard group's deny must apply")
 	}
-	if !robotsAllowed(e, "anyone", "/old") {
-		t.Error("the superseded wildcard group's deny must not apply")
+	if robotsAllowed(e, "anyone", "/old") {
+		t.Error("the earlier wildcard group's deny must apply too (rules are merged)")
 	}
 	if robotsAllowed(e, "memento", "/b") {
-		t.Error("the last exact group's deny must apply")
+		t.Error("the later exact group's deny must apply")
 	}
-	if !robotsAllowed(e, "memento", "/a") {
-		t.Error("the superseded exact group's deny must not apply")
+	if robotsAllowed(e, "memento", "/a") {
+		t.Error("the earlier exact group's deny must apply too (rules are merged)")
 	}
 	if !robotsAllowed(e, "memento", "/new") {
-		t.Error("an exact group must supersede the wildcard group entirely")
+		t.Error("the exact-agent class must supersede the wildcard class entirely")
 	}
 }
 

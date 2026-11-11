@@ -148,15 +148,17 @@ func parseRobots(body string) []robotsGroup {
 	return groups
 }
 
-// robotsAllowed applies the most specific group, then the longest matching
-// rule; on equal length Allow wins over Disallow (RFC 9309 ordering).
+// robotsAllowed merges the rules of every matching group (exact-agent groups
+// supersede wildcard groups), then applies the longest matching rule; on
+// equal length Allow wins over Disallow (RFC 9309 ordering).
 func robotsAllowed(e robotsEntry, agent, path string) bool {
-	// Exact agent match wins; a wildcard group is the fallback (RFC 9309
-	// specificity: the most specific matching group governs). Within one
-	// specificity class the LAST matching group applies (RFC 9309: repeated
-	// groups for the same agent — the later one is the effective policy; a
-	// first-wins read silently drops the additions the file appends).
-	var exactBest, wildcardBest *robotsGroup
+	// RFC 9309 2.2.1: when several groups match the user-agent, their rules
+	// are COMBINED into one (the union) — first-wins dropped appended
+	// groups, last-wins drops the earlier ones; both silently violate the
+	// file. Within specificity classes the exact-agent groups govern and
+	// supersede the wildcard groups entirely.
+	var exactAllow, exactDeny, wildAllow, wildDeny []string
+	sawExact := false
 	for i := range e.groups {
 		g := &e.groups[i]
 		exact, wildcard := false, false
@@ -169,33 +171,36 @@ func robotsAllowed(e robotsEntry, agent, path string) bool {
 			}
 		}
 		if exact {
-			exactBest = g
+			sawExact = true
+			exactAllow = append(exactAllow, g.allow...)
+			exactDeny = append(exactDeny, g.disallow...)
 		} else if wildcard {
-			wildcardBest = g
+			wildAllow = append(wildAllow, g.allow...)
+			wildDeny = append(wildDeny, g.disallow...)
 		}
 	}
-	best := exactBest
-	if best == nil {
-		best = wildcardBest
+	allowRules, denyRules := wildAllow, wildDeny
+	if sawExact {
+		allowRules, denyRules = exactAllow, exactDeny
 	}
-	if best == nil {
+	if allowRules == nil && denyRules == nil {
 		return true
 	}
-	var allow, deny int
-	for _, p := range best.allow {
-		if p != "" && matchRobotPath(p, path) && len(p) > allow {
-			allow = len(p)
+	var allowLen, denyLen int
+	for _, p := range allowRules {
+		if p != "" && matchRobotPath(p, path) && len(p) > allowLen {
+			allowLen = len(p)
 		}
 	}
-	for _, p := range best.disallow {
+	for _, p := range denyRules {
 		if p == "" {
 			continue // an empty Disallow means "allow everything"
 		}
-		if matchRobotPath(p, path) && len(p) > deny {
-			deny = len(p)
+		if matchRobotPath(p, path) && len(p) > denyLen {
+			denyLen = len(p)
 		}
 	}
-	return allow >= deny
+	return allowLen >= denyLen
 }
 
 // matchRobotPath applies one RFC 9309 path rule: '*' matches any run of

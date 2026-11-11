@@ -107,7 +107,10 @@ func printFact(w io.Writer, f *model.Fact, now time.Time, history bool, entries 
 	}
 	if f.Notes != "" {
 		b.WriteString("notes: ")
-		b.WriteString(displaySafe(f.Notes, false))
+		// keepNewline: notes are one line per qualifier (appendNote joins
+		// with \n) — collapsing them into one run-on line would destroy the
+		// documented audit structure.
+		b.WriteString(displaySafe(f.Notes, true))
 		b.WriteString("\n")
 	}
 	b.WriteString("observed_at: ")

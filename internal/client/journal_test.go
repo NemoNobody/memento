@@ -846,7 +846,7 @@ func TestScanAllFactsEmptyProjectScansAll(t *testing.T) {
 	if strings.Contains(reqs[0].Body, `"term":{"project":`) {
 		t.Errorf("empty-project scan must omit the project term filter, body=%s", reqs[0].Body)
 	}
-	for _, want := range []string{"current_ref", "containsKey", "minimum_should_match"} {
+	for _, want := range []string{"current_ref", "instanceof List", "minimum_should_match"} {
 		if !strings.Contains(reqs[0].Body, want) {
 			t.Errorf("empty-project scan must carry the needs-migration filter (%s), body=%s", want, reqs[0].Body)
 		}

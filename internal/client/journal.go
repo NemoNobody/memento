@@ -645,7 +645,10 @@ func (c *Client) ScanAllFacts(ctx context.Context, project string) ([]model.Fact
 // fails the scan loudly, never silently no-ops). In the query script
 // context the source map is reached via params._source — a bare _source
 // symbol does not compile (verified against the cluster); the map can be
-// null for some docs, so the guard is load-bearing (verified too).
+// null for some docs, so the guard is load-bearing (verified too). The arm
+// requires a NON-EMPTY list: an empty/absent array is already migrated for
+// MigrateFact's eyes, and selecting it forever would leave a plan that
+// reports matches but migrates nothing (the non-convergence F1 killed).
 func buildMigrateScanBody(project string) map[string]interface{} {
 	boolQuery := map[string]interface{}{
 		"must": []map[string]interface{}{{
@@ -658,7 +661,7 @@ func buildMigrateScanBody(project string) map[string]interface{} {
 					map[string]interface{}{"script": map[string]interface{}{
 						"script": map[string]interface{}{
 							"lang":   "painless",
-							"source": `params._source != null && params._source.containsKey("history")`,
+							"source": `params._source != null && params._source.history instanceof List && !params._source.history.isEmpty()`,
 						},
 					}},
 				},

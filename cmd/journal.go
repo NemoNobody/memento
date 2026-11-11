@@ -89,7 +89,7 @@ journal indices are lower bounds — the surviving journal, not the lifetime.`,
 				b.WriteString("]")
 				if e.Source != "" {
 					b.WriteString(" source=")
-					b.WriteString(e.Source)
+					b.WriteString(displaySafe(e.Source, false))
 				}
 				if e.Author != "" {
 					// Quoted: labels are self-reported (server/OS user), and

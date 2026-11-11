@@ -310,8 +310,9 @@ Hardening (pre-release review conveyor):
   control and invisible format characters are stripped when CLI output
   prints fact values, summaries and notes.
 - `robots.txt` groups with several consecutive `User-agent:` lines are
-  kept whole (exact match wins, wildcard group as fallback) instead of
-  only the last agent.
+  kept whole, and when one agent appears in several groups their rules are
+  COMBINED per RFC 9309 2.2.1 (first-wins and last-wins both silently
+  dropped half of the file's stated policy).
 
 ## v0.6.0 — 2026-11-08
 
