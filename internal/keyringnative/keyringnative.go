@@ -14,9 +14,9 @@
 // "/org/freedesktop/secrets/aliases/default": the wallet the desktop
 // unlocks at login (PAM). No creation ceremony, no extra password,
 // encrypted at rest. When the alias is unavailable, the collection named
-// by the config key "collection" (default "kdewallet", the KDE wallet
-// name; the login wallet on GNOME keyring is "Default keyring") is located
-// by Label; only if that is missing too, writes create it — on KDE that
+// by MEMENTO_KEYRING_COLLECTION (default "kdewallet", the KDE wallet name;
+// the login wallet on GNOME keyring is "Default keyring") is located by
+// Label; only if that is missing too, writes create it — on KDE that
 // asks for a dedicated wallet password, because PAM auto-opens exactly one
 // wallet. Secret Service has no per-collection ACLs, so such collections
 // buy namespace, not isolation; items in every collection are identified
@@ -102,10 +102,21 @@ var ErrNotFound = errors.New("keyring: entry not found")
 // MCP tool calls can read it safely.
 var collectionName = defaultCollectionName
 
+// init applies the one keyring setting that is environment-only: a desktop
+// whose login alias is dead (a renamed KDE wallet, a custom Secret Service
+// provider) is addressed by its collection label. It is not a config-file key
+// on purpose — this is a per-desktop fact, not a per-project one, and the
+// provider must be configured before any config load.
+func init() {
+	SetCollectionName(os.Getenv("MEMENTO_KEYRING_COLLECTION"))
+}
+
 // SetCollectionName points the fallback collection at an explicit label.
-// Empty keeps the default. Not currently wired to the config; call at
-// init time only. On KDE this must match kwalletrc "Default Wallet"; the
-// login wallet itself is preferred whenever its alias is alive.
+// Empty keeps the default. Called once from init with
+// MEMENTO_KEYRING_COLLECTION (init-time only: concurrent MCP tool calls read
+// the package variable without a lock). On KDE this must match kwalletrc
+// "Default Wallet"; the login wallet itself is preferred whenever its alias
+// is alive.
 func SetCollectionName(name string) {
 	if name != "" {
 		collectionName = name

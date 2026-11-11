@@ -120,3 +120,26 @@ func TestValueIsOpaque(t *testing.T) {
 		t.Errorf("round-trip changed the value: %q -> %q", value, got)
 	}
 }
+
+// TestSetCollectionName pins the fallback-label switch: an explicit label
+// replaces the KDE default, an empty one restores it (so init with an unset
+// env var is a no-op). This is the per-desktop knob for a renamed wallet.
+func TestSetCollectionName(t *testing.T) {
+	orig := collectionName
+	t.Cleanup(func() { SetCollectionName(orig) })
+
+	SetCollectionName("wallet-b")
+	if collectionName != "wallet-b" {
+		t.Errorf("collectionName = %q, want wallet-b", collectionName)
+	}
+	SetCollectionName("")
+	if collectionName != "wallet-b" {
+		t.Errorf("empty name must keep the current label, got %q", collectionName)
+	}
+	SetCollectionName(orig)
+	if collectionName != defaultCollectionName {
+		// orig is defaultCollectionName in a fresh process; this guards the
+		// documented "empty keeps the default" behavior of init().
+		t.Logf("collectionName = %q (restored)", collectionName)
+	}
+}

@@ -156,6 +156,21 @@ chmod 600 ~/.memento.conf
   A plaintext password in the file is only read when `allow_plaintext: true`
   (off by default). Containers and ssh sessions have no keyring — export
   `OPENSEARCH_PASSWORD` there.
+- **Keyring by desktop.** memento talks to the freedesktop Secret Service
+  (`org.freedesktop.secrets` over D-Bus), so any desktop that provides one
+  works without DE-specific code:
+
+  | Desktop | Provider | Notes |
+  |---|---|---|
+  | KDE Plasma | ksecretd / kwalletd6 | the default alias is used; if it is dead, the collection labelled by `MEMENTO_KEYRING_COLLECTION` (default `kdewallet`, the KDE wallet name) is found and used |
+  | GNOME | gnome-keyring | login keyring, alias normally present |
+  | XFCE / LXQt / MATE / Cinnamon / tiling WMs | whatever Secret Service is installed (usually gnome-keyring) | works if the daemon runs and the keyring is unlocked |
+  | KeePassXC (Secret Service integration) | KeePassXC | entries are namespaced by service + username, same as everywhere |
+  | headless / container / ssh | none | no bus, no keyring: export `OPENSEARCH_PASSWORD`; `memento status` reports `password_from: env` and the keyring error |
+
+  A renamed KDE wallet is the one case that needs the variable:
+  `export MEMENTO_KEYRING_COLLECTION=<wallet label>` (kwalletrc "Default Wallet").
+
 - The index is created automatically on first use — you do not have to create it.
 - Newly created memento indices stamp a replica count from `index_replicas`
   (config, default `-1` = auto): a single data node gets `0` (a replica there
