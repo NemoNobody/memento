@@ -132,6 +132,50 @@ func TestPatchStatusFlipConflictIsErrConflict(t *testing.T) {
 	}
 }
 
+// TestAddCreateLinkIsConditional pins the create path's last snapshot-derived
+// write: the birth link. The doc is visible (wait_for) before the link runs,
+// so a concurrent correction can land in between; an unconditional link would
+// overwrite the winner's current_ref with the birth ref — current_ref then
+// points at an entry that does not carry the live value, and prune --keep
+// could later delete the entry that does.
+func TestAddCreateLinkIsConditional(t *testing.T) {
+	var got recordedRequest
+	created := false
+	c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+		if code, body := journalRoutesOK(r); code != http.StatusInternalServerError {
+			return code, body
+		}
+		switch {
+		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
+			if !created {
+				return http.StatusNotFound, `{"error":{"type":"document_missing_exception","reason":"Document with id k not found.","index":"memento"},"status":404}`
+			}
+			return http.StatusOK, `{"_index":"memento","_id":"k","_seq_no":7,"_primary_term":3,"found":true,"_source":{"key":"k","value":"v","category":"config","project":"p","status":"verified"}}`
+		case r.Method == http.MethodPut && r.Path == "/memento/_doc/k":
+			created = true
+			return http.StatusCreated, `{"_index":"memento","_id":"k","result":"created"}`
+		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+			got = r
+			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+		}
+		return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Method + " " + r.Path + `"}`
+	})
+
+	res, err := c.Add(context.Background(), model.NewFact("k", "v", "config", "p", "test:cas", ""))
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if !res.Created {
+		t.Fatal("created = false, want true")
+	}
+	if q := got.Query.Get("if_seq_no"); q != "7" {
+		t.Errorf("the birth link must be CAS-conditioned, if_seq_no = %q, want 7", q)
+	}
+	if q := got.Query.Get("if_primary_term"); q != "3" {
+		t.Errorf("the birth link must be CAS-conditioned, if_primary_term = %q, want 3", q)
+	}
+}
+
 func TestPatchValueChangeIsNotConditional(t *testing.T) {
 	var got recordedRequest
 	c, _ := newFakeClient(t, casRespond(casSource, http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`, &got))

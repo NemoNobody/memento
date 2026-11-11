@@ -56,7 +56,7 @@ func GetCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&getFlags.history, "history", false,
-		"include the full history chain (off by default: history bloats the context)")
+		"include history: the legacy in-doc array, or the newest 20 journal entries for journal-era facts (off by default: history bloats the context)")
 	return cmd
 }
 
@@ -153,9 +153,12 @@ func printFact(w io.Writer, f *model.Fact, now time.Time, history bool, entries 
 			if jTotal > len(entries)+jSkipped {
 				b.WriteString(" — showing the newest ")
 				b.WriteString(strconv.Itoa(len(entries)))
+				// --limit must be in the advice: the journal command defaults to
+				// the same window get already showed, so the bare suggestion
+				// would return the identical page.
 				b.WriteString(" (see `memento journal ")
 				b.WriteString(strconv.Quote(f.Key))
-				b.WriteString("`)")
+				b.WriteString(" --limit <N>`)")
 			}
 			if jSkipped > 0 {
 				b.WriteString(" — ")

@@ -73,6 +73,7 @@ func startTrimFake(t *testing.T, found bool) (*httptest.Server, func() []recorde
 	t.Helper()
 	var mu sync.Mutex
 	var calls []recordedCall
+	created := false
 	snapshot := func() []recordedCall {
 		mu.Lock()
 		defer mu.Unlock()
@@ -98,8 +99,8 @@ func startTrimFake(t *testing.T, found bool) (*httptest.Server, func() []recorde
 		case r.Method == http.MethodHead:
 			w.WriteHeader(http.StatusOK)
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/_doc/"):
-			if found {
-				_, _ = w.Write([]byte(`{"_index":"memento","_id":"k","_version":1,"found":true,"_source":` + trimFacts + `}`))
+			if found || created {
+				_, _ = w.Write([]byte(`{"_index":"memento","_id":"k","_version":1,"_seq_no":1,"_primary_term":1,"found":true,"_source":` + trimFacts + `}`))
 				return
 			}
 			w.WriteHeader(http.StatusNotFound)
@@ -107,6 +108,10 @@ func startTrimFake(t *testing.T, found bool) (*httptest.Server, func() []recorde
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/_search"):
 			_, _ = w.Write([]byte(`{"took":1,"timed_out":false,"hits":{"total":{"value":0},"max_score":null,"hits":[]}}`))
 		default:
+			if r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/_doc/") && !strings.Contains(r.URL.Path, "-history-") {
+				// A created doc becomes visible to the create-path link re-read.
+				created = true
+			}
 			_, _ = w.Write([]byte(`{"_index":"memento","_id":"k","_version":1,"result":"ok","_shards":{"total":1,"successful":1,"failed":0}}`))
 		}
 	}))

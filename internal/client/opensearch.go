@@ -551,7 +551,18 @@ func (c *Client) newJournalEntryFor(ctx context.Context, f *model.Fact, factID s
 // linkCurrentRef points a fact at its journal entry. Used on the create
 // path (the fact doc is written before the entry id is committed); the
 // correction script sets current_ref inside the same write.
+// The link is a snapshot-derived write like the others: the doc is already
+// visible (wait_for), so a concurrent correction can land between the
+// create and the link — an unconditional link would overwrite the winner's
+// current_ref with the birth ref, leaving current_ref pointing at an entry
+// that does not carry the live value (and a later prune --keep could delete
+// the entry that does). Read the version pair, write conditioned; a lost
+// race is an honest ErrConflict (the winner's link is already correct).
 func (c *Client) linkCurrentRef(ctx context.Context, key, ref string) error {
+	_, seqNo, primaryTerm, err := c.getFactVersion(ctx, key)
+	if err != nil {
+		return fmt.Errorf("link current_ref: %w", err)
+	}
 	body, _ := json.Marshal(map[string]interface{}{
 		"doc": map[string]interface{}{"current_ref": ref},
 	})
@@ -559,8 +570,15 @@ func (c *Client) linkCurrentRef(ctx context.Context, key, ref string) error {
 		Index:      c.cfg.IndexName,
 		DocumentID: key,
 		Body:       strings.NewReader(string(body)),
-		Params:     opensearchapi.UpdateParams{Refresh: "wait_for"},
+		Params: opensearchapi.UpdateParams{
+			Refresh:       "wait_for",
+			IfSeqNo:       &seqNo,
+			IfPrimaryTerm: &primaryTerm,
+		},
 	}); err != nil {
+		if isVersionConflict(err) {
+			return conflictError("link current_ref", key, err)
+		}
 		return wrapWriteError("link current_ref", err)
 	}
 	return nil

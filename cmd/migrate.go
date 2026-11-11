@@ -99,15 +99,22 @@ no mixed readers to stage around.`,
 				b.WriteString("\n")
 			}
 			if meta.Total > len(facts)+meta.Skipped {
-				// Only a real page cut says "rerun": with the corrupt-history
-				// arm, Total permanently exceeds what the page decoded even when
-				// the page is complete (the remainder is undecodable, counted in
-				// decode-skipped) — telling agents to rerun forever is a loop trap.
-				b.WriteString("note: scan cap ")
-				b.WriteString(strconv.Itoa(len(facts) + meta.Skipped))
-				b.WriteString(" < total ")
-				b.WriteString(strconv.Itoa(meta.Total))
-				b.WriteString(" — rerun until the plan is empty\n")
+				if len(facts) == 0 && meta.Skipped > 0 {
+					// A corruption-only page: the scan restarts at the key head,
+					// so reruns advance nothing — "rerun until the plan is empty"
+					// would be an instruction that cannot be followed.
+					b.WriteString("note: the whole page is undecodable (corruption): reruns cannot progress past it — inspect the facts index manually\n")
+				} else {
+					// Only a real page cut says "rerun": with the corrupt-history
+					// arm, Total permanently exceeds what the page decoded even when
+					// the page is complete (the remainder is undecodable, counted in
+					// decode-skipped).
+					b.WriteString("note: scan cap ")
+					b.WriteString(strconv.Itoa(len(facts) + meta.Skipped))
+					b.WriteString(" < total ")
+					b.WriteString(strconv.Itoa(meta.Total))
+					b.WriteString(" — rerun until the plan is empty\n")
+				}
 			}
 			if _, err := io.WriteString(os.Stdout, b.String()); err != nil {
 				fatalErr(err)

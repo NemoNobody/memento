@@ -433,14 +433,20 @@ func TestMigrateFactMovesArrayToJournal(t *testing.T) {
 }
 
 func TestAddCreatesIndexThenJournalsNewFact(t *testing.T) {
+	putDone := false
 	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
 		if code, body := journalInfraOK(r); code != http.StatusInternalServerError {
 			return code, body
 		}
 		switch {
 		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
-			return http.StatusNotFound, `{"status":404,"error":{"type":"document_missing_exception"}}`
+			if !putDone {
+				return http.StatusNotFound, `{"status":404,"error":{"type":"document_missing_exception"}}`
+			}
+			// The create-path link re-reads the doc for its CAS pair.
+			return http.StatusOK, `{"_index":"memento","_id":"k","_seq_no":1,"_primary_term":1,"found":true,"_source":{"key":"k","value":"v1","category":"config","project":"p","status":"verified"}}`
 		case r.Method == http.MethodPut && r.Path == "/memento/_doc/k":
+			putDone = true
 			return http.StatusOK, `{"_index":"memento","_id":"k","result":"created"}`
 		case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-"):
 			return http.StatusOK, `{"_id":"j1","result":"created"}`
@@ -492,14 +498,19 @@ func TestAddBirthLinkFailureRepairedByMigrationWithoutDuplication(t *testing.T) 
 	var mu sync.Mutex
 	journalDocs := map[string]bool{}
 	updateCalls := 0
+	putDone := false
 	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
 		if code, body := journalInfraOK(r); code != http.StatusInternalServerError {
 			return code, body
 		}
 		switch {
 		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
-			return http.StatusNotFound, `{"status":404,"error":{"type":"document_missing_exception"}}`
+			if !putDone {
+				return http.StatusNotFound, `{"status":404,"error":{"type":"document_missing_exception"}}`
+			}
+			return http.StatusOK, `{"_index":"memento","_id":"k","_seq_no":1,"_primary_term":1,"found":true,"_source":{"key":"k","value":"v1","category":"config","project":"p","status":"verified"}}`
 		case r.Method == http.MethodPut && r.Path == "/memento/_doc/k":
+			putDone = true
 			return http.StatusOK, `{"_index":"memento","_id":"k","result":"created"}`
 		case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-"):
 			mu.Lock()

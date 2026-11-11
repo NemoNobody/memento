@@ -555,14 +555,19 @@ func TestAddResurrectJournalsMovedCategory(t *testing.T) {
 // TestAddSendsRefreshWaitForForNewFacts checks the same refresh guarantee on the
 // create path, where no previous document exists.
 func TestAddSendsRefreshWaitForForNewFacts(t *testing.T) {
+	putDone := false
 	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
 		if code, body := journalRoutesOK(r); code != http.StatusInternalServerError {
 			return code, body
 		}
 		switch {
 		case r.Method == http.MethodGet && r.Path == "/memento/_doc/new":
-			return http.StatusNotFound, `{"status":404,"error":"document_missing_exception"}`
+			if !putDone {
+				return http.StatusNotFound, `{"status":404,"error":"document_missing_exception"}`
+			}
+			return http.StatusOK, `{"_index":"memento","_id":"new","_seq_no":1,"_primary_term":1,"found":true,"_source":{"key":"new","value":"v","category":"config","project":"p","status":"verified"}}`
 		case r.Method == http.MethodPut && r.Path == "/memento/_doc/new":
+			putDone = true
 			return http.StatusCreated, `{"_index":"memento","_id":"new","result":"created"}`
 		case r.Method == http.MethodPost && r.Path == "/memento/_update/new":
 			return http.StatusOK, `{"_index":"memento","_id":"new","result":"updated"}`
@@ -990,6 +995,7 @@ func TestAddLongValueRequiresSummary(t *testing.T) {
 
 func TestAddLongValueWithSummaryIsStored(t *testing.T) {
 	var putBody string
+	putDone := false
 	c, _ := newFakeClientCfg(t, func(cfg *config.Config) { cfg.SummaryMinLen = 10 },
 		func(r recordedRequest) (int, string) {
 			if code, body := journalRoutesOK(r); code != http.StatusInternalServerError {
@@ -997,9 +1003,13 @@ func TestAddLongValueWithSummaryIsStored(t *testing.T) {
 			}
 			switch {
 			case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
-				return http.StatusNotFound, `{"status":404,"error":"document_missing_exception"}`
+				if !putDone {
+					return http.StatusNotFound, `{"status":404,"error":"document_missing_exception"}`
+				}
+				return http.StatusOK, `{"_index":"memento","_id":"k","_seq_no":1,"_primary_term":1,"found":true,"_source":{"key":"k","value":"vvvvvvvvvv","category":"config","project":"p","status":"verified"}}`
 			case r.Method == http.MethodPut && r.Path == "/memento/_doc/k":
 				putBody = r.Body
+				putDone = true
 				return http.StatusCreated, `{"_index":"memento","_id":"k","result":"created"}`
 			case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
 				return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
