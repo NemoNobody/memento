@@ -65,15 +65,17 @@ func AddCmd() *cobra.Command {
 			if err != nil {
 				fatalErr(err)
 			}
-			if err := guardCheck(cfg.SecretGuard, addFlags.allowSecret,
-				guardField{Name: "key", Text: key},
-				guardField{Name: "value", Text: value},
-				guardField{Name: "project", Text: project},
-				guardField{Name: "notes", Text: addFlags.notes},
-				guardField{Name: "summary", Text: addFlags.summary},
-				guardField{Name: "keywords", Text: strings.Join(addFlags.keywords, " ")},
-				guardField{Name: "source", Text: addFlags.source}); err != nil {
-				fatalErr(err)
+			kwForGuard := strings.Join(addFlags.keywords, " ")
+			redactions, gErr := guardSanitize(cfg.SecretGuard, addFlags.allowSecret,
+				identityField("key", &key),
+				textField("value", &value),
+				identityField("project", &project),
+				textField("notes", &addFlags.notes),
+				textField("summary", &addFlags.summary),
+				identityField("keywords", &kwForGuard),
+				identityField("source", &addFlags.source))
+			if gErr != nil {
+				fatalErr(gErr)
 			}
 			c, err := newClientFromConfig(cfg)
 			if err != nil {
@@ -83,6 +85,7 @@ func AddCmd() *cobra.Command {
 			f := model.NewFact(key, value, category, project, addFlags.source, addFlags.notes)
 			f.Summary = addFlags.summary
 			f.TTLDays = addFlags.ttlDays
+			f.Redactions = redactions
 			kw, kerr := model.NormalizeKeywords(addFlags.keywords)
 			if kerr != nil {
 				fatalErr(kerr)
@@ -114,6 +117,7 @@ func AddCmd() *cobra.Command {
 				// value's table of contents without a new version). Say so.
 				b.WriteString("note: the --summary value was ignored on a same-value touch (correct the value to change its summary)\n")
 			}
+			b.WriteString(redactionLines(redactions))
 			if _, err := io.WriteString(os.Stdout, b.String()); err != nil {
 				fatalErr(err)
 			}

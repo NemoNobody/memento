@@ -105,7 +105,7 @@ func TestObsoleteTransitionIsConditional(t *testing.T) {
 	var got recordedRequest
 	c, _ := newFakeClient(t, casRespond(casSource, http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`, &got))
 
-	if err := c.Obsolete(context.Background(), "k", "file deleted"); err != nil {
+	if err := c.Obsolete(context.Background(), "k", "file deleted", nil); err != nil {
 		t.Fatalf("Obsolete: %v", err)
 	}
 	assertCasParams(t, got)

@@ -51,6 +51,10 @@ step "keys"                    $BIN keys "$K:";                      check "keys
 step "search"                  $BIN search "widget";                 check "search hits :one" ":one"
 step "obsolete"                $BIN obsolete "$K:two" "smoke cleanup"
 neg  "secret guard rejects"    $BIN add "$K:sec" 'aws access key AKIA1234567890ABCDEF leaked' config --project smoke
+step "secret guard redacts"    $BIN add "$K:hex" 'deployment id 0123456789abcdef0123456789abcdef0123456789abcdef' config --project smoke
+check "the write is stored" "added fact"
+step "redacted value stored"   $BIN get "$K:hex";                  check "marker in the value" "memento-redacted:long-hex"
+check "audit on the fact" "redacted: value=long-hex"
 step "prune dry run"           $BIN prune "$K:one" --keep 1;         check "dry run prints a plan" "plan"
 step "prune --yes"             $BIN prune "$K:one" --keep 1 --yes
 step "journal after prune"     $BIN journal "$K:one"

@@ -38,8 +38,10 @@ Each fact carries evidence, not verdicts:
   exact-match filterable — cross-project slices (`perf`, `security`, `strata`)
   without a graph backlog, and recipes/rules stay findable by topic;
 - **secret guard**: writes scan for credential-like text (the index is
-  plaintext) — `reject` by default, `ask` needs an explicit confirmation,
-  `allow` opts out;
+  plaintext) — a real credential refuses the write, while a heuristic hit
+  (a long hash, a base64 blob, a weak assignment) is replaced in place and the
+  answer lists what was cut; `reject` by default, `ask` lets a human confirm a
+  false positive, `allow` opts out;
 - **staleness**: reads compute `age_days` and `stale` from `observed_at` and a
   per-category TTL (`config`/`endpoint` 14 days, `location`/`behavior` 30 days,
   `rule` 90, `recipe` 180, `context_map` never). A writer
@@ -261,8 +263,13 @@ OpenSearch snapshot API): [docs/backup.md](docs/backup.md).
 
 **Secrets do not belong in facts** (passwords, tokens, private keys) — a rule for
 agents and humans, not a guarantee: the store is plaintext, and the
-best-effort secret guard (default `reject`) scans writes for credential-like
-text, but a secret with no known shape passes. The rule stays the first line
+best-effort secret guard (default `reject`) scans writes. A high-confidence
+credential refuses the write; a heuristic hit (an unnamed 40-character hash, a
+base64 blob, a weak assignment) is replaced with
+`[memento-redacted:pattern]` before the fact is stored and listed in the
+answer's `redactions`, so a legitimate fact is not lost to a false positive —
+but the stored value is then shorter than the one written. A secret with no
+known shape passes. The rule stays the first line
 of defense. Fetched pages get the same guard: high-confidence credential
 shapes are redacted out of the stored snapshot; on documentation pages the
 unnamed token shapes are ordinary content and are kept (counted in the

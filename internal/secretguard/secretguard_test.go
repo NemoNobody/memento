@@ -348,3 +348,23 @@ func TestInHashContextNoFabricatedBoundaries(t *testing.T) {
 		t.Error("'git' inside 'gitignore' must not count as a hint")
 	}
 }
+
+// TestRedactAllDeterministicOnSharedStart pins the fold contract for spans that
+// begin at the same byte: the wider match wins, so the marker covers the whole
+// token and the applied audit row describes the span that really went away.
+func TestRedactAllDeterministicOnSharedStart(t *testing.T) {
+	// 47 hex chars + '=': long-base64 matches the whole 48 (it requires a
+	// trailing '='), long-hex matches the leading 47 (every 'A' is a hex
+	// digit). Same start, different end; the wide span must win on every run.
+	token := strings.Repeat("A", 47) + "="
+	out, findings := RedactAll("value", "value "+token)
+	if len(findings) != 1 {
+		t.Fatalf("findings = %+v, want one folded span", findings)
+	}
+	if strings.Contains(out, strings.Repeat("A", 8)) {
+		t.Errorf("the token survived the redaction: %q", out)
+	}
+	if findings[0].Length != len(token) {
+		t.Errorf("applied %d chars, want the wide span %d", findings[0].Length, len(token))
+	}
+}

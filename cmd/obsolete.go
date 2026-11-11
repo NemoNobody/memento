@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -36,20 +37,26 @@ func ObsoleteCmd() *cobra.Command {
 			if err != nil {
 				fatalErr(err)
 			}
-			if err := guardCheck(cfg.SecretGuard, obsoleteFlags.allowSecret,
-				guardField{Name: "key", Text: key},
-				guardField{Name: "reason", Text: reason}); err != nil {
-				fatalErr(err)
+			redactions, gErr := guardSanitize(cfg.SecretGuard, obsoleteFlags.allowSecret,
+				identityField("key", &key),
+				textField("reason", &reason))
+			if gErr != nil {
+				fatalErr(gErr)
 			}
 			c, err := newClientFromConfig(cfg)
 			if err != nil {
 				fatalErr(err)
 			}
-			if err := c.Obsolete(ctx, key, reason); err != nil {
+			if err := c.Obsolete(ctx, key, reason, redactions); err != nil {
 				fatalIfNotFound(err)
 			}
 			if err := writeLine(os.Stdout, "obsolete: key="+strconv.Quote(key)); err != nil {
 				fatalErr(err)
+			}
+			if lines := redactionLines(redactions); lines != "" {
+				if _, err := io.WriteString(os.Stdout, lines); err != nil {
+					fatalErr(err)
+				}
 			}
 		},
 	}

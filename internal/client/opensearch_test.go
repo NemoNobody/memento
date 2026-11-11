@@ -508,11 +508,11 @@ func TestObsoleteReRetireWithReasonRefused(t *testing.T) {
 		}
 		return 200, `{}`
 	})
-	if err := c.Obsolete(context.Background(), "k", "again"); err == nil {
+	if err := c.Obsolete(context.Background(), "k", "again", nil); err == nil {
 		t.Fatal("expected refusal for a reason on an already obsolete fact")
 	}
 	// A re-confirmation without a reason stays allowed (idempotent touch).
-	if err := c.Obsolete(context.Background(), "k", ""); err != nil {
+	if err := c.Obsolete(context.Background(), "k", "", nil); err != nil {
 		t.Fatalf("reason-less re-retire: %v", err)
 	}
 	if len(fake.requestsFor("POST", "/memento/_update/k")) != 1 {
@@ -535,7 +535,7 @@ func TestObsoleteReasonSingleLine(t *testing.T) {
 		}
 		return 200, `{}`
 	})
-	if err := c.Obsolete(context.Background(), "k", "file deleted\non the server   today"); err != nil {
+	if err := c.Obsolete(context.Background(), "k", "file deleted\non the server   today", nil); err != nil {
 		t.Fatalf("Obsolete: %v", err)
 	}
 	if !strings.Contains(body, `"reason_append":"file deleted on the server today"`) {
@@ -637,5 +637,69 @@ func TestAddCorrectionOnObsoleteReportsResurrected(t *testing.T) {
 	}
 	if !res2.Changed || res2.Resurrected {
 		t.Errorf("res = %+v, want changed only (no resurrection on a live fact)", res2)
+	}
+}
+
+// TestObsoleteMergesReasonRedactions pins the audit contract on the retire
+// path: rows cut from the reason land on the fact next to the CURRENT value's
+// rows (a retirement does not rewrite the value), a row of the same field is
+// replaced, and the journal retire entry states the merged set.
+func TestObsoleteMergesReasonRedactions(t *testing.T) {
+	const src = `{"fact_id":"fid","key":"k","value":"id [memento-redacted:long-hex]","category":"config","project":"proj","status":"verified","redactions":[{"field":"value","pattern":"long-hex","chars":48}]}`
+	var body string
+	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
+		switch {
+		case r.Method == "GET":
+			return 200, `{"_index":"memento","_id":"k","found":true,"_source":` + src + `}`
+		case strings.Contains(r.Path, "_update"):
+			body = r.Body
+			return 200, `{"result":"updated"}`
+		}
+		return 200, `{}`
+	})
+	rows := []model.Redaction{{Field: "reason", Pattern: "long-hex", Chars: 40}}
+	if err := c.Obsolete(context.Background(), "k", "deleted [memento-redacted:long-hex]", rows); err != nil {
+		t.Fatalf("Obsolete: %v", err)
+	}
+	if !strings.Contains(body, `"field":"value","pattern":"long-hex","chars":48`) {
+		t.Errorf("the value's audit row was dropped: %.260s", body)
+	}
+	if !strings.Contains(body, `"field":"reason"`) {
+		t.Errorf("the reason's audit row is missing: %.260s", body)
+	}
+	appends := journalAppends(fake)
+	if len(appends) != 1 || !strings.Contains(appends[0].Body, `"redactions"`) {
+		t.Errorf("the retire entry must state the merged audit: %+v", appends)
+	}
+}
+
+// TestTouchCleanNotesClearsStaleRow: a same-value re-add that rewrites the notes
+// without a finding drops the stored notes row and keeps the value's — the note
+// no longer contains what the stale row claims.
+func TestTouchCleanNotesClearsStaleRow(t *testing.T) {
+	const existing = `{"fact_id":"fid","key":"k","value":"same","category":"config","project":"proj","status":"verified","notes":"old [memento-redacted:long-hex]","redactions":[{"field":"value","pattern":"long-hex","chars":48},{"field":"notes","pattern":"long-hex","chars":40}],"created_at":"2020-01-01T00:00:00Z","updated_at":"2020-01-01T00:00:00Z","observed_at":"2020-01-01T00:00:00Z"}`
+	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
+		switch {
+		case r.Method == "GET":
+			return 200, `{"_index":"memento","_id":"k","_version":2,"found":true,"_source":` + existing + `}`
+		case strings.Contains(r.Path, "_update"):
+			return 200, `{"result":"updated"}`
+		}
+		return 200, `{}`
+	})
+	f := model.NewFact("k", "same", "config", "proj", "", "checked by hand")
+	if _, err := c.Add(context.Background(), f); err != nil {
+		t.Fatalf("Add touch: %v", err)
+	}
+	updates := fake.requestsFor("POST", "/memento/_update/k")
+	if len(updates) != 1 {
+		t.Fatalf("touch updates = %d, want 1", len(updates))
+	}
+	body := updates[0].Body
+	if strings.Contains(body, `"field":"notes"`) {
+		t.Errorf("stale notes row survived a clean note rewrite: %s", body)
+	}
+	if !strings.Contains(body, `"field":"value"`) {
+		t.Errorf("the value's audit row was dropped: %s", body)
 	}
 }

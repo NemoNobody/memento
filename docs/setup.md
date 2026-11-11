@@ -539,10 +539,13 @@ set their own tool timeouts).
 ## Security notes
 
 - **Secrets do not belong in facts** (passwords, tokens, private keys): the index
-  is plaintext. The write paths scan for credential-like text and refuse it —
-  `secret_guard` in the config: `reject` (default), `ask` (confirm a false
-  positive with `--allow-secret` / `confirm_secret: true`), `allow` (scanning
-  off). Detection is best effort: the rule is still the first line of defense.
+  is plaintext. The write paths scan for credential-like text — `secret_guard`
+  in the config: `reject` (default), `ask` (confirm a false positive with
+  `--allow-secret` / `confirm_secret: true`), `allow` (scanning off). A real
+  credential refuses the write; a heuristic hit (a long hash, base64) is
+  replaced with `[memento-redacted:pattern]` and listed in `redactions`, so the
+  stored value ends up shorter than what was written. Detection is best effort:
+  the rule is still the first line of defense.
 - The OpenSearch password lives in the OS keyring (`memento creds set`), not in
   the config file: `allow_plaintext` is off by default, so a file password is
   refused. `memento creds status` shows the source; neither command prints the

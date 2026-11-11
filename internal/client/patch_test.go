@@ -127,6 +127,51 @@ func TestPatchValueChangeJournalsAndClearsSummary(t *testing.T) {
 	}
 }
 
+// TestPatchValueChangeCarriesRedactions pins the write-path audit: a value the
+// secret guard shortened is stored WITH its redaction rows (the fact and the
+// journal entry), so a reader can tell the value is not the full claim; a clean
+// value explicitly clears the rows of the value it replaced (a stale audit
+// would claim a loss that did not happen).
+func TestPatchValueChangeCarriesRedactions(t *testing.T) {
+	const source = `{"key":"k","value":"v1","category":"config","project":"p","status":"verified"}`
+	var body string
+	c, fake := newFakeClient(t, patchRespond(source, &body))
+
+	reds := []model.Redaction{{Field: "value", Pattern: "long-hex", Chars: 48}}
+	if _, err := c.Patch(context.Background(), "k", PatchFields{Value: "id [memento-redacted:long-hex]", Redactions: reds}); err != nil {
+		t.Fatalf("Patch: %v", err)
+	}
+	params := patchParams(t, body)
+	rows, ok := params["redactions"].([]any)
+	if !ok || len(rows) != 1 {
+		t.Fatalf("params.redactions = %v, want one row", params["redactions"])
+	}
+	appends := journalAppends(fake)
+	if len(appends) != 1 {
+		t.Fatalf("journal appends = %d, want 1", len(appends))
+	}
+	if !strings.Contains(appends[0].Body, `"redactions"`) {
+		t.Errorf("the journal entry must state the audit: %s", appends[0].Body)
+	}
+
+	// A clean correction clears the audit explicitly (nil + the clear flag):
+	// leaving the old rows would describe a value that no longer exists.
+	var cleanBody string
+	c2, _ := newFakeClient(t, patchRespond(
+		`{"key":"k","value":"v1","category":"config","project":"p","status":"verified","redactions":[{"field":"value","pattern":"long-hex","chars":48}]}`,
+		&cleanBody))
+	if _, err := c2.Patch(context.Background(), "k", PatchFields{Value: "clean value"}); err != nil {
+		t.Fatalf("Patch clean: %v", err)
+	}
+	cleanParams := patchParams(t, cleanBody)
+	if v := cleanParams["redactions"]; v != nil {
+		t.Errorf("params.redactions = %v, want null on a clean value", v)
+	}
+	if v := cleanParams["redactions_clear"]; v != true {
+		t.Errorf("params.redactions_clear = %v, want true", v)
+	}
+}
+
 // TestPatchLongValueRequiresNewSummary keeps add's summary rule on the patch
 // path: a long new value without a summary is refused before any write.
 func TestPatchLongValueRequiresNewSummary(t *testing.T) {
@@ -476,5 +521,44 @@ func TestPatchValueChangeResetsConfirmers(t *testing.T) {
 	}
 	if _, has := set[0].(map[string]any)["author"]; !has {
 		t.Errorf("reset confirmer must name its author: %v", set[0])
+	}
+}
+
+// TestPatchCleanNoteClearsStaleRow: a note rewritten without a finding drops the
+// stored rows of the note AND of the lines appended into it (the replacement
+// erased that text), while the audit of the value it sits next to survives.
+func TestPatchCleanNoteClearsStaleRow(t *testing.T) {
+	var body string
+	c, _ := newFakeClient(t, patchRespond(
+		`{"key":"k","value":"v","category":"config","project":"p","status":"verified","notes":"old [memento-redacted:long-hex]","redactions":[{"field":"value","pattern":"long-hex","chars":48},{"field":"notes","pattern":"long-hex","chars":40},{"field":"notes_append","pattern":"long-hex","chars":41},{"field":"reason","pattern":"long-hex","chars":42}]}`,
+		&body))
+	if _, err := c.Patch(context.Background(), "k", PatchFields{Notes: "checked by hand"}); err != nil {
+		t.Fatalf("Patch: %v", err)
+	}
+	params := patchParams(t, body)
+	rows, ok := params["redactions"].([]any)
+	if !ok || len(rows) != 1 {
+		t.Fatalf("params.redactions = %v, want only the value row", params["redactions"])
+	}
+	if row, _ := rows[0].(map[string]any); row["field"] != "value" {
+		t.Errorf("row = %v, want the value row to survive", rows[0])
+	}
+}
+
+// TestPatchNotesAppendKeepsEarlierRows: appended text adds rows instead of
+// replacing them — the earlier appended line is still in the notes.
+func TestPatchNotesAppendKeepsEarlierRows(t *testing.T) {
+	var body string
+	c, _ := newFakeClient(t, patchRespond(
+		`{"key":"k","value":"v","category":"config","project":"p","status":"verified","notes":"old","redactions":[{"field":"notes_append","pattern":"long-hex","chars":40}]}`,
+		&body))
+	rows := []model.Redaction{{Field: "notes_append", Pattern: "long-base64", Chars: 41}}
+	if _, err := c.Patch(context.Background(), "k", PatchFields{NotesAppend: "line [memento-redacted:long-base64]", Redactions: rows}); err != nil {
+		t.Fatalf("Patch: %v", err)
+	}
+	params := patchParams(t, body)
+	got, ok := params["redactions"].([]any)
+	if !ok || len(got) != 2 {
+		t.Fatalf("params.redactions = %v, want both appended rows", params["redactions"])
 	}
 }

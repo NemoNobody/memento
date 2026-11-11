@@ -18,10 +18,12 @@ what was run live against real clusters.
 
 ## Live CLI smoke — `hack/cli-smoke.sh`
 
-23 checks against one live store (throwaway `smoke:<runid>:` keys): status,
+28 checks against one live store (throwaway `smoke:<runid>:` keys): status,
 add/correction/get, journal writes, history-info, list/keys/search, obsolete,
-secret-guard rejection, prune dry-run + `--yes`, migrate-history, docs search
-on a missing index. Exit 0 only when everything passes.
+secret-guard rejection AND redaction (a high-confidence credential refuses the
+write, a heuristic hit is stored with a marker + audit), prune dry-run +
+`--yes`, migrate-history, docs search on a missing index. Exit 0 only when
+everything passes.
 
 ## Version matrix — `hack/version-matrix.sh` (2026-11-11)
 

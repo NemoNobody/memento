@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 // Finding is one credential-like span in one input field.
@@ -23,9 +24,9 @@ type Finding struct {
 	// Confidence drives the policy: high shapes are credential-specific and
 	// deterministic (vendor prefixes, key blocks, strong assignments) — safe
 	// to act on (redact). medium covers the generic shapes (long hex/base64,
-	// weak assignments) that fire on ordinary content too — never redacted
-	// (a page must not be destroyed by a false positive), only refused
-	// (confirmable at secret_guard=ask).
+	// weak assignments) that fire on ordinary content too — redacted only
+	// where the text is short and writer-authored (fact fields, see
+	// RedactAll), refused or skipped where it is page markup (Redact).
 	Confidence string
 
 	start int
@@ -195,28 +196,101 @@ func Scan(field, text string) []Finding {
 // raw HTML, which agents never read: redacting on write keeps the plaintext
 // store clean without making normal pages uncacheable.
 func Redact(field, text string) (string, []Finding) {
-	findings := scan(field, text, true)
+	return redactWith(field, text, false)
+}
+
+// RedactAll is Redact with the medium-confidence shapes included. It is the
+// write-path mode for fact fields: they are short, human-authored claims, so
+// a generic shape there (a long hex, a base64 blob, a weak assignment) is far
+// more likely a false positive — a commit hash, a checksum, a config name —
+// than in a page of markup. Refusing the whole write over that class left a
+// legitimate fact unstorable; replacing just the flagged span keeps the rest
+// of the claim, and the audit trail says what was cut.
+//
+// Redaction is destructive by nature, so it is never silent: the caller
+// reports the returned findings and stores them with the fact.
+func RedactAll(field, text string) (string, []Finding) {
+	return redactWith(field, text, true)
+}
+
+// markerPrefix opens the placeholder Redact writes in place of a span.
+const markerPrefix = "[memento-redacted:"
+
+var markerRE = regexp.MustCompile(`\[memento-redacted:[^\]]+\]`)
+
+// HasContent reports whether text still carries readable content once the
+// redaction markers are removed. A field that was nothing but one flagged
+// span has nothing left to store: a fact whose value is a bare marker claims
+// "something was here", which is worse than refusing the write.
+func HasContent(text string) bool {
+	rest := markerRE.ReplaceAllString(text, "")
+	return strings.TrimFunc(rest, func(r rune) bool {
+		return unicode.IsSpace(r) || unicode.IsPunct(r)
+	}) != ""
+}
+
+func redactWith(field, text string, includeMedium bool) (string, []Finding) {
+	findings := scan(field, text, !includeMedium)
 	if len(findings) == 0 {
 		return text, nil
 	}
-	sort.Slice(findings, func(i, j int) bool { return findings[i].start < findings[j].start })
+	// Deterministic order for spans that share a start: the wider one wins, so a
+	// fold followed by the marker placement cannot depend on map/scan order.
+	sort.Slice(findings, func(i, j int) bool {
+		if findings[i].start != findings[j].start {
+			return findings[i].start < findings[j].start
+		}
+		return findings[i].end > findings[j].end
+	})
 	var b strings.Builder
 	b.Grow(len(text))
 	last := 0
 	applied := make([]Finding, 0, len(findings))
 	for _, f := range findings {
-		if f.start < last {
+		start := f.start
+		if f.Pattern == "credential-assignment" {
+			// The key name ("password:") is ordinary text: replacing the whole
+			// match would drop what the fact was about. Only the value goes.
+			start = assignmentValueStart(text, f.start, f.end)
+		}
+		if start < last {
 			continue // a folded overlap: the earlier span already replaced it
 		}
-		b.WriteString(text[last:f.start])
-		b.WriteString("[memento-redacted:")
+		b.WriteString(text[last:start])
+		b.WriteString(markerPrefix)
 		b.WriteString(f.Pattern)
 		b.WriteString("]")
 		last = f.end
+		// The audit row must describe the span the text really lost, not the
+		// regexp match: a narrowed assignment reports only the value.
+		f.start = start
+		f.Length = f.end - start
 		applied = append(applied, f)
 	}
 	b.WriteString(text[last:])
 	return b.String(), applied
+}
+
+// assignmentValueStart narrows an assignment match to its right-hand side.
+// The opening quote, if any, is kept so a quoted config line stays quoted;
+// the regexp stops before the closing quote, so the pair survives.
+func assignmentValueStart(text string, start, end int) int {
+	i := strings.IndexAny(text[start:end], "=:")
+	if i < 0 {
+		return start
+	}
+	rs := start + i + 1
+	for rs < end {
+		switch text[rs] {
+		case ' ', '\t':
+			rs++
+		case '"', '\'':
+			return rs + 1 // keep the quote, start after it
+		default:
+			return rs
+		}
+	}
+	return end
 }
 
 // scan is Scan with the pattern-set switch: highOnly keeps the
