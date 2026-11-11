@@ -10,7 +10,8 @@ Persistent, provenance-carrying memory for AI agents (and humans).
 file locations, endpoint and config values, behavior — in an OpenSearch index,
 so the same thing is not re-verified over and over. The store records the
 evidence, who wrote it and when; it cannot verify anything itself. It is an
-advisory memory with an audit trail, not an oracle.
+advisory memory with an audit trail, not an oracle. Why OpenSearch and not
+files or SQL: [Storage](#storage).
 
 Each fact carries evidence, not verdicts:
 
@@ -218,6 +219,33 @@ dev stack; elsewhere use `scripts/push-dashboards.sh`. Install instructions
 and caveats: [docs/dashboard.md](docs/dashboard.md).
 
 ## Storage
+
+### Why OpenSearch (and not files or SQL)
+
+The store has to answer four questions at once: full-text lookup over values and
+summaries, aggregation over projects/tags/operations, an append-only history
+you can query by time, and safe concurrent access for more than one machine or
+user. Options we weighed:
+
+- **Files (one JSON/YAML per fact)** — simplest to read by eye, but every
+  property above would be rebuilt by hand: search, locking, partial-write
+  recovery, a history that is queryable rather than a pile of files, and
+  per-project access control. The filesystem becomes the schema.
+- **A wiki-style backend (files + a search index, the MediaWiki shape)** — it
+  works and it is fast, but the index is a second system to operate, a fact
+  becomes page text, and history is page revisions instead of typed
+  observations. Same operational surface as OpenSearch, less query power.
+- **SQLite/Postgres** — transactions are genuinely better than what we have;
+  we trade them for BM25, aggregations, index-per-period history and a query
+  language that fits "find by summary, group by project, count by op". Value
+  corrections here are last-writer-wins, not CAS ([docs/how-it-works.md](docs/how-it-works.md)).
+- **OpenSearch** (chosen) — one engine for all four questions above, already
+  running wherever the author works, and comfortable as a shared, inspectable
+  catalogue rather than a private blob. One local node is enough to start.
+
+The cost is honest: a JVM service to run and a plaintext store to protect. That
+is the deliberate trade; the security posture is below and in
+[docs/setup.md](docs/setup.md).
 
 Facts live in a single OpenSearch index (default `memento`). One node is enough
 to start; a proper cluster works the same way. How to point `memento` at a
