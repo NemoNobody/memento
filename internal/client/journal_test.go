@@ -460,18 +460,19 @@ func TestJournalCollisionStringShape(t *testing.T) {
 		}
 	})
 	t.Run("index-level already-exists is not a doc collision", func(t *testing.T) {
-		// First body pins the string resource_already_exists guard alone
-		// (no "index [" marker). The second body alone would still fail
-		// via the compound's "already exists" half — the "index [" half
-		// of the compound is pinned by the MARKER-FREE "already exists"
-		// success bodies below (deleting it turns the guard into a
-		// blanket "already exists" exclusion), and the "already exists"
-		// half by the marker-plus-conflict-wording success bodies.
+		// Each body is the ONLY one pinning its guard shape: the first
+		// pins the string branch's resource_already_exists exclusion, the
+		// second its "index [" marker half, the third the struct branch's
+		// reason-wording exclusion (type rewritten, exception named in
+		// the reason, no marker).
 		for _, body := range []string{
 			// names the exception type, no "index [" marker
 			`{"error":"resource_already_exists_exception: [k2] already exists","status":409}`,
 			// carries the "index [" marker, no exception-type wording
 			`{"error":"index [memento-history-2026-11/uuid] already exists","status":409}`,
+			// struct shape: middlebox rewrote the type but left the
+			// exception name in the reason
+			`{"error":{"type":"mapper_parsing_exception","reason":"resource_already_exists_exception: [k2] already exists"},"status":409}`,
 		} {
 			c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
 				if code, b := journalInfraOK(r); code != http.StatusInternalServerError {

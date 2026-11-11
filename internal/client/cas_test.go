@@ -246,6 +246,26 @@ func TestAddConflictCanonicalTypeRewrittenReason(t *testing.T) {
 	}
 }
 
+// TestAddGatewayStatusRewriteIsNotConflict: even the canonical
+// version_conflict_engine_exception type requires the 409 status — a
+// gateway that rewrites the status to 500 while keeping the engine's
+// type body is not an engine conflict. Trusting it would answer a
+// permanent upstream error with "re-read and retry" and send the agent
+// into a futile CAS loop.
+func TestAddGatewayStatusRewriteIsNotConflict(t *testing.T) {
+	var got recordedRequest
+	c, _ := newFakeClient(t, casRespond(casSource, http.StatusInternalServerError,
+		`{"error":{"type":"version_conflict_engine_exception","reason":"[k]: version conflict, required seq_no [5], primary_term [2], but was [6] [2]"},"status":500}`, &got))
+
+	_, err := c.Add(context.Background(), model.NewFact("k", "same", "config", "p", "test:cas", "retouched"))
+	if errors.Is(err, ErrConflict) {
+		t.Fatalf("a 500-carrying body must not classify as a CAS conflict, got: %v", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "version_conflict_engine_exception") {
+		t.Fatalf("the upstream failure must surface honestly, got: %v", err)
+	}
+}
+
 func TestPatchValueChangeIsNotConditional(t *testing.T) {
 	var got recordedRequest
 	c, _ := newFakeClient(t, casRespond(casSource, http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`, &got))
