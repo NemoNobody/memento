@@ -11,10 +11,12 @@ overview". It covers facts, the journal (history) and cached documents:
 | Journal entries per period index | how the monthly history indices grow |
 | By project / category / status (donuts) | what kind of knowledge is in the store |
 | Top fact keys by journal writes | the hottest facts (re-verification candidates) |
+| Docs by via / fetched_by / project (donuts) | which route fetched the cache (plain, proxy, renderer), which host, for which project |
+| Docs past TTL | snapshots whose `expires_at` has passed: re-fetch candidates (the cached content is still readable) |
 
 ## Install
 
-The bundle (`docker/dashboards/objects.ndjson`: 3 index patterns, 15
+The bundle (`docker/dashboards/objects.ndjson`: 3 index patterns, 18
 visualizations, the dashboard) is pushed with the bundled script:
 
 ```bash
