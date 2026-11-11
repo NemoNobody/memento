@@ -829,6 +829,11 @@ func TestObsoleteKeepsValueAndAppendsReason(t *testing.T) {
 	if !strings.Contains(appends[0].Body, "old note\\nfile deleted") {
 		t.Errorf("journal entry must carry the stated notes: %s", appends[0].Body)
 	}
+	// The op marker names the event: a retirement is not a value write, so
+	// "when and by whom was this retired" is a journal query.
+	if !strings.Contains(appends[0].Body, `"op":"`+model.OpRetire+`"`) {
+		t.Errorf("retire entry must carry op=retire: %s", appends[0].Body)
+	}
 }
 
 // TestObsoleteMissingFactIsNotFound keeps the MCP handler's errors.Is check

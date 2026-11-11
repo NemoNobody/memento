@@ -988,6 +988,9 @@ func (c *Client) Obsolete(ctx context.Context, key, reason string) error {
 		// Doc-first: the entry is built and its id preallocated here, the
 		// entry itself is indexed only after the transition is accepted.
 		entry = c.newJournalEntryFor(ctx, &stated, existing.FactID, time.Now().UTC())
+		// The ops marker names the event: a retirement entry is not a value
+		// write, and "who retired this, when" must not be inferred from notes.
+		entry.Op = model.OpRetire
 		currentRef = uuid.New().String()
 	}
 	params := map[string]interface{}{
@@ -1221,6 +1224,11 @@ func (c *Client) Patch(ctx context.Context, key string, p PatchFields) (PatchRes
 		// Doc-first: the entry is built and its id preallocated here, the
 		// entry itself is indexed only after the update is accepted.
 		entry = c.newJournalEntryFor(ctx, &stated, existing.FactID, now)
+		if p.Status == "obsolete" {
+			// A retirement is not a value write: the marker makes "when and by
+			// whom was this retired" a query over the journal.
+			entry.Op = model.OpRetire
+		}
 		currentRef = uuid.New().String()
 	}
 

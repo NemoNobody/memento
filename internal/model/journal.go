@@ -9,16 +9,19 @@ import (
 // that changed (or established) a fact's value appends op=write. op=rediscovery
 // is reserved for the same value re-confirmed by a different author (the
 // author fields are defined on JournalEntry; the operation name is reserved
-// now so the journal vocabulary is stable from the first entry).
+// now so the journal vocabulary is stable from the first entry). op=retire
+// marks the entry written for a verified→obsolete transition, so "when and by
+// whom was this retired" is a query, not an inference from notes text.
 const (
 	OpWrite       = "write"
 	OpRediscovery = "rediscovery"
+	OpRetire      = "retire"
 )
 
 // ValidOp reports whether op is a known journal operation.
 func ValidOp(op string) bool {
 	switch strings.ToLower(op) {
-	case OpWrite, OpRediscovery:
+	case OpWrite, OpRediscovery, OpRetire:
 		return true
 	}
 	return false

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/NemoNobody/memento/internal/config"
+	"github.com/NemoNobody/memento/internal/model"
 )
 
 // patchRespond serves the routes Patch touches: doc read, journal routes
@@ -208,6 +209,9 @@ func TestPatchObsoleteWithReasonJournals(t *testing.T) {
 	}
 	if !strings.Contains(appends[0].Body, "n\\nfile deleted") {
 		t.Errorf("journal entry must carry the folded reason: %s", appends[0].Body)
+	}
+	if !strings.Contains(appends[0].Body, `"op":"`+model.OpRetire+`"`) {
+		t.Errorf("retire entry must carry op=retire: %s", appends[0].Body)
 	}
 }
 

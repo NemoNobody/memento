@@ -177,7 +177,9 @@ History is an append-only **journal** of dated indices, not an array inside
 the fact doc:
 
 - One entry per accepted value: `fact_key`, `op` (`write`; `rediscovery` is
-  reserved for same-value re-confirmation by a different author), `value`,
+  reserved for same-value re-confirmation by a different author; `retire`
+  marks the verified→obsolete transition, so "when and by whom was this
+  retired" is a query), `value`,
   `notes`, `source`, `created_at`, author fields. `op_type=create`: appends
   never overwrite each other, there is no CAS.
 - Entries live in `<index>-history-<period-date>`: the period granularity is
