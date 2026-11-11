@@ -174,6 +174,14 @@ the fact doc:
   `month` — `2026.11`; also `day`, `week` (`2026-w46`), `quarter`
   (`2026-q4`), `year`). Dated indices keep old periods small, inspectable,
   and deletable (the admin pruning path).
+  Which period an entry lands in is decided by its client-side `created_at`
+  (the writer's clock), while `ingest_at` is the server clock: on a shared
+  store, a writer whose clock is skewed past a period boundary files
+  entries into an older period index — and an admin cleaning up "old"
+  periods by date can delete them as if they were stale. Keep NTP (or
+  systemd-timesyncd) on every writer machine; this is the operational
+  prerequisite of period-based journal pruning, chosen over per-write
+  round-trips to the server clock.
 - The journal infrastructure (ingest pipeline `<index>-journal-ts` stamping
   entries with the **server clock** — writer clocks skew on a shared store;
   index template `<index>-journal` with explicit mappings) is created
