@@ -183,7 +183,7 @@ func TestFetchDocStoresSnapshotThenServesCache(t *testing.T) {
 	ctx := context.Background()
 	url := ft.srv.URL + "/page"
 
-	doc1, cached, err := c.FetchDoc(ctx, url, "proj", false, nil)
+	doc1, cached, _, err := c.FetchDoc(ctx, url, "proj", false, nil)
 	if err != nil {
 		t.Fatalf("FetchDoc(first): %v", err)
 	}
@@ -204,7 +204,7 @@ func TestFetchDocStoresSnapshotThenServesCache(t *testing.T) {
 		t.Errorf("stored audit fields: %+v", storedDoc)
 	}
 
-	doc2, cached2, err := c.FetchDoc(ctx, url, "proj", false, nil)
+	doc2, cached2, _, err := c.FetchDoc(ctx, url, "proj", false, nil)
 	if err != nil {
 		t.Fatalf("FetchDoc(second): %v", err)
 	}
@@ -222,5 +222,86 @@ func TestFetchDocStoresSnapshotThenServesCache(t *testing.T) {
 	}
 	if puts != 1 {
 		t.Errorf("writes = %d, want 1: a cache hit must not rewrite", puts)
+	}
+}
+
+// TestFetchDocRevalidatesWithETag pins the cache-refresh contract end to end:
+// a forced refresh of a stored page sends its ETag, the origin answers 304, and
+// the stored snapshot is kept with only fetched_at/expires_at moved — no body
+// download, no content change.
+func TestFetchDocRevalidatesWithETag(t *testing.T) {
+	ft := newFetchTarget(t)
+	var (
+		indexExists bool
+		stored      string
+	)
+	respond := func(r recordedRequest) (int, string) {
+		switch {
+		case r.Path == "/memento-docs" && r.Method == "HEAD":
+			if indexExists {
+				return 200, ""
+			}
+			return 404, ""
+		case r.Path == "/memento-docs" && r.Method == "PUT":
+			indexExists = true
+			return 200, `{"acknowledged":true}`
+		case strings.HasPrefix(r.Path, "/memento-docs/_doc/"):
+			if r.Method == "GET" {
+				if stored == "" {
+					return 404, "{}"
+				}
+				return 200, `{"found":true,"_source":` + stored + `}`
+			}
+			stored = r.Body
+			return 200, `{"result":"created"}`
+		}
+		return 404, "{}"
+	}
+	c, fake := newFakeClientCfg(t, func(cfg *config.Config) {
+		docsMutate(cfg)
+		// The TTL drives the expires_at bump the 304 path performs.
+		cfg.DocsTTLDays = 90
+	}, respond)
+	ctx := context.Background()
+	url := ft.srv.URL + "/etag"
+
+	doc1, cached, revalidated, err := c.FetchDoc(ctx, url, "proj", false, nil)
+	if err != nil {
+		t.Fatalf("FetchDoc(first): %v", err)
+	}
+	if cached || revalidated {
+		t.Fatalf("first fetch = (cached=%v revalidated=%v), want both false", cached, revalidated)
+	}
+	if doc1.ETag != `"v1"` {
+		t.Fatalf("stored ETag = %q, want the origin's \"v1\"", doc1.ETag)
+	}
+
+	doc2, cached2, revalidated2, err := c.FetchDoc(ctx, url, "proj", true, nil)
+	if err != nil {
+		t.Fatalf("FetchDoc(refresh): %v", err)
+	}
+	if !cached2 || !revalidated2 {
+		t.Fatalf("forced refresh = (cached=%v revalidated=%v), want both true on a 304", cached2, revalidated2)
+	}
+	if doc2.ContentHash != doc1.ContentHash {
+		t.Errorf("content changed across a 304: %q -> %q", doc1.ContentHash, doc2.ContentHash)
+	}
+	if doc2.FetchedAt.Before(doc1.FetchedAt) {
+		t.Errorf("fetched_at went backwards: %v -> %v", doc1.FetchedAt, doc2.FetchedAt)
+	}
+	if !doc2.ExpiresAt.After(doc1.ExpiresAt) {
+		t.Errorf("expires_at must move forward on revalidation: %v -> %v", doc1.ExpiresAt, doc2.ExpiresAt)
+	}
+	puts := 0
+	for _, r := range fake.requests {
+		if r.Method == "PUT" && strings.HasPrefix(r.Path, "/memento-docs/_doc/") {
+			puts++
+		}
+	}
+	if puts != 2 {
+		t.Errorf("doc puts = %d, want 2 (first store + the timestamp bump); a 304 must not re-store a body", puts)
+	}
+	if len(ft.inm) != 2 || ft.inm[1] != `"v1"` {
+		t.Errorf("If-None-Match = %q, want the second request conditional", ft.inm)
 	}
 }

@@ -1493,17 +1493,22 @@ func newDocOutline(d *model.Doc) []docSectionOutline {
 }
 
 type fetchDocOutput struct {
-	Hash      string              `json:"hash,omitempty" jsonschema:"document id for memento_get_doc"`
-	URL       string              `json:"url,omitempty"`
-	Title     string              `json:"title,omitempty"`
-	Project   string              `json:"project,omitempty"`
-	FetchedAt string              `json:"fetched_at,omitempty"`
-	ExpiresAt string              `json:"expires_at,omitempty"`
-	Stale     bool                `json:"stale,omitempty" jsonschema:"past TTL: re-fetch with memento_fetch_doc before quoting"`
-	Cached    bool                `json:"cached,omitempty" jsonschema:"true when the stored snapshot was returned without a network request"`
-	Truncated bool                `json:"truncated,omitempty" jsonschema:"extraction hit a limit: the stored text is a prefix"`
-	Via       string              `json:"via,omitempty" jsonschema:"route that served the fetch when not direct: proxy | obscura (audit; obscura means the content was browser-rendered)"`
-	Sections  []docSectionOutline `json:"sections,omitempty" jsonschema:"outline: pull a section with memento_get_doc(hash, section)"`
+	Hash      string `json:"hash,omitempty" jsonschema:"document id for memento_get_doc"`
+	URL       string `json:"url,omitempty"`
+	Title     string `json:"title,omitempty"`
+	Project   string `json:"project,omitempty"`
+	FetchedAt string `json:"fetched_at,omitempty"`
+	ExpiresAt string `json:"expires_at,omitempty"`
+	Stale     bool   `json:"stale,omitempty" jsonschema:"past TTL: re-fetch with memento_fetch_doc before quoting"`
+	Cached    bool   `json:"cached,omitempty" jsonschema:"true when the stored snapshot was returned (no new content was downloaded)"`
+	// Revalidated names the 304 path: the origin confirmed the stored copy
+	// with HTTP validators, so the content is unchanged and only fetched_at /
+	// expires_at moved. It is a network request, not a cache hit — an agent
+	// asking "did the page change?" needs the difference.
+	Revalidated bool                `json:"revalidated,omitempty" jsonschema:"true when the origin answered 304 Not Modified and the stored snapshot was kept (fetched_at moved, content unchanged)"`
+	Truncated   bool                `json:"truncated,omitempty" jsonschema:"extraction hit a limit: the stored text is a prefix"`
+	Via         string              `json:"via,omitempty" jsonschema:"route that served the fetch when not direct: proxy | obscura (audit; obscura means the content was browser-rendered)"`
+	Sections    []docSectionOutline `json:"sections,omitempty" jsonschema:"outline: pull a section with memento_get_doc(hash, section)"`
 
 	// Redactions: high-confidence credential spans edited out of the stored
 	// snapshot (pattern/field/size, no preview): the secret never entered the
@@ -1571,7 +1576,7 @@ func (s *mcpServer) fetchDoc(ctx context.Context, req *mcp.CallToolRequest, in f
 	if err != nil {
 		return nil, fetchDocOutput{}, storeError("memento_fetch_doc", err)
 	}
-	doc, cached, err := c.FetchDoc(ctx, rawURL, in.Project, in.Refresh,
+	doc, cached, revalidated, err := c.FetchDoc(ctx, rawURL, in.Project, in.Refresh,
 		func(d *model.Doc) ([]model.Redaction, error) {
 			// Guard after extraction, before the doc is finalized.
 			return guardFetch(d, cfg.SecretGuard, in.ConfirmSecret)
@@ -1581,17 +1586,18 @@ func (s *mcpServer) fetchDoc(ctx context.Context, req *mcp.CallToolRequest, in f
 	}
 	now := time.Now().UTC()
 	out := fetchDocOutput{
-		Hash:      doc.URLHash,
-		URL:       doc.URL,
-		Title:     doc.Title,
-		Project:   doc.Project,
-		FetchedAt: rfc3339OrEmpty(doc.FetchedAt),
-		ExpiresAt: rfc3339OrEmpty(doc.ExpiresAt),
-		Stale:     doc.Stale(now),
-		Cached:    cached,
-		Truncated: doc.Truncated,
-		Via:       viaOut(doc),
-		Sections:  newDocOutline(doc),
+		Hash:        doc.URLHash,
+		URL:         doc.URL,
+		Title:       doc.Title,
+		Project:     doc.Project,
+		FetchedAt:   rfc3339OrEmpty(doc.FetchedAt),
+		ExpiresAt:   rfc3339OrEmpty(doc.ExpiresAt),
+		Stale:       doc.Stale(now),
+		Cached:      cached,
+		Revalidated: revalidated,
+		Truncated:   doc.Truncated,
+		Via:         viaOut(doc),
+		Sections:    newDocOutline(doc),
 
 		GuardMediumIgnored: doc.GuardMediumIgnored,
 	}

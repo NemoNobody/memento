@@ -70,15 +70,15 @@ func robotsFor(ctx context.Context, cfg *config.Config, scheme, host string) rob
 
 	// The fetch runs outside the lock: one slow robots.txt (up to the fetch
 	// timeout) must not serialize every other fetch in a long-lived server.
-	_, body, _, _, err := fetchHTTP(ctx, cfg, key+"/robots.txt")
+	out, err := fetchHTTP(ctx, cfg, key+"/robots.txt", fetchCondition{})
 	e = robotsEntry{fetched: time.Now()}
 	switch {
 	case err != nil:
 		e.bad = true // includes 404: no ruleset means no restrictions
-	case len(strings.TrimSpace(string(body))) == 0:
+	case out == nil || len(strings.TrimSpace(string(out.body))) == 0:
 		e.bad = true
 	default:
-		e.groups = parseRobots(string(body))
+		e.groups = parseRobots(string(out.body))
 	}
 	if ctx.Err() != nil {
 		return e // the caller's cancellation says nothing about the host: do not cache it

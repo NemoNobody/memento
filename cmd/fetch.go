@@ -80,7 +80,7 @@ A host outside fetch_allow_hosts is rejected before the request is made.`,
 			if err != nil {
 				fatalErr(err)
 			}
-			doc, cached, err := c.FetchDoc(ctx, rawURL, fetchFlags.project, fetchFlags.refresh,
+			doc, cached, revalidated, err := c.FetchDoc(ctx, rawURL, fetchFlags.project, fetchFlags.refresh,
 				func(d *model.Doc) ([]model.Redaction, error) {
 					// The guard runs after extraction, before the doc is finalized:
 					// page text is untrusted input and can carry credential-like
@@ -90,7 +90,7 @@ A host outside fetch_allow_hosts is rejected before the request is made.`,
 			if err != nil {
 				fatalErr(err)
 			}
-			if err := printDocOutline(os.Stdout, doc, cached, time.Now().UTC()); err != nil {
+			if err := printDocOutline(os.Stdout, doc, cached, revalidated, time.Now().UTC()); err != nil {
 				fatalErr(err)
 			}
 		},
@@ -159,7 +159,7 @@ func DocCmd() *cobra.Command {
 				fatalErr(errors.New("doc " + hash + " has no section " + strconv.Itoa(section) +
 					" (see the outline with 'memento doc " + hash + "')"))
 			default:
-				if err := printDocOutline(os.Stdout, doc, false, time.Now().UTC()); err != nil {
+				if err := printDocOutline(os.Stdout, doc, false, false, time.Now().UTC()); err != nil {
 					fatalErr(err)
 				}
 			}
@@ -389,7 +389,7 @@ func isAPIContentType(ct string) bool {
 
 // printDocOutline renders the title + section table: the context-cheap view an
 // agent reads to decide which section to pull.
-func printDocOutline(w io.Writer, doc *model.Doc, cached bool, now time.Time) error {
+func printDocOutline(w io.Writer, doc *model.Doc, cached, revalidated bool, now time.Time) error {
 	var b strings.Builder
 	b.WriteString("url: ")
 	b.WriteString(doc.URL)
@@ -422,6 +422,10 @@ func printDocOutline(w io.Writer, doc *model.Doc, cached bool, now time.Time) er
 	}
 	if cached {
 		b.WriteString("cached: true\n")
+	}
+	if revalidated {
+		// A 304: the content is the stored one, only the timestamps moved.
+		b.WriteString("revalidated: true (origin answered 304 Not Modified; the snapshot is unchanged)\n")
 	}
 	if doc.Truncated {
 		b.WriteString("truncated: true (extraction hit a limit; the stored text is a prefix)\n")
@@ -464,7 +468,7 @@ func printDocOutline(w io.Writer, doc *model.Doc, cached bool, now time.Time) er
 
 // printDocFull prints every section; it is the escape hatch, not the default.
 func printDocFull(w io.Writer, doc *model.Doc, now time.Time) error {
-	if err := printDocOutline(w, doc, false, now); err != nil {
+	if err := printDocOutline(w, doc, false, false, now); err != nil {
 		return err
 	}
 	for _, s := range doc.Sections {

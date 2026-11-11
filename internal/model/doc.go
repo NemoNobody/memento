@@ -73,6 +73,14 @@ type Doc struct {
 	FetchedBy string `json:"fetched_by,omitempty"`
 	Via       string `json:"via,omitempty"`
 
+	// ETag and LastModified are the origin's HTTP validators captured with
+	// this copy. A revalidation sends them and, on 304, only the timestamps
+	// move. They describe the plain-fetch representation, so a copy captured
+	// through the renderer carries none: the renderer's response is not what
+	// the origin's validator covers.
+	ETag         string `json:"etag,omitempty"`
+	LastModified string `json:"last_modified,omitempty"`
+
 	// HTML is the raw body: stored for re-extraction, never indexed, and
 	// excluded from every read path (_source excludes) so it cannot leak
 	// into an agent's context by accident.

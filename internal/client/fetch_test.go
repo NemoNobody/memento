@@ -49,7 +49,7 @@ func TestFetchEnvProxySkipsDialGuard(t *testing.T) {
 	t.Setenv("HTTP_PROXY", "http://127.0.0.1:9")
 	t.Setenv("HTTPS_PROXY", "")
 	t.Setenv("NO_PROXY", "")
-	_, _, _, _, err := fetchHTTP(context.Background(), cfg, "http://example.invalid/x")
+	_, err := fetchHTTP(context.Background(), cfg, "http://example.invalid/x", fetchCondition{})
 	if err == nil {
 		t.Fatal("want failure against the discard proxy")
 	}
@@ -59,7 +59,7 @@ func TestFetchEnvProxySkipsDialGuard(t *testing.T) {
 
 	// Direct path: no env proxy, loopback target → the dial guard fires.
 	t.Setenv("HTTP_PROXY", "")
-	_, _, _, _, err = fetchHTTP(context.Background(), cfg, "http://127.0.0.1:19/x")
+	_, err = fetchHTTP(context.Background(), cfg, "http://127.0.0.1:19/x", fetchCondition{})
 	if err == nil {
 		t.Fatal("want failure against loopback")
 	}
@@ -286,8 +286,9 @@ func TestHostAllowed(t *testing.T) {
 // fetchTarget is the document server the fetch tests point at.
 type fetchTarget struct {
 	srv    *httptest.Server
-	ua     string // User-Agent seen on the last request
-	rlHits int    // requests to /ratelimit (429-then-200 counter)
+	ua     string   // User-Agent seen on the last request
+	rlHits int      // requests to /ratelimit (429-then-200 counter)
+	inm    []string // If-None-Match values /etag received, in order
 }
 
 func newFetchTarget(t *testing.T) *fetchTarget {
@@ -331,6 +332,18 @@ func newFetchTarget(t *testing.T) *fetchTarget {
 	})
 	mux.HandleFunc("/missing", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
+	})
+	// /etag answers with a validator and 304 on a matching If-None-Match:
+	// the conditional-GET path the docs cache revalidates with.
+	mux.HandleFunc("/etag", func(w http.ResponseWriter, r *http.Request) {
+		ft.inm = append(ft.inm, r.Header.Get("If-None-Match"))
+		w.Header().Set("ETag", `"v1"`)
+		if r.Header.Get("If-None-Match") == `"v1"` {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		writeBody(t, w, `<html><body><h1>Cacheable</h1><p>v1 body</p></body></html>`)
 	})
 	mux.HandleFunc("/big", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
@@ -837,5 +850,57 @@ func TestFetchPageStatusClasses(t *testing.T) {
 	_, err = FetchPage(context.Background(), cfg, ft.srv.URL+"/blocked", nil)
 	if !renderEligible(err) {
 		t.Error("403 must be render-eligible")
+	}
+}
+
+// TestRevalidatePage304KeepsCopy pins the conditional-GET contract: the stored
+// copy's ETag goes out as If-None-Match, a 304 answers "unchanged" without a
+// body, and the caller keeps its snapshot (only timestamps move).
+func TestRevalidatePage304KeepsCopy(t *testing.T) {
+	ft := newFetchTarget(t)
+	cfg := config.DefaultConfig()
+	cfg.FetchAllowPrivate = true
+	ctx := context.Background()
+	url := ft.srv.URL + "/etag"
+
+	doc, err := FetchPage(ctx, cfg, url, nil)
+	if err != nil {
+		t.Fatalf("FetchPage: %v", err)
+	}
+	if doc.ETag != `"v1"` {
+		t.Fatalf("ETag = %q, want \"v1\" captured from the origin", doc.ETag)
+	}
+
+	doc2, notModified, err := RevalidatePage(ctx, cfg, url, doc, nil)
+	if err != nil {
+		t.Fatalf("RevalidatePage: %v", err)
+	}
+	if !notModified || doc2 != nil {
+		t.Fatalf("revalidate = (%v, %v), want (nil doc, notModified=true)", doc2, notModified)
+	}
+	if len(ft.inm) != 2 || ft.inm[0] != "" || ft.inm[1] != `"v1"` {
+		t.Errorf("If-None-Match sequence = %q, want [\"\" \"v1\"] (only the revalidation is conditional)", ft.inm)
+	}
+}
+
+// TestRevalidatePageSkipsValidatorsForRenderedCopy pins that HTTP validators are
+// representation-specific: a copy captured through the renderer must re-fetch
+// in full, or the origin's ETag would be applied to a body it never described.
+func TestRevalidatePageSkipsValidatorsForRenderedCopy(t *testing.T) {
+	ft := newFetchTarget(t)
+	cfg := config.DefaultConfig()
+	cfg.FetchAllowPrivate = true
+	ctx := context.Background()
+
+	prior := &model.Doc{Via: ViaObscura, ETag: `"v1"`}
+	doc, notModified, err := RevalidatePage(ctx, cfg, ft.srv.URL+"/etag", prior, nil)
+	if err != nil {
+		t.Fatalf("RevalidatePage: %v", err)
+	}
+	if notModified || doc == nil {
+		t.Fatalf("rendered prior must re-fetch in full, got notModified=%v doc=%v", notModified, doc)
+	}
+	if len(ft.inm) != 1 || ft.inm[0] != "" {
+		t.Errorf("If-None-Match = %q, want none for a rendered copy", ft.inm)
 	}
 }

@@ -42,6 +42,8 @@ func buildDocsIndexBody(replicas int) map[string]interface{} {
 				"final_url":            map[string]interface{}{"type": "keyword"},
 				"url_hash":             map[string]interface{}{"type": "keyword"},
 				"content_hash":         map[string]interface{}{"type": "keyword"},
+				"etag":                 map[string]interface{}{"type": "keyword"},
+				"last_modified":        map[string]interface{}{"type": "keyword"},
 				"title":                map[string]interface{}{"type": "text"},
 				"project":              map[string]interface{}{"type": "keyword"},
 				"fetched_at":           map[string]interface{}{"type": "date"},
@@ -242,11 +244,12 @@ func (c *Client) tagDocProject(ctx context.Context, hash, project string) error 
 // itself (normalize, allowlist) belongs to the callers: bad input is rejected
 // before the store is touched at all.
 func (c *Client) FetchDoc(ctx context.Context, rawURL, project string, refresh bool,
-	hook func(*model.Doc) ([]model.Redaction, error)) (doc *model.Doc, cached bool, err error) {
+	hook func(*model.Doc) ([]model.Redaction, error)) (doc *model.Doc, cached, revalidated bool, err error) {
 	if err := c.EnsureDocsIndex(ctx); err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	hash := URLHash(rawURL)
+	var prior *model.Doc
 	if !refresh {
 		existing, err := c.GetDocByHash(ctx, hash)
 		switch {
@@ -258,18 +261,26 @@ func (c *Client) FetchDoc(ctx context.Context, rawURL, project string, refresh b
 				// Silently ignoring it would hide the doc from the new
 				// project's searches forever.
 				if err := c.tagDocProject(ctx, hash, project); err != nil {
-					return nil, false, err
+					return nil, false, false, err
 				}
 				existing.Project = project
 			}
-			return existing, true, nil
+			return existing, true, false, nil
 		case err != nil && !errors.Is(err, ErrNoDoc):
-			return nil, false, fmt.Errorf("fetch doc: %w", err)
+			return nil, false, false, fmt.Errorf("fetch doc: %w", err)
+		case err == nil:
+			// Stale: revalidate with this copy's validators instead of
+			// re-downloading it (a 304 costs headers only).
+			prior = existing
 		}
+	} else if existing, gerr := c.GetDocByHash(ctx, hash); gerr == nil {
+		// Forced refresh still revalidates: 304 is the cheapest possible
+		// correct answer, and the caller asked for freshness, not for bytes.
+		prior = existing
 	}
 	// The project tag is part of the doc the guard inspects: the hook must
 	// see it, and the hook runs before the doc is finalized (see FetchPage).
-	doc, err = FetchPage(ctx, c.cfg, rawURL, func(d *model.Doc) ([]model.Redaction, error) {
+	doc, notModified, err := RevalidatePage(ctx, c.cfg, rawURL, prior, func(d *model.Doc) ([]model.Redaction, error) {
 		d.Project = project
 		if hook == nil {
 			return nil, nil
@@ -277,10 +288,32 @@ func (c *Client) FetchDoc(ctx context.Context, rawURL, project string, refresh b
 		return hook(d)
 	})
 	if err != nil {
-		return nil, false, err
+		return nil, false, false, err
+	}
+	if notModified {
+		if prior == nil {
+			// No validators were sent without a cached copy, so this is a
+			// protocol surprise, not a normal path.
+			return nil, false, false, fmt.Errorf("fetch doc: origin answered 304 for %s without a cached copy", rawURL)
+		}
+		// The origin confirmed the stored copy: move the timestamps only. The
+		// sections, content hash and raw HTML stay untouched — the file did
+		// not change.
+		now := time.Now().UTC()
+		prior.FetchedAt = now
+		if c.cfg.DocsTTLDays > 0 {
+			prior.ExpiresAt = now.AddDate(0, 0, c.cfg.DocsTTLDays)
+		}
+		if project != "" && prior.Project != project {
+			prior.Project = project
+		}
+		if err := c.PutDoc(ctx, prior); err != nil {
+			return nil, false, false, err
+		}
+		return prior, true, true, nil
 	}
 	if err := c.PutDoc(ctx, doc); err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
-	return doc, false, nil
+	return doc, false, false, nil
 }

@@ -387,7 +387,8 @@ func HostAllowed(cfg *config.Config, normalizedURL string) error {
 // goes through the proxy. With fallback on, the request starts direct and
 // retries through the proxy on a network error/timeout or an IP-ban status
 // (403/422). 404/401 are final: the client, not the IP, is the problem.
-func fetchHTTP(ctx context.Context, cfg *config.Config, normalizedURL string) (contentType string, body []byte, finalURL string, via string, err error) {
+func fetchHTTP(ctx context.Context, cfg *config.Config, normalizedURL string, cond fetchCondition) (*fetchOutcome, error) {
+	var err error
 	timeout := time.Duration(cfg.FetchTimeoutSeconds) * time.Second
 	if timeout <= 0 {
 		timeout = 30 * time.Second
@@ -404,13 +405,13 @@ func fetchHTTP(ctx context.Context, cfg *config.Config, normalizedURL string) (c
 			// The parse error echoes the input: a proxy url with credentials
 			// in it must not be quoted into agent-visible output.
 			if strings.Contains(cfg.FetchProxyURL, "@") {
-				return "", nil, "", "", fmt.Errorf("fetch: parse fetch_proxy_url: invalid syntax (it carries user info; its text is not echoed)")
+				return nil, fmt.Errorf("fetch: parse fetch_proxy_url: invalid syntax (it carries user info; its text is not echoed)")
 			}
-			return "", nil, "", "", fmt.Errorf("fetch: parse fetch_proxy_url %q: %w", cfg.FetchProxyURL, err)
+			return nil, fmt.Errorf("fetch: parse fetch_proxy_url %q: %w", cfg.FetchProxyURL, err)
 		}
 	}
 
-	attempt := func(p *url.URL) (string, []byte, string, int, error) {
+	attempt := func(p *url.URL) (*fetchOutcome, int, error) {
 		tr := http.DefaultTransport.(*http.Transport).Clone()
 		// The MCP server is long-lived and every fetch clones a fresh transport;
 		// idle keep-alive connections and their goroutines would leak. Registered
@@ -481,7 +482,7 @@ func fetchHTTP(ctx context.Context, cfg *config.Config, normalizedURL string) (c
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, normalizedURL, nil)
 		if err != nil {
-			return "", nil, "", 0, fmt.Errorf("fetch: new request: %w", err)
+			return nil, 0, fmt.Errorf("fetch: new request: %w", err)
 		}
 		req.Header.Set("Accept", "text/html, text/plain;q=0.8, text/markdown;q=0.6")
 		ua := cfg.FetchUserAgent
@@ -489,6 +490,14 @@ func fetchHTTP(ctx context.Context, cfg *config.Config, normalizedURL string) (c
 			ua = "memento/fetch (+OpenSearch docs cache)"
 		}
 		req.Header.Set("User-Agent", ua)
+		// Conditional revalidation: the cached copy's validators ask the
+		// origin for a 304 instead of the full body.
+		if cond.etag != "" {
+			req.Header.Set("If-None-Match", cond.etag)
+		}
+		if cond.lastModified != "" {
+			req.Header.Set("If-Modified-Since", cond.lastModified)
+		}
 
 		resp, err := httpc.Do(req)
 		if err != nil {
@@ -496,18 +505,27 @@ func fetchHTTP(ctx context.Context, cfg *config.Config, normalizedURL string) (c
 			// message keeps the target for operators.
 			switch {
 			case errors.Is(err, ErrRedirectLimit):
-				return "", nil, "", 0, &FetchError{Class: ClassRedirect, Err: fmt.Errorf("fetch %s: %w", normalizedURL, err)}
+				return nil, 0, &FetchError{Class: ClassRedirect, Err: fmt.Errorf("fetch %s: %w", normalizedURL, err)}
 			case errors.Is(err, ErrFetchPolicy):
-				return "", nil, "", 0, &FetchError{Class: ClassPolicy, Err: fmt.Errorf("fetch %s: %w", normalizedURL, err)}
+				return nil, 0, &FetchError{Class: ClassPolicy, Err: fmt.Errorf("fetch %s: %w", normalizedURL, err)}
 			default:
-				return "", nil, "", 0, &FetchError{Class: ClassNetwork, Err: fmt.Errorf("fetch %s: %w", normalizedURL, err)}
+				return nil, 0, &FetchError{Class: ClassNetwork, Err: fmt.Errorf("fetch %s: %w", normalizedURL, err)}
 			}
 		}
 		defer func() { _ = resp.Body.Close() }()
 		final := resp.Request.URL.String()
 
+		if resp.StatusCode == http.StatusNotModified {
+			// The validator matched: the cached body is current. The origin may
+			// rotate the validators on a 304, so capture the fresh ones.
+			return &fetchOutcome{
+				finalURL: final, notModified: true,
+				etag:         resp.Header.Get("ETag"),
+				lastModified: resp.Header.Get("Last-Modified"),
+			}, resp.StatusCode, nil
+		}
 		if resp.StatusCode >= 400 {
-			return "", nil, final, resp.StatusCode,
+			return nil, resp.StatusCode,
 				&FetchError{Class: ClassStatus, Status: resp.StatusCode,
 					Err: fmt.Errorf("fetch %s: HTTP %d", normalizedURL, resp.StatusCode)}
 		}
@@ -515,25 +533,34 @@ func fetchHTTP(ctx context.Context, cfg *config.Config, normalizedURL string) (c
 		// Read one byte past the cap to tell "exactly at cap" from "over cap".
 		body, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxBytes)+1))
 		if err != nil {
-			return "", nil, final, resp.StatusCode, &FetchError{Class: ClassNetwork, Err: fmt.Errorf("fetch %s: read body: %w", normalizedURL, err)}
+			return nil, resp.StatusCode, &FetchError{Class: ClassNetwork, Err: fmt.Errorf("fetch %s: read body: %w", normalizedURL, err)}
 		}
 		if len(body) > maxBytes {
-			return "", nil, final, resp.StatusCode, &FetchError{Class: ClassOversize, Err: fmt.Errorf(
+			return nil, resp.StatusCode, &FetchError{Class: ClassOversize, Err: fmt.Errorf(
 				"fetch %s: body exceeds fetch_max_bytes (%d); the page is too large to cache",
 				normalizedURL, maxBytes)}
 		}
-		return ct, body, final, resp.StatusCode, nil
+		return &fetchOutcome{
+			contentType: ct, body: body, finalURL: final,
+			etag:         resp.Header.Get("ETag"),
+			lastModified: resp.Header.Get("Last-Modified"),
+		}, resp.StatusCode, nil
 	}
 
 	// Proxy-only mode: fallback off and proxy configured → every request proxied.
 	if proxy != nil && !cfg.FetchProxyFallback {
-		ct, body, final, _, err := attempt(proxy)
-		return ct, body, final, ViaProxy, err
+		out, _, err := attempt(proxy)
+		if err != nil {
+			return nil, err
+		}
+		out.via = ViaProxy
+		return out, nil
 	}
 
-	ct, body, final, status, err := attempt(nil)
+	out, status, err := attempt(nil)
 	if err == nil {
-		return ct, body, final, ViaDirect, nil
+		out.via = ViaDirect
+		return out, nil
 	}
 	// 429 without a proxy means a rate limit on this IP: one polite retry
 	// (a single short pause, no hammering). Retry-After is deliberately not
@@ -542,12 +569,13 @@ func fetchHTTP(ctx context.Context, cfg *config.Config, normalizedURL string) (c
 	if status == http.StatusTooManyRequests && proxy == nil {
 		select {
 		case <-ctx.Done():
-			return "", nil, final, ViaDirect, err
+			return nil, err
 		case <-time.After(2 * time.Second):
 		}
-		ct, body, final, status, err = attempt(nil)
+		out, status, err = attempt(nil)
 		if err == nil {
-			return ct, body, final, ViaDirect, nil
+			out.via = ViaDirect
+			return out, nil
 		}
 	}
 	// Fallback triggers: no HTTP response at all (network failure, timeout,
@@ -561,19 +589,39 @@ func fetchHTTP(ctx context.Context, cfg *config.Config, normalizedURL string) (c
 	// through the proxy only pretends the wall is bypassable.
 	var fe *FetchError
 	if errors.As(err, &fe) && fe.Class == ClassPolicy {
-		return "", nil, final, ViaDirect, err
+		return nil, err
 	}
 	if !isIPBlock && !isNetwork {
-		return "", nil, final, ViaDirect, err
+		return nil, err
 	}
 	if proxy == nil {
-		return "", nil, final, ViaDirect, err
+		return nil, err
 	}
-	ct, body, final2, _, perr := attempt(proxy)
+	out, _, perr := attempt(proxy)
 	if perr != nil {
-		return "", nil, final2, ViaProxy, fmt.Errorf("%w (direct: %v)", perr, err)
+		return nil, fmt.Errorf("%w (direct: %v)", perr, err)
 	}
-	return ct, body, final2, ViaProxy, nil
+	out.via = ViaProxy
+	return out, nil
+}
+
+// fetchCondition carries HTTP validators for a conditional request. Empty
+// fields mean "unconditional": the origin then answers the full body.
+type fetchCondition struct {
+	etag         string
+	lastModified string
+}
+
+// fetchOutcome is one retrieval's result. notModified (HTTP 304) carries no
+// body: the caller revalidates its cached copy instead.
+type fetchOutcome struct {
+	contentType  string
+	body         []byte
+	finalURL     string
+	via          string
+	etag         string
+	lastModified string
+	notModified  bool
 }
 
 // FetchPage downloads a page and extracts it into a full Doc snapshot
@@ -593,10 +641,31 @@ func fetchHTTP(ctx context.Context, cfg *config.Config, normalizedURL string) (c
 // client only owns the timing).
 func FetchPage(ctx context.Context, cfg *config.Config, normalizedURL string,
 	hook func(*model.Doc) ([]model.Redaction, error)) (*model.Doc, error) {
-	if err := CheckRobots(ctx, cfg, normalizedURL); err != nil {
-		return nil, err
+	doc, _, err := fetchPage(ctx, cfg, normalizedURL, fetchCondition{}, hook)
+	return doc, err
+}
+
+// RevalidatePage refreshes a cached page with its HTTP validators: when the
+// origin answers 304 the returned doc is nil and notModified is true, and the
+// caller keeps its stored copy while moving the timestamps. A prior copy
+// captured through the renderer carries no validators (the render response is
+// not what the origin's validator covers), so it re-fetches in full.
+func RevalidatePage(ctx context.Context, cfg *config.Config, normalizedURL string, prior *model.Doc,
+	hook func(*model.Doc) ([]model.Redaction, error)) (*model.Doc, bool, error) {
+	cond := fetchCondition{}
+	if prior != nil && prior.Via != ViaObscura {
+		cond.etag, cond.lastModified = prior.ETag, prior.LastModified
 	}
-	ct, body, finalURL, via, err := fetchHTTP(ctx, cfg, normalizedURL)
+	return fetchPage(ctx, cfg, normalizedURL, cond, hook)
+}
+
+func fetchPage(ctx context.Context, cfg *config.Config, normalizedURL string,
+	cond fetchCondition, hook func(*model.Doc) ([]model.Redaction, error)) (*model.Doc, bool, error) {
+	if err := CheckRobots(ctx, cfg, normalizedURL); err != nil {
+		return nil, false, err
+	}
+	out, err := fetchHTTP(ctx, cfg, normalizedURL, cond)
+	ct, body, finalURL, via := "", []byte(nil), "", ""
 	if err != nil {
 		// Render fallback (opt-in): only for failures the renderer can
 		// plausibly beat (network walls, IP-ban statuses). On render failure
@@ -605,12 +674,17 @@ func FetchPage(ctx context.Context, cfg *config.Config, normalizedURL string,
 		if cfg.FetchRender == config.RenderObscura && renderEligible(err) {
 			rbody, rerr := renderObscura(ctx, cfg, normalizedURL)
 			if rerr != nil {
-				return nil, fmt.Errorf("fetch %s: plain fetch: %v; obscura render: %w", normalizedURL, err, rerr)
+				return nil, false, fmt.Errorf("fetch %s: plain fetch: %v; obscura render: %w", normalizedURL, err, rerr)
 			}
 			body, ct, finalURL, via = rbody, "text/html", normalizedURL, ViaObscura
 		} else {
-			return nil, err
+			return nil, false, err
 		}
+	} else {
+		if out.notModified {
+			return nil, true, nil
+		}
+		ct, body, finalURL, via = out.contentType, out.body, out.finalURL, out.via
 	}
 	media := strings.ToLower(strings.TrimSpace(strings.Split(ct, ";")[0]))
 
@@ -624,16 +698,16 @@ func FetchPage(ctx context.Context, cfg *config.Config, normalizedURL string,
 			// badge: the documented media types are the gate, and storing it
 			// as HTML would hand the API route's medium-finding strictness to
 			// the documentation leniency.
-			return nil, fmt.Errorf("fetch: no content type declared and the body is JSON: only text/html, text/plain, text/markdown are stored")
+			return nil, false, fmt.Errorf("fetch: no content type declared and the body is JSON: only text/html, text/plain, text/markdown are stored")
 		}
 		sections, images, truncated = ExtractSections(string(body))
 	case "text/plain", "text/markdown", "text/x-markdown":
 		sections, truncated = ExtractPlainText(string(body))
 	default:
-		return nil, fmt.Errorf("fetch: content type %q is not supported (text/html, text/plain, text/markdown only)", media)
+		return nil, false, fmt.Errorf("fetch: content type %q is not supported (text/html, text/plain, text/markdown only)", media)
 	}
 	if len(sections) == 0 {
-		return nil, fmt.Errorf("fetch %s: no readable text extracted (content type %q)", normalizedURL, media)
+		return nil, false, fmt.Errorf("fetch %s: no readable text extracted (content type %q)", normalizedURL, media)
 	}
 
 	title := ExtractTitle(string(body))
@@ -662,10 +736,16 @@ func FetchPage(ctx context.Context, cfg *config.Config, normalizedURL string,
 		Sections:    sections,
 		Images:      images,
 	}
+	if err == nil {
+		// Validators belong to the representation the origin answered: on the
+		// render path they are empty (the renderer's response is not covered
+		// by the origin's ETag).
+		doc.ETag, doc.LastModified = out.etag, out.lastModified
+	}
 	if hook != nil {
 		redactions, herr := hook(doc)
 		if herr != nil {
-			return nil, herr
+			return nil, false, herr
 		}
 		doc.Redactions = redactions
 	}
@@ -686,7 +766,7 @@ func FetchPage(ctx context.Context, cfg *config.Config, normalizedURL string,
 	if cfg.DocsTTLDays > 0 {
 		doc.ExpiresAt = now.AddDate(0, 0, cfg.DocsTTLDays)
 	}
-	return doc, nil
+	return doc, false, nil
 }
 
 // resolveImageRefs resolves relative img srcs against the final URL, so the

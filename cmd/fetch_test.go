@@ -28,7 +28,7 @@ func testDoc() *model.Doc {
 func TestPrintDocOutline(t *testing.T) {
 	var buf bytes.Buffer
 	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
-	if err := printDocOutline(&buf, testDoc(), true, now); err != nil {
+	if err := printDocOutline(&buf, testDoc(), true, false, now); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
@@ -57,7 +57,7 @@ func TestPrintDocOutlineStale(t *testing.T) {
 	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
 	d := testDoc()
 	d.ExpiresAt = now.Add(-time.Hour) // past TTL
-	if err := printDocOutline(&buf, d, false, now); err != nil {
+	if err := printDocOutline(&buf, d, false, false, now); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(buf.String(), "stale: true") {
