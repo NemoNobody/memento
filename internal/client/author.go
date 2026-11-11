@@ -55,12 +55,44 @@ const authorRetryBackoff = 5 * time.Minute
 // unavailable and the chain falls to config/OS silently.
 func (c *Client) resolveAuthor(ctx context.Context) AuthorInfo {
 	c.authorMu.Lock()
-	defer c.authorMu.Unlock()
 	now := time.Now()
 	if c.authorResolved &&
 		(c.author.AuthorSource == AuthorSourceSecurity || now.Before(c.authorRetryAt)) {
+		c.authorMu.Unlock()
 		return c.author
 	}
+	c.authorMu.Unlock()
+	// The chain (including the security probe, up to its own 5 s deadline)
+	// runs OUTSIDE the mutex: holding it across a network round-trip would
+	// serialize every writer on the client for the probe's duration.
+	// Concurrent cold starts may each pay one probe — a rare, harmless
+	// duplicate GET, and the double-check below keeps the better result.
+	info := c.buildAuthor(ctx)
+
+	c.authorMu.Lock()
+	defer c.authorMu.Unlock()
+	// Double-check: a concurrent resolve may have already produced a cached
+	// answer; if it found the security label, that beats our fallback chain.
+	if c.authorResolved && c.author.AuthorSource == AuthorSourceSecurity && info.AuthorSource != AuthorSourceSecurity {
+		return c.author
+	}
+	c.author = info
+	c.authorResolved = true
+	if info.AuthorSource != AuthorSourceSecurity {
+		c.authorRetryAt = time.Now().Add(authorRetryBackoff)
+		if ctx.Err() != nil {
+			// The probe died with the CALLER's context (an abandoned
+			// request), not with the plugin: do not punish the next healthy
+			// call with the full backoff.
+			c.authorRetryAt = time.Now()
+		}
+	}
+	return c.author
+}
+
+// buildAuthor walks the authorship chain (security probe → config → OS
+// user) without touching the cache; safe to run concurrently.
+func (c *Client) buildAuthor(ctx context.Context) AuthorInfo {
 	info := AuthorInfo{
 		Model:   c.cfg.Model,
 		Session: c.cfg.Session,
@@ -83,18 +115,7 @@ func (c *Client) resolveAuthor(ctx context.Context) AuthorInfo {
 	} else {
 		info.AuthorSource = AuthorSourceNone
 	}
-	c.author = info
-	c.authorResolved = true
-	if info.AuthorSource != AuthorSourceSecurity {
-		c.authorRetryAt = now.Add(authorRetryBackoff)
-		if ctx.Err() != nil {
-			// The probe died with the CALLER's context (an abandoned
-			// request), not with the plugin: do not punish the next healthy
-			// call with the full backoff.
-			c.authorRetryAt = now
-		}
-	}
-	return c.author
+	return info
 }
 
 // AuthorLabels returns the effective authorship labels for writes made

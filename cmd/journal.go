@@ -4,13 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/NemoNobody/memento/internal/client"
-	"github.com/spf13/cobra"
 	"io"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/NemoNobody/memento/internal/client"
+	"github.com/spf13/cobra"
 )
 
 var journalFlags struct {
@@ -43,7 +44,7 @@ journal indices are lower bounds — the surviving journal, not the lifetime.`,
 			if err != nil {
 				fatalErr(err)
 			}
-			entries, total, truncated, err := c.JournalEntries(ctx, key, journalFlags.limit)
+			entries, meta, err := c.JournalEntries(ctx, key, journalFlags.limit)
 			if err != nil {
 				fatalErr(err)
 			}
@@ -51,14 +52,19 @@ journal indices are lower bounds — the surviving journal, not the lifetime.`,
 			b.WriteString("journal for ")
 			b.WriteString(strconv.Quote(key))
 			b.WriteString(": ")
-			b.WriteString(strconv.Itoa(total))
+			b.WriteString(strconv.Itoa(meta.Total))
 			b.WriteString(" entries (newest first)")
-			if truncated {
+			if meta.Truncated {
 				b.WriteString(" — showing the newest ")
 				b.WriteString(strconv.Itoa(len(entries)))
 				b.WriteString(" (raise --limit, max ")
 				b.WriteString(strconv.Itoa(client.NavSizeCap))
 				b.WriteString(")")
+			}
+			if meta.Skipped > 0 {
+				b.WriteString(" — ")
+				b.WriteString(strconv.Itoa(meta.Skipped))
+				b.WriteString(" entries failed to decode (index corruption: report to the user, raising --limit does not recover them)")
 			}
 			b.WriteString("\n")
 			for _, e := range entries {

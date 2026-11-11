@@ -1033,6 +1033,8 @@ func TestAddSummaryOverCapRejected(t *testing.T) {
 		t.Fatal("an over-cap summary was accepted")
 	} else if !strings.Contains(err.Error(), "summary_max_len") {
 		t.Errorf("error must name summary_max_len: %v", err)
+	} else if !errors.Is(err, ErrContract) {
+		t.Errorf("a pre-transport rejection must be classified ErrContract (edges answer it without availability advice): %v", err)
 	}
 }
 

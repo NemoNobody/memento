@@ -476,6 +476,17 @@ func storeError(op string, err error) error {
 		"memento_status and tell the user; do not retry in a loop", op, err)
 }
 
+// writeFailure classifies a failed write at the MCP edge. A local contract
+// rejection (summary bounds, re-retiring) never reached the store: wrapping
+// it in availability advice would send the agent chasing memento_status
+// while the request itself is what needs fixing.
+func writeFailure(op string, err error) error {
+	if errors.Is(err, client.ErrContract) {
+		return err
+	}
+	return storeError(op, err)
+}
+
 // resolveStatus maps the status input to a filter. Empty means "trusted facts
 // only" — obsolete facts are superseded and must not be mistaken for current;
 // "any" disables the filter. Statuses are stored lowercase, so the input is
@@ -763,12 +774,18 @@ func (s *mcpServer) addOne(ctx context.Context, cfg *config.Config, c *client.Cl
 	f.Summary = in.Summary
 	res, err := c.Add(ctx, f)
 	if err != nil {
-		return addOutput{}, storeError("memento_add", err)
+		return addOutput{}, writeFailure("memento_add", err)
 	}
 	out := addOutput{Key: in.Key, Created: res.Created, Changed: res.Changed,
 		Status: f.Status, PreviousSummary: res.PreviousSummary}
 	if !res.Created && !res.Changed {
 		out.Note = "same-value touch: observed_at and the journal untouched, the fact keeps aging (re-verify when stale); notes/source moved only"
+		if in.Summary != "" {
+			// A passed summary would rewrite the CURRENT value's table of
+			// contents without a new version — silently misleading in a
+			// shared store. It is dropped; say so instead of hiding it.
+			out.Note += "; the passed summary was ignored on a same-value touch (correct the value to change its summary)"
+		}
 	} else if res.Resurrected {
 		out.Note = "resurrected: the fact was obsolete; status is back to verified, observed_at moved, and the event is journaled"
 	}
@@ -949,8 +966,11 @@ func (s *mcpServer) patchOne(ctx context.Context, cfg *config.Config, c *client.
 		}
 	}
 	res, err := c.Patch(ctx, in.Key, fields)
+	if errors.Is(err, client.ErrNotFound) {
+		return patchOutput{}, fmt.Errorf("memento_patch: no fact with key %q: nothing to patch (memento_add creates)", in.Key)
+	}
 	if err != nil {
-		return patchOutput{}, storeError("memento_patch", err)
+		return patchOutput{}, writeFailure("memento_patch", err)
 	}
 	out := patchOutput{Key: in.Key, Changed: res.Changed, Status: res.Status}
 	if !res.Changed {
@@ -1190,7 +1210,7 @@ func (s *mcpServer) obsolete(ctx context.Context, req *mcp.CallToolRequest, in o
 		return nil, obsoleteOutput{}, fmt.Errorf("no fact with key %q: nothing to mark obsolete", in.Key)
 	}
 	if err != nil {
-		return nil, obsoleteOutput{}, storeError("memento_obsolete", err)
+		return nil, obsoleteOutput{}, writeFailure("memento_obsolete", err)
 	}
 	return nil, obsoleteOutput{Key: in.Key, Status: "obsolete"}, nil
 }
@@ -1324,6 +1344,7 @@ type journalOutput struct {
 	Entries   []journalEntryView `json:"entries" jsonschema:"journal entries, newest first (store-clock order)"`
 	Total     int                `json:"total" jsonschema:"total entries for the key (lower bound after admin index deletes)"`
 	Truncated bool               `json:"truncated" jsonschema:"true when more entries exist than returned (raise limit)"`
+	Skipped   int                `json:"skipped,omitempty" jsonschema:"hits whose content failed to decode (index corruption): report to the user, raising the limit does not recover them"`
 }
 
 func (s *mcpServer) journal(ctx context.Context, req *mcp.CallToolRequest, in journalInput) (*mcp.CallToolResult, journalOutput, error) {
@@ -1339,14 +1360,14 @@ func (s *mcpServer) journal(ctx context.Context, req *mcp.CallToolRequest, in jo
 	if limit <= 0 {
 		limit = 20
 	}
-	entries, total, truncated, err := c.JournalEntries(ctx, in.Key, limit)
+	entries, meta, err := c.JournalEntries(ctx, in.Key, limit)
 	if err != nil {
 		return nil, journalOutput{}, storeError("memento_journal", err)
 	}
 	if entries == nil {
 		entries = []model.JournalEntry{}
 	}
-	return nil, journalOutput{Key: in.Key, Entries: newJournalEntryViews(entries), Total: total, Truncated: truncated}, nil
+	return nil, journalOutput{Key: in.Key, Entries: newJournalEntryViews(entries), Total: meta.Total, Truncated: meta.Truncated, Skipped: meta.Skipped}, nil
 }
 
 type historyInfoInput struct {

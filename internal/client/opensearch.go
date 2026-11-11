@@ -27,6 +27,23 @@ const defaultRequestTimeout = 30 * time.Second
 // ErrNotFound is returned when a fact with the given key does not exist.
 var ErrNotFound = errors.New("fact not found")
 
+// ErrContract marks a rejection that never touched the wire: the request
+// violates the local contract (summary bounds, re-retiring with a reason)
+// no matter how healthy the store is. Edge layers must answer with the
+// message itself, never wrap it in availability advice.
+var ErrContract = errors.New("rejected before store contact")
+
+type contractError struct{ err error }
+
+func (e *contractError) Error() string { return e.err.Error() }
+func (e *contractError) Unwrap() error { return ErrContract }
+
+// contractErrorf wraps a pre-transport rejection so edges can classify it
+// without string-matching the message.
+func contractErrorf(format string, args ...interface{}) error {
+	return &contractError{fmt.Errorf(format, args...)}
+}
+
 // Client wraps the OpenSearch client.
 type Client struct {
 	api *opensearchapi.Client
@@ -537,7 +554,7 @@ func (c *Client) linkCurrentRef(ctx context.Context, key, ref string) error {
 func (c *Client) checkSummaryCap(f *model.Fact) error {
 	if c.cfg.SummaryMaxLen > 0 {
 		if n := utf8.RuneCountInString(f.Summary); n > c.cfg.SummaryMaxLen {
-			return fmt.Errorf("add fact: summary is %d characters, over summary_max_len=%d: keep it a table of contents, not a second value", n, c.cfg.SummaryMaxLen)
+			return contractErrorf("add fact: summary is %d characters, over summary_max_len=%d: keep it a table of contents, not a second value", n, c.cfg.SummaryMaxLen)
 		}
 	}
 	return nil
@@ -551,7 +568,7 @@ func (c *Client) checkSummaryCap(f *model.Fact) error {
 func (c *Client) checkSummaryRequired(f *model.Fact) error {
 	if c.cfg.SummaryMinLen > 0 && f.Summary == "" {
 		if n := utf8.RuneCountInString(f.Value); n > c.cfg.SummaryMinLen {
-			return fmt.Errorf("add fact: value is %d characters, over summary_min_len=%d: a summary is required (CLI --summary, MCP summary) — it keeps store listings skimmable", n, c.cfg.SummaryMinLen)
+			return contractErrorf("add fact: value is %d characters, over summary_min_len=%d: a summary is required (CLI --summary, MCP summary) — it keeps store listings skimmable", n, c.cfg.SummaryMinLen)
 		}
 	}
 	return nil
@@ -705,7 +722,7 @@ func (c *Client) Obsolete(ctx context.Context, key, reason string) error {
 		// transition. Re-retiring with a reason would append a duplicate notes
 		// line while the journal stays untouched (it fires only on status
 		// changes) — notes would grow audit lines the journal never recorded.
-		return fmt.Errorf("obsolete: fact %q is already obsolete (a reason belongs to the verified→obsolete transition)", key)
+		return contractErrorf("obsolete: fact %q is already obsolete (a reason belongs to the verified→obsolete transition)", key)
 	}
 	// notes is one line per qualifier (see Patch): fold any whitespace run a
 	// caller passes into single spaces before the reason joins the notes.
@@ -883,7 +900,7 @@ func (c *Client) Patch(ctx context.Context, key string, p PatchFields) (PatchRes
 		// The reason belongs to the transition. Re-retiring an already
 		// obsolete fact would append a duplicate notes line with no journal
 		// entry (no state was accepted) — a silent audit lie.
-		return PatchResult{}, fmt.Errorf("patch: fact %q is already obsolete (a reason belongs to the verified→obsolete transition)", key)
+		return PatchResult{}, contractErrorf("patch: fact %q is already obsolete (a reason belongs to the verified→obsolete transition)", key)
 	}
 	if statusChanged && p.Status == "obsolete" && p.Reason != "" {
 		// notes is one line per qualifier: a reason with newlines would
@@ -1031,8 +1048,8 @@ ctx._source.updated_at = params.updated_at;
 // prune planning path shows the journal, not the legacy array, once a key
 // has entries there).
 func (c *Client) JournalCount(ctx context.Context, key string) (int, error) {
-	_, total, _, err := c.JournalEntries(ctx, key, 1)
-	return total, err
+	_, meta, err := c.JournalEntries(ctx, key, 1)
+	return meta.Total, err
 }
 
 // Prune drops history beyond the newest keep. It is journal-first: a key
@@ -1128,6 +1145,10 @@ func buildSearchBody(query string, project, category, status string, limit int) 
 	}
 	body := map[string]interface{}{
 		"query": map[string]interface{}{"bool": boolQuery},
+		// Exact totals, not the 10000-capped "gte" estimate: the truncation
+		// advice ("of N matches") must be true at any store size, and the
+		// counting cost is irrelevant at this store's scale.
+		"track_total_hits": true,
 	}
 	if limit > 0 {
 		body["size"] = limit
@@ -1156,8 +1177,9 @@ func buildProjectBody(project, prefix, sort string) map[string]interface{} {
 		})
 	}
 	body := map[string]interface{}{
-		"query": map[string]interface{}{"bool": map[string]interface{}{"filter": filters}},
-		"size":  NavSizeCap,
+		"query":            map[string]interface{}{"bool": map[string]interface{}{"filter": filters}},
+		"size":             NavSizeCap,
+		"track_total_hits": true,
 	}
 	if sort == "updated" {
 		body["sort"] = []map[string]interface{}{{
@@ -1190,9 +1212,10 @@ func buildKeysBody(prefix, match, project, status string) map[string]interface{}
 		filters = append(filters, map[string]interface{}{"term": map[string]interface{}{"status": status}})
 	}
 	return map[string]interface{}{
-		"query": map[string]interface{}{"bool": map[string]interface{}{"filter": filters}},
-		"sort":  []map[string]interface{}{{"key": map[string]interface{}{"order": "asc"}}},
-		"size":  NavSizeCap,
+		"query":            map[string]interface{}{"bool": map[string]interface{}{"filter": filters}},
+		"sort":             []map[string]interface{}{{"key": map[string]interface{}{"order": "asc"}}},
+		"size":             NavSizeCap,
+		"track_total_hits": true,
 	}
 }
 

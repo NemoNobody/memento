@@ -289,7 +289,8 @@ func buildJournalEntriesBody(key string, limit int) map[string]interface{} {
 			{"ingest_at": map[string]interface{}{"order": "desc"}},
 			{"created_at": map[string]interface{}{"order": "desc"}},
 		},
-		"size": size,
+		"size":             size,
+		"track_total_hits": true,
 	}
 }
 
@@ -320,21 +321,36 @@ func (c *Client) journalSearch(ctx context.Context, body map[string]interface{})
 
 // JournalEntries reads the newest journal entries for a key. total is the
 // cluster-side entry count (the honest truncation signal).
-func (c *Client) JournalEntries(ctx context.Context, key string, limit int) ([]model.JournalEntry, int, bool, error) {
+// JournalMeta is the journal-read equivalent of SearchMeta: Truncated is
+// the honest page signal driven by the match count, and Skipped counts hits
+// whose _source failed to decode — index corruption must never be silent
+// (the same contract as fact search).
+type JournalMeta struct {
+	Total     int
+	Truncated bool
+	Skipped   int
+}
+
+func (c *Client) JournalEntries(ctx context.Context, key string, limit int) ([]model.JournalEntry, JournalMeta, error) {
 	resp, err := c.journalSearch(ctx, buildJournalEntriesBody(key, limit))
 	if err != nil {
-		return nil, 0, false, err
+		return nil, JournalMeta{}, err
 	}
-	total := resp.Hits.Total.Value
+	meta := JournalMeta{Total: resp.Hits.Total.Value}
 	entries := make([]model.JournalEntry, 0, len(resp.Hits.Hits))
 	for _, hit := range resp.Hits.Hits {
 		var e model.JournalEntry
 		if err := json.Unmarshal(hit.Source, &e); err != nil {
+			meta.Skipped++
 			continue
 		}
 		entries = append(entries, e)
 	}
-	return entries, total, total > len(entries), nil
+	// Truncation is measured against what was DELIVERED (skipped hits are
+	// not recoverable by raising the limit — counting them as page entries
+	// would claim the page was full when it was actually corrupt).
+	meta.Truncated = meta.Total > len(entries)+meta.Skipped
+	return entries, meta, nil
 }
 
 // buildJournalInfoBody builds the per-key history aggregation: entry counts
@@ -496,7 +512,7 @@ func (c *Client) PruneJournal(ctx context.Context, key string, keep int) (int, e
 const migrateLinkScript = `
 if (ctx._source.current_ref == null || ctx._source.current_ref == "") { ctx._source.current_ref = params.ref; }
 ctx._source.remove("history");
-if (ctx._source.updated_at == null || params.updated_at.compareTo(ctx._source.updated_at) > 0) { ctx._source.updated_at = params.updated_at; }
+if (ctx._source.updated_at == null || params.updated_at.substring(0, 19).compareTo(ctx._source.updated_at.substring(0, 19)) > 0) { ctx._source.updated_at = params.updated_at; }
 `
 
 // MigrateFact finishes one fact's journal migration (big-bang migration,

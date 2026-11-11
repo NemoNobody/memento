@@ -144,12 +144,12 @@ func TestJournalReadsCarryUnavailableFlags(t *testing.T) {
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Path + `"}`
 	})
 
-	entries, total, truncated, err := c.JournalEntries(context.Background(), "k", 5)
+	entries, meta, err := c.JournalEntries(context.Background(), "k", 5)
 	if err != nil {
 		t.Fatalf("JournalEntries: %v", err)
 	}
-	if total != 1 || truncated || len(entries) != 1 || entries[0].Value != "v" {
-		t.Fatalf("entries=%v total=%d truncated=%v", entries, total, truncated)
+	if meta.Total != 1 || meta.Truncated || len(entries) != 1 || entries[0].Value != "v" {
+		t.Fatalf("entries=%v total=%d truncated=%v", entries, meta.Total, meta.Truncated)
 	}
 	searches := fake.requestsFor(http.MethodPost, "/memento-history-*/_search")
 	if len(searches) != 1 {
@@ -169,12 +169,45 @@ func TestJournalMissingIndexReadsAsEmpty(t *testing.T) {
 		return http.StatusNotFound, `{"status":404,"error":{"type":"index_not_found_exception"}}`
 	})
 
-	entries, total, _, err := c.JournalEntries(context.Background(), "k", 5)
+	entries, meta, err := c.JournalEntries(context.Background(), "k", 5)
 	if err != nil {
 		t.Fatalf("a store without a journal index must read as empty, got %v", err)
 	}
-	if total != 0 || len(entries) != 0 {
-		t.Fatalf("entries=%v total=%d, want empty", entries, total)
+	if meta.Total != 0 || len(entries) != 0 {
+		t.Fatalf("entries=%v total=%d, want empty", entries, meta.Total)
+	}
+}
+
+// A hit whose _source cannot decode must be COUNTED, not silently dropped:
+// the reader must know the page lost entries to corruption, and corruption
+// must not masquerade as size-truncation (finding 115).
+func TestJournalEntriesCountUndecodable(t *testing.T) {
+	c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+		if code, body := journalInfraOK(r); code != http.StatusInternalServerError {
+			return code, body
+		}
+		if r.Method == http.MethodPost && r.Path == "/memento-history-*/_search" {
+			return http.StatusOK, `{"hits":{"total":{"value":3},"hits":[
+				{"_index":"memento-history-2026.11","_id":"e1","_source":{"fact_key":"k","op":"write","value":"good","created_at":"2026-11-09T10:00:00Z"}},
+				{"_index":"memento-history-2026.11","_id":"e2","_source":"not-an-object"},
+				{"_index":"memento-history-2026.11","_id":"e3","_source":"also-broken"}]}}`
+		}
+		return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Path + `"}`
+	})
+
+	entries, meta, err := c.JournalEntries(context.Background(), "k", 5)
+	if err != nil {
+		t.Fatalf("JournalEntries: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Value != "good" {
+		t.Fatalf("entries=%v, want only the decodable one", entries)
+	}
+	if meta.Skipped != 2 {
+		t.Errorf("Skipped = %d, want 2", meta.Skipped)
+	}
+	// total 3 = 1 delivered + 2 corrupt: the page is NOT size-truncated.
+	if meta.Total != 3 || meta.Truncated {
+		t.Errorf("meta=%+v, want total=3 truncated=false", meta)
 	}
 }
 

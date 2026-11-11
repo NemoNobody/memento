@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/NemoNobody/memento/internal/client"
 	"github.com/NemoNobody/memento/internal/model"
 	"github.com/spf13/cobra"
 )
@@ -44,7 +45,9 @@ func GetCmd() *cobra.Command {
 			var jTotal int
 			var jErr error
 			if getFlags.history && len(f.History) == 0 {
-				entries, jTotal, _, jErr = c.JournalEntries(ctx, key, 20)
+				var jMeta client.JournalMeta
+				entries, jMeta, jErr = c.JournalEntries(ctx, key, 20)
+				jTotal = jMeta.Total
 			}
 			if err := printFact(os.Stdout, f, time.Now().UTC(), getFlags.history, entries, jTotal, jErr); err != nil {
 				fatalErr(err)

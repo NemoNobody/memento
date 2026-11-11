@@ -171,9 +171,10 @@ func buildDocSearchBody(query, project string, limit int) map[string]interface{}
 		boolQuery["filter"] = filters
 	}
 	return map[string]interface{}{
-		"query":   map[string]interface{}{"bool": boolQuery},
-		"size":    limit,
-		"_source": map[string]interface{}{"excludes": htmlExclude},
+		"query":            map[string]interface{}{"bool": boolQuery},
+		"size":             limit,
+		"track_total_hits": true,
+		"_source":          map[string]interface{}{"excludes": htmlExclude},
 	}
 }
 

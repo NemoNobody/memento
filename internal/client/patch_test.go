@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"regexp"
 	"strings"
@@ -335,6 +336,8 @@ func TestPatchRetireOnObsoleteFactIsRejected(t *testing.T) {
 	_, err := c.Patch(context.Background(), "k", PatchFields{Status: "obsolete", Reason: "gone"})
 	if err == nil || !strings.Contains(err.Error(), "already obsolete") {
 		t.Errorf("re-retire with a reason must fail loudly: %v", err)
+	} else if !errors.Is(err, ErrContract) {
+		t.Errorf("a pre-transport rejection must be classified ErrContract: %v", err)
 	}
 	if len(fake.requestsFor(http.MethodPost, "/memento/_update/k")) != 0 {
 		t.Error("the rejected patch must not touch the doc")
