@@ -317,6 +317,60 @@ func TestMCPServerListRequiresProjectOffline(t *testing.T) {
 	}
 }
 
+// TestMCPServerAddBatchSurfacesPartialSuccess pins the batch contract the
+// single-tool simplification almost broke: when the fact doc landed and
+// only the journal append failed, the batch item must report created=true
+// beside its error — a retry that treats the item as "nothing stored" would
+// issue a correction over a fact that exists.
+func TestMCPServerAddBatchSurfacesPartialSuccess(t *testing.T) {
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodHead && r.URL.Path == "/memento":
+			w.WriteHeader(http.StatusOK) // the facts index exists
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/memento/_doc/"):
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, `{"error":{"type":"document_missing_exception","reason":"no such document","index":"memento"},"status":404}`)
+		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "-history-"):
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, `{"error":{"type":"cluster_block_exception","reason":"journal write blocked"},"status":500}`)
+		default:
+			_, _ = io.WriteString(w, `{"_index":"memento","_id":"k","_version":1,"_seq_no":0,"_primary_term":1,"result":"created"}`)
+		}
+	}))
+	t.Cleanup(fake.Close)
+	session := connectTestServer(t, "OPENSEARCH_URL="+fake.URL)
+
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "memento_add_batch",
+		Arguments: map[string]any{"items": []any{map[string]any{"key": "k", "value": "v", "category": "config"}}},
+	})
+	if err != nil {
+		t.Fatalf("CallTool(memento_add_batch): %v", err)
+	}
+	raw, _ := json.Marshal(res.StructuredContent)
+	var out struct {
+		Items []struct {
+			Key     string `json:"key"`
+			Created bool   `json:"created"`
+			Error   string `json:"error"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("structured content: %v (%s)", err, raw)
+	}
+	if len(out.Items) != 1 {
+		t.Fatalf("items = %d, want 1: %s", len(out.Items), raw)
+	}
+	it := out.Items[0]
+	if it.Error == "" {
+		t.Fatalf("the journal failure must be reported per item: %s", raw)
+	}
+	if !it.Created {
+		t.Errorf("item.created = false, want true (the fact doc stored; only the journal lagged): %s", raw)
+	}
+}
+
 // TestMCPServerObsoleteFailsOnBrokenConfig pins that a config load failure
 // cannot silently disable the secret guard: the guard policy lives in the
 // config, so an unloadable policy must fail the write loudly — never proceed

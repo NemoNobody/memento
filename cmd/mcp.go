@@ -776,10 +776,16 @@ func (s *mcpServer) addOne(ctx context.Context, cfg *config.Config, c *client.Cl
 	f.Summary = in.Summary
 	res, err := c.Add(ctx, f)
 	if err != nil {
-		// go-sdk drops the typed output when the handler returns an error, so
-		// flags here would be unreachable — the honest landed state travels in
-		// the error text (Add's partial-success failures name what stored, and
-		// memento_add_batch surfaces per-item flags through its own output).
+		// Partial success (the fact doc landed, the journal/link follow-up
+		// failed): Add reports what landed in res. The single memento_add edge
+		// cannot surface the flags — go-sdk discards the typed output when the
+		// handler returns an error, so the honest state travels in the error
+		// text — but memento_add_batch copies these flags into its per-item
+		// output next to item.Error, where they are visible. Do not "simplify"
+		// this away: the batch answer would silently zero what did store.
+		if res.Created || res.Changed {
+			return addOutput{Key: in.Key, Created: res.Created, Changed: res.Changed, Status: f.Status}, writeFailure("memento_add", err)
+		}
 		return addOutput{}, writeFailure("memento_add", err)
 	}
 	out := addOutput{Key: in.Key, Created: res.Created, Changed: res.Changed,
