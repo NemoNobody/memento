@@ -71,6 +71,32 @@ Containers love to lose data: before `make dev-opensearch-down` take a
 snapshot (repository `memento-fs` → `/snapshots` → `docker/os-snapshots/`) —
 see [backup.md](backup.md) §5.
 
+### Dashboards (optional UI)
+
+`make dev-opensearch-dashboards` adds OpenSearch Dashboards on top of the dev
+node (compose profile `dashboards`, so the plain `up`/`down` cycle does not
+pull it in). UI: http://127.0.0.1:5601 (`MEMENTO_DASH_PORT=5699` to move it);
+with the security plugin off it opens without login.
+
+A ready-made bundle ships in `docker/dashboards/objects.ndjson`: index
+patterns for `memento`, `memento-history-*` and `memento-docs`, visualizations
+(facts by project/category/status, journal writes over time, most-written keys,
+counts) and the "Memento — store overview" dashboard. Push it with:
+
+```
+scripts/push-dashboards.sh
+```
+
+Re-runnable: objects carry stable `memento-store-*` ids and the import
+overwrites them in place. Against a secured cluster (security plugin on) the
+script needs credentials: `DASHBOARDS_USER`/`DASHBOARDS_PASSWORD` env, or a
+`~/.config/memento/dashboards.env` file (mode 600):
+
+```sh
+DASHBOARDS_USER=admin
+DASHBOARDS_PASSWORD=...
+```
+
 ## 3. Configure memento
 
 Config lookup order:

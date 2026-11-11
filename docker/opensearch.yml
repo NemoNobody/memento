@@ -32,3 +32,22 @@ services:
       interval: 10s
       timeout: 5s
       retries: 60
+
+  # Optional UI (make dev-opensearch-dashboards). The compose profile keeps
+  # it out of the plain dev-opensearch up/down cycle: only the dashboards
+  # target pulls it in. Security plugin is off on the dev node, so the UI
+  # opens without login; bound to 127.0.0.1 like the API.
+  dashboards:
+    image: opensearchproject/opensearch-dashboards:3.8.0
+    container_name: memento-opensearch-dashboards
+    profiles: ["dashboards"]
+    restart: unless-stopped
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    environment:
+      - OPENSEARCH_HOSTS=["http://opensearch:9200"]
+      - DISABLE_SECURITY_DASHBOARDS_PLUGIN=true
+    ports:
+      # MEMENTO_DASH_PORT avoids a clash with an existing dashboards install
+      - "127.0.0.1:${MEMENTO_DASH_PORT:-5601}:5601"

@@ -11,7 +11,7 @@ BIN     ?= memento
 CONTAINER ?= $(shell if command -v docker >/dev/null 2>&1; then echo "docker compose"; elif command -v podman-compose >/dev/null 2>&1; then echo "podman-compose"; else echo "podman compose"; fi)
 OSFILE := docker/opensearch.yml
 
-.PHONY: build test lint fmt vet ci install clean release dev-opensearch dev-opensearch-down dev-opensearch-logs
+.PHONY: build test lint fmt vet ci install clean release dev-opensearch dev-opensearch-down dev-opensearch-logs dev-opensearch-dashboards
 
 build:
 	go build -trimpath -ldflags "$(LDFLAGS)" -o $(BIN) .
@@ -50,6 +50,15 @@ dev-opensearch-down:
 
 dev-opensearch-logs:
 	$(CONTAINER) -f $(OSFILE) logs --tail=100
+
+# Optional OpenSearch Dashboards on top of the dev node (compose profile
+# "dashboards"): make dev-opensearch first, then this. UI on
+# http://127.0.0.1:5601 (MEMENTO_DASH_PORT to move it). The security plugin
+# is off on the dev node, so the UI opens without login. Push the ready-made
+# bundle (index patterns, visualizations, overview dashboard) with
+# scripts/push-dashboards.sh.
+dev-opensearch-dashboards:
+	$(CONTAINER) -f $(OSFILE) --profile dashboards up -d
 
 # obscura: one-time installer for the opt-in render fallback (fetch_render=
 # obscura). Third-party binary, ~75MB, linux x86_64 glibc 2.35+; the sha256

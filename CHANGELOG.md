@@ -26,6 +26,11 @@ journal of dated indices (`<index>-history-<period-date>`, monthly by default;
   periods cheap to inspect, snapshot, or delete; after an admin deletes old
   journal indices, read counts are lower bounds.
 - Backups: snapshots must include `memento-history-*` (docs/backup.md).
+- Optional UI: `make dev-opensearch-dashboards` adds OpenSearch Dashboards to
+  the dev compose (profile-gated); `scripts/push-dashboards.sh` imports a
+  ready-made bundle (index patterns for facts/journal/docs, visualizations,
+  an overview dashboard) — idempotent, works against secured clusters via
+  `DASHBOARDS_USER`/`DASHBOARDS_PASSWORD` or `~/.config/memento/dashboards.env`.
 
 Authorship and summary:
 - Every write is stamped with self-reported audit labels: `author` (resolved
