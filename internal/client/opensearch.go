@@ -125,38 +125,39 @@ func isAlreadyExists(err error) bool {
 // isVersionConflict reports OpenSearch's optimistic-concurrency rejection:
 // op_type=create on an existing document (or an if_seq_no mismatch). Like
 // isNotFound, it answers from either error shape the client can produce.
-// Both branches are substring-gated on the reason text: this predicate also
-// DECIDES SUCCESS (the deterministic-id journal collision), and a middlebox
-// 409 with a rewritten body must not fake an append that never happened —
-// genuine engine collisions name themselves in either shape. The substring
-// fallbacks require status 409 so unrelated 4xx wording (e.g. a 400 whose
-// reason mentions an index that already exists) cannot read as a collision.
-// resource_already_exists_exception is excluded from the fallback even at
-// 409: it is the INDEX-level race (two processes auto-creating the same
-// dated history index), where no document was written — reading it as a
-// doc collision would fake a journal append that never happened. The
-// canonical collision type needs no fallback (it matches on type above).
-// In string shape the type field is gone, so the race is recognised by
-// its wording: the engine's index-race reason carries the "index ["
-// marker (and a rewritten body may still name the exception type), while
-// doc-level collisions name the document id, never "index [". The same
-// wording guard applies to the struct branch as well: a middlebox that
-// rewrites resource_already_exists_exception to some other type must
-// not resurrect the hazard through the reason fallback. Even the
-// canonical type disjunct requires the 409 status: a gateway that
-// rewrites the status while keeping the engine type is not an engine
-// conflict, and trusting it sends CAS callers into a futile
-// re-read-and-retry loop on a permanent error.
+// The predicate also DECIDES SUCCESS (the deterministic-id journal
+// collision), and a middlebox-rewritten 409 must not fake an append that
+// never happened — so both branches run the SAME guard set before any
+// acceptor answers:
+//   - status 409 (a gateway rewriting the status while keeping the
+//     engine's type is not an engine conflict; trusting it sends CAS
+//     callers into a futile re-read-and-retry loop on a permanent error,
+//     and fakes success at the append site),
+//   - no index-creation-race signature: the engine's index-race body
+//     carries the "index [" marker together with "already exists" (and
+//     may name resource_already_exists_exception in type or reason);
+//     doc-level collisions name the document id, never "index [". The
+//     race writes NO document, so reading it as a doc collision would
+//     fake a journal append and dangle current_ref — and the guards must
+//     cover the canonical type too: a middlebox can rewrite type AND
+//     keep the race wording, or keep the type AND rewrite the status,
+//     and either combination decided success in one shape only.
+//
+// On top of the guards the struct branch accepts the canonical
+// error.type or the reason wording; the string branch (type is gone in
+// that shape) accepts only the wording. Genuine engine collisions name
+// themselves in either shape.
 func isVersionConflict(err error) bool {
 	var ste *opensearch.StructError
 	if errors.As(err, &ste) {
-		return ste.Err.Type == "version_conflict_engine_exception" && ste.Status == http.StatusConflict ||
-			(ste.Err.Type != "resource_already_exists_exception" &&
-				!strings.Contains(ste.Err.Reason, "resource_already_exists") &&
-				(!strings.Contains(ste.Err.Reason, "index [") || !strings.Contains(ste.Err.Reason, "already exists")) &&
-				ste.Status == http.StatusConflict &&
-				(strings.Contains(ste.Err.Reason, "version conflict") ||
-					strings.Contains(ste.Err.Reason, "already exists")))
+		return ste.Status == http.StatusConflict &&
+			ste.Err.Type != "resource_already_exists_exception" &&
+			!strings.Contains(ste.Err.Reason, "resource_already_exists") &&
+			(!strings.Contains(ste.Err.Reason, "index [") || !strings.Contains(ste.Err.Reason, "already exists")) &&
+			(ste.Err.Type == "version_conflict_engine_exception" ||
+				strings.Contains(ste.Err.Reason, "version_conflict") ||
+				strings.Contains(ste.Err.Reason, "version conflict") ||
+				strings.Contains(ste.Err.Reason, "already exists"))
 	}
 	var se *opensearch.StringError
 	return errors.As(err, &se) && se.Status == http.StatusConflict &&
