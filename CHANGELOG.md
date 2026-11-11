@@ -340,6 +340,13 @@ Hardening (pre-release review conveyor):
   returned an `index_not_found` error; the docs index is created lazily on the
   first fetch, so an absent index now reads as an empty result (same posture as
   journal wildcard reads).
+- Replica counts now follow the topology as a steady-state property, not just
+  at index creation: on startup the client re-checks the facts/docs indices and
+  the journal template and corrects drift (`PUT _settings` / template re-PUT).
+  A single-node install that later grows into a cluster self-heals instead of
+  staying unreplicated. In auto mode nothing is written when the health probe
+  fails — an unknown topology is never "fixed" toward 0; an explicit
+  `index_replicas` value is now enforced on existing indices too.
 - Verified version matrix: the live CLI smoke (`hack/cli-smoke.sh`, 23 checks)
   passes on OpenSearch 2.19.7, 3.0.0, 3.3.2, 3.8.0 and 3.9.0
   (`hack/version-matrix.sh`); `OPENSEARCH_IMAGE`/`OSD_IMAGE` can pin the dev

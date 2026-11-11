@@ -1,0 +1,129 @@
+package client
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"strconv"
+
+	"github.com/opensearch-project/opensearch-go/v4/opensearchapi"
+)
+
+// Replica reconciliation. The replica count is otherwise frozen
+// at creation time: an install that starts on one node and later grows into a
+// cluster — the documented compose→kube growth path — would keep replicas=0
+// forever, in the existing indices and in the journal template that stamps
+// every new history index. Reconciling once per process makes "replicas
+// follow the topology" a steady-state property instead of a cold-start one.
+
+// desiredReplicas returns the replica count the current topology wants: the
+// explicit config value when set, otherwise the auto probe. ok=false only in
+// auto mode when the health probe failed — the caller must then NOT "fix"
+// replicas toward an unknown topology (a transient probe error must never
+// downgrade a real cluster to 0).
+func (c *Client) desiredReplicas(ctx context.Context) (int, bool) {
+	if c.cfg.IndexReplicas >= 0 {
+		return c.cfg.IndexReplicas, true
+	}
+	return c.autoReplicas(ctx)
+}
+
+// autoReplicas caches the health probe (the topology does not change within
+// one process run) and reports whether the probe answered at all.
+func (c *Client) autoReplicas(ctx context.Context) (int, bool) {
+	c.replicasOnce.Do(func() {
+		c.replicasVal = 0
+		if h, err := c.api.Cluster.Health(ctx, nil); err == nil {
+			c.replicasProbeOK = true
+			if h.NumberOfDataNodes > 1 {
+				c.replicasVal = 1
+			}
+		}
+	})
+	return c.replicasVal, c.replicasProbeOK
+}
+
+// reconcileReplicas aligns existing memento indices with the desired count.
+// Called once per process from EnsureIndex; it is best-effort by design — a
+// failed settings write (read-only store, blip) never fails the operation the
+// caller actually asked for.
+func (c *Client) reconcileReplicas(ctx context.Context) {
+	desired, ok := c.desiredReplicas(ctx)
+	if !ok {
+		return
+	}
+	c.replicasFixOnce.Do(func() {
+		c.fixIndexReplicas(ctx, c.cfg.IndexName, desired)
+		c.fixIndexReplicas(ctx, c.cfg.DocsIndexName, desired)
+	})
+}
+
+// fixIndexReplicas reads the live replica count and writes it back only on
+// drift. A missing index (the docs index is created lazily) or an unreadable
+// setting is skipped: there is nothing to align or nothing trustworthy to
+// align against.
+func (c *Client) fixIndexReplicas(ctx context.Context, index string, desired int) {
+	if index == "" {
+		return
+	}
+	flat := true
+	get, err := c.api.Indices.Settings.Get(ctx, &opensearchapi.SettingsGetReq{
+		Indices: []string{index},
+		Params:  opensearchapi.SettingsGetParams{FlatSettings: &flat},
+	})
+	if err != nil {
+		return
+	}
+	idx, ok := get.GetIndices()[index]
+	if !ok {
+		return
+	}
+	var settings map[string]json.RawMessage
+	if err := json.Unmarshal(idx.Settings, &settings); err != nil {
+		return
+	}
+	cur, ok := settingInt(settings["index.number_of_replicas"])
+	if !ok || cur == desired {
+		return
+	}
+	body, _ := json.Marshal(map[string]interface{}{"index.number_of_replicas": desired})
+	_, _ = c.api.Indices.Settings.Put(ctx, opensearchapi.SettingsPutReq{
+		Indices: []string{index},
+		Body:    bytes.NewReader(body),
+	})
+}
+
+// templateStampedReplicas extracts the replica count baked into the journal
+// index template (-1 = absent/unparseable, treated as "no opinion").
+func templateStampedReplicas(resp *opensearchapi.IndexTemplateGetResp) int {
+	if resp == nil || len(resp.IndexTemplates) == 0 {
+		return -1
+	}
+	var settings map[string]json.RawMessage
+	if err := json.Unmarshal(resp.IndexTemplates[0].IndexTemplate.Template.Settings, &settings); err != nil {
+		return -1
+	}
+	n, ok := settingInt(settings["index.number_of_replicas"])
+	if !ok {
+		return -1
+	}
+	return n
+}
+
+// settingInt reads a flat setting that may arrive as a JSON string ("1") or
+// a bare number (1).
+func settingInt(raw json.RawMessage) (int, bool) {
+	if len(raw) == 0 {
+		return 0, false
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		n, err := strconv.Atoi(s)
+		return n, err == nil
+	}
+	var n int
+	if json.Unmarshal(raw, &n) == nil {
+		return n, true
+	}
+	return 0, false
+}

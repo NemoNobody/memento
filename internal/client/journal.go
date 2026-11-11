@@ -151,14 +151,30 @@ func (c *Client) ensureJournalInfra(ctx context.Context) error {
 	}
 
 	tpl := journalTemplateName(c.cfg.IndexName)
-	_, exErr := c.api.IndexTemplate.Exists(ctx, opensearchapi.IndexTemplateExistsReq{IndexTemplate: tpl})
+	got, exErr := c.api.IndexTemplate.Get(ctx, &opensearchapi.IndexTemplateGetReq{IndexTemplates: tpl})
 	if exErr != nil {
+		// Missing (or briefly unreadable): create. A lost create-race just
+		// re-PUTs the same body — composable templates are replaced by name.
 		body, _ := json.Marshal(buildJournalTemplateBody(c.cfg.IndexName, c.indexReplicas(ctx)))
 		if _, mkErr := c.api.IndexTemplate.Create(ctx, opensearchapi.IndexTemplateCreateReq{
 			IndexTemplate: tpl,
 			Body:          strings.NewReader(string(body)),
 		}); mkErr != nil {
 			return wrapWriteError("create journal template", mkErr)
+		}
+	} else if desired, ok := c.desiredReplicas(ctx); ok {
+		// Drift correction: the template stamps every NEW history
+		// index, so a template frozen at replicas=0 on a grown cluster would
+		// keep producing unreplicated history forever. Re-PUT with the current
+		// topology only when the stamped count disagrees.
+		if stamped := templateStampedReplicas(got); stamped >= 0 && stamped != desired {
+			body, _ := json.Marshal(buildJournalTemplateBody(c.cfg.IndexName, desired))
+			if _, mkErr := c.api.IndexTemplate.Create(ctx, opensearchapi.IndexTemplateCreateReq{
+				IndexTemplate: tpl,
+				Body:          strings.NewReader(string(body)),
+			}); mkErr != nil {
+				return wrapWriteError("update journal template", mkErr)
+			}
 		}
 	}
 	c.journalInfraOK = true

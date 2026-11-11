@@ -63,9 +63,14 @@ type Client struct {
 	journalInfraOK bool
 
 	// replicasOnce/replicasVal cache the auto replica-count probe (see
-	// indexReplicas): the topology does not change within one process run.
-	replicasOnce sync.Once
-	replicasVal  int
+	// autoReplicas): the topology does not change within one process run.
+	// replicasProbeOK distinguishes "probed, lone node" (reconcile may act)
+	// from "probe failed" (reconcile must not guess). replicasFixOnce makes
+	// the drift correction run at most once per process (see reconcileReplicas).
+	replicasOnce    sync.Once
+	replicasVal     int
+	replicasProbeOK bool
+	replicasFixOnce sync.Once
 
 	// journalIdxPipeline tracks journal indices whose default_pipeline has
 	// been pinned in this process (see ensureJournalIndexPipeline).
@@ -256,18 +261,14 @@ func (c *Client) IndexName() string { return c.cfg.IndexName }
 // process: a single data node can never assign a copy (the index would sit
 // yellow forever), so it gets 0; a real cluster gets 1 so losing a node
 // loses neither facts nor history. A health probe failure must not fail a
-// write — it falls back to 0.
+// write — it falls back to 0. Existing indices are realigned separately by
+// reconcileReplicas (see replicas.go).
 func (c *Client) indexReplicas(ctx context.Context) int {
 	if c.cfg.IndexReplicas >= 0 {
 		return c.cfg.IndexReplicas
 	}
-	c.replicasOnce.Do(func() {
-		c.replicasVal = 0
-		if h, err := c.api.Cluster.Health(ctx, nil); err == nil && h.NumberOfDataNodes > 1 {
-			c.replicasVal = 1
-		}
-	})
-	return c.replicasVal
+	v, _ := c.autoReplicas(ctx)
+	return v
 }
 
 // buildIndexBody returns the index creation body (mappings) used by EnsureIndex.
@@ -322,6 +323,7 @@ func (c *Client) EnsureIndex(ctx context.Context) error {
 	resp, err := c.api.Indices.Exists(ctx, existsReq)
 	switch {
 	case err == nil:
+		c.reconcileReplicas(ctx)
 		return nil
 	case resp != nil && resp.StatusCode == http.StatusNotFound:
 		// The index is missing: create it below. The status code is checked

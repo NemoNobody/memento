@@ -161,7 +161,11 @@ chmod 600 ~/.memento.conf
   (config, default `-1` = auto): a single data node gets `0` (a replica there
   could never assign — permanent yellow), two or more data nodes get `1`, so
   losing one node loses neither facts nor journal history. Set an explicit
-  `0`–`N` to override.
+  `0`–`N` to override. The count is not frozen at creation: each client start
+  re-checks the existing facts/docs indices and the journal template against
+  the current topology and corrects drift — an install that grows from one
+  node into a cluster self-heals. In auto mode nothing is changed while the
+  health probe fails (an unknown topology is never "fixed" toward 0).
 - The history journal is created automatically on the first accepted write: an
   ingest pipeline `<index>-journal-ts` (stamps entries with the server clock),
   a composable index template `<index>-journal`, and dated journal indices
@@ -351,10 +355,12 @@ Then set `opensearch_user: "memento"` in the config and run `memento creds set`
 
 - Writes now stamp `author: "memento" (security)` — the name the *server*
   authenticated, which is exactly the point of a shared store.
-- The journal template pins `index.number_of_replicas: 0`: on a single-node
-  cluster journal indices stay green (replicas would hang unassigned — the
-  classic single-node trap). Multi-node shared stores can raise it; the
-  template is yours to edit, the app only creates it once if absent.
+- The journal template stamps `index.number_of_replicas: 0` on a single-node
+  cluster: journal indices stay green (replicas would hang unassigned — the
+  classic single-node trap). On a multi-node store the app raises it to `1`
+  automatically, and it re-aligns both the template and existing indices at
+  every client start — so hand-edits to the stamped replica count do not
+  survive; pin the count with `index_replicas` in the memento config instead.
 
 The dev compose (`make dev-opensearch`) runs with the security plugin off and
 no auth at all — that is the documented dev posture (localhost-only bind).

@@ -18,8 +18,8 @@ func journalInfraOK(r recordedRequest) (int, string) {
 	switch {
 	case r.Method == http.MethodGet && strings.HasPrefix(r.Path, "/_ingest/pipeline/"):
 		return http.StatusOK, `{"memento-journal-ts":{"processors":[]}}`
-	case r.Method == http.MethodHead && strings.HasPrefix(r.Path, "/_index_template/"):
-		return http.StatusOK, ""
+	case r.Method == http.MethodGet && strings.HasPrefix(r.Path, "/_index_template/"):
+		return http.StatusOK, `{"index_templates":[{"name":"memento-journal","index_template":{"template":{"settings":{"index.number_of_replicas":"0"}}}}]}`
 	case r.Method == http.MethodPut && strings.HasSuffix(r.Path, "/_settings"):
 		return http.StatusOK, `{"acknowledged":true}`
 	}
@@ -875,8 +875,8 @@ func TestEnsureJournalInfraRetriesAfterFailure(t *testing.T) {
 		switch {
 		case r.Method == http.MethodGet && strings.HasPrefix(r.Path, "/_ingest/pipeline/"):
 			return http.StatusOK, `{"memento-journal-ts":{"processors":[]}}`
-		case r.Method == http.MethodHead && strings.HasPrefix(r.Path, "/_index_template/"):
-			return http.StatusNotFound, "" // template missing
+		case r.Method == http.MethodGet && r.Path == "/_index_template/memento-journal":
+			return http.StatusNotFound, `{"status":404,"error":{"type":"status_exception","reason":"index template not found"}}`
 		case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/_index_template/"):
 			tplPuts++
 			if tplPuts == 1 {
