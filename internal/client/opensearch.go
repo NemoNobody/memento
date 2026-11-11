@@ -1224,9 +1224,10 @@ func (c *Client) Patch(ctx context.Context, key string, p PatchFields) (PatchRes
 		// Doc-first: the entry is built and its id preallocated here, the
 		// entry itself is indexed only after the update is accepted.
 		entry = c.newJournalEntryFor(ctx, &stated, existing.FactID, now)
-		if p.Status == "obsolete" {
-			// A retirement is not a value write: the marker makes "when and by
-			// whom was this retired" a query over the journal.
+		if statusChanged && p.Status == "obsolete" {
+			// Only the transition is a retirement. A value correction on an
+			// already-obsolete fact (status unchanged, the script leaves it
+			// dead) is a write: marking it retire would date the burial wrong.
 			entry.Op = model.OpRetire
 		}
 		currentRef = uuid.New().String()
