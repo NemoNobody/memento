@@ -3,6 +3,40 @@
 Notable changes per release tag. v0.8.0 is the first public release: it folds
 the pre-publication hardening into one baseline (earlier private tags are gone).
 
+## v0.8.1 — 2026-11-12
+
+Secret guard: a heuristic hit no longer costs the whole write.
+
+`secret_guard=reject` (the default) refused any write whose text matched a
+medium-confidence heuristic — an unnamed 40-character hash, a base64 blob, a
+weak assignment. Those shapes are ordinary, legitimate content (commit hashes,
+checksums, config names), so a valid fact could not be stored at all, and the
+only escape was to turn the guard off globally.
+
+- a **high-confidence** credential (vendor prefixes, PEM blocks, JWT, Bearer
+  headers, basic-auth URLs, strong assignments) still refuses the write:
+  storing a marker in its place would let a writer believe the token was saved;
+- a **medium-confidence** hit in a text field (`value`, `notes`, `summary`,
+  `notes_append`, `reason`) is replaced with `[memento-redacted:pattern]` and
+  the write proceeds; the answer lists `redactions` (field, pattern, size —
+  never the text), and the rows are stored on the fact and in the journal
+  entry of the accepted value;
+- a hit in an **identity** field (`key`, `project`, `source`, `keywords`)
+  refuses: a rewritten key would silently become a different fact;
+- a text field that is nothing but a flagged span is refused — a fact whose
+  value is a bare marker would read as a complete claim;
+- `ask` with confirmation stores the text as written (a human judged the
+  finding a false positive); `reject` still has no confirmation flag.
+
+`memento_patch` records the audit with the value it stores and clears it when a
+clean value replaces a redacted one; rows cut from qualifiers (a note, a retire
+reason) merge with the current value's rows. The audit is part of every read
+shape — `memento_get`, `memento_search`, `memento_list`, `memento_journal`,
+CLI `get` — so a shortened value never reads as the complete claim. Fetched
+pages are unchanged: the guard there is route-based (documentation keeps medium
+shapes and counts them in `guard_medium_ignored`, API payloads refuse), because
+page text is not authored by the writer.
+
 ## v0.8.0 — 2026-11-11
 
 First public baseline. Everything below the fold landed in the same cycle:
