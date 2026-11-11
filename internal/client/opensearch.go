@@ -124,17 +124,19 @@ func isAlreadyExists(err error) bool {
 
 // isVersionConflict reports OpenSearch's optimistic-concurrency rejection:
 // op_type=create on an existing document (or an if_seq_no mismatch). Like
-// isNotFound, it answers from either error shape the client can produce —
-// a structured body or a bare 409 (a proxy that rewrites the body must not
-// turn the create race into an abort, or the deterministic-id journal
-// collision into a failed repair).
+// isNotFound, it answers from either error shape the client can produce.
+// The StringError branch is substring-gated: this predicate also DECIDES
+// SUCCESS (the deterministic-id journal collision), and a middlebox 409
+// with a rewritten body must not fake an append that never happened —
+// genuine engine collisions name themselves even in string form.
 func isVersionConflict(err error) bool {
 	var ste *opensearch.StructError
 	if errors.As(err, &ste) {
 		return ste.Err.Type == "version_conflict_engine_exception"
 	}
 	var se *opensearch.StringError
-	return errors.As(err, &se) && se.Status == http.StatusConflict
+	return errors.As(err, &se) && se.Status == http.StatusConflict &&
+		(strings.Contains(se.Err, "version_conflict") || strings.Contains(se.Err, "version conflict") || strings.Contains(se.Err, "already exists"))
 }
 
 // isClusterBlock reports whether the error is OpenSearch refusing a write
