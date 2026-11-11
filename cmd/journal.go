@@ -85,7 +85,7 @@ journal indices are lower bounds — the surviving journal, not the lifetime.`,
 				b.WriteString("  - ")
 				b.WriteString(displayTime(e.CreatedAt))
 				b.WriteString(" [")
-				b.WriteString(e.Op)
+				b.WriteString(displaySafe(e.Op, false))
 				b.WriteString("]")
 				if e.Source != "" {
 					b.WriteString(" source=")

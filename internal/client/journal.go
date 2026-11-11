@@ -649,6 +649,10 @@ func (c *Client) ScanAllFacts(ctx context.Context, project string) ([]model.Fact
 // requires a NON-EMPTY list: an empty/absent array is already migrated for
 // MigrateFact's eyes, and selecting it forever would leave a plan that
 // reports matches but migrates nothing (the non-convergence F1 killed).
+// A history that is neither absent nor a list (foreign writer, corruption)
+// gets its own arm: dropping it from the scan would hide the doc entirely,
+// while scanning it surfaces it through the decode-skipped count — the
+// plan stays honest about what it could not examine.
 func buildMigrateScanBody(project string) map[string]interface{} {
 	boolQuery := map[string]interface{}{
 		"must": []map[string]interface{}{{
@@ -662,6 +666,12 @@ func buildMigrateScanBody(project string) map[string]interface{} {
 						"script": map[string]interface{}{
 							"lang":   "painless",
 							"source": `params._source != null && params._source.history instanceof List && !params._source.history.isEmpty()`,
+						},
+					}},
+					map[string]interface{}{"script": map[string]interface{}{
+						"script": map[string]interface{}{
+							"lang":   "painless",
+							"source": `params._source != null && params._source.containsKey("history") && !(params._source.history instanceof List)`,
 						},
 					}},
 				},
