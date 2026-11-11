@@ -328,9 +328,11 @@ func TestMCPServerAddBatchSurfacesPartialSuccess(t *testing.T) {
 		switch {
 		case r.Method == http.MethodHead && r.URL.Path == "/memento":
 			w.WriteHeader(http.StatusOK) // the facts index exists
-		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/memento/_doc/"):
+		case r.Method == http.MethodGet && r.URL.Path == "/memento/_doc/k":
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = io.WriteString(w, `{"error":{"type":"document_missing_exception","reason":"no such document","index":"memento"},"status":404}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/memento/_doc/t":
+			_, _ = io.WriteString(w, `{"_index":"memento","_id":"t","_version":1,"_seq_no":3,"_primary_term":1,"found":true,"_source":{"key":"t","value":"v","category":"config","project":"p","status":"verified"}}`)
 		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "-history-") && strings.Contains(r.URL.Path, "/_doc/"):
 			w.WriteHeader(http.StatusInternalServerError)
 			_, _ = io.WriteString(w, `{"error":{"type":"cluster_block_exception","reason":"journal write blocked"},"status":500}`)
@@ -342,8 +344,13 @@ func TestMCPServerAddBatchSurfacesPartialSuccess(t *testing.T) {
 	session := connectTestServer(t, "OPENSEARCH_URL="+fake.URL)
 
 	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
-		Name:      "memento_add_batch",
-		Arguments: map[string]any{"items": []any{map[string]any{"key": "k", "value": "v", "category": "config"}}},
+		Name: "memento_add_batch",
+		Arguments: map[string]any{"items": []any{
+			map[string]any{"key": "k", "value": "v", "category": "config"},
+			// same-value re-declare of an existing fact: a clean touch —
+			// the counter case a one-item partial fixture can never show.
+			map[string]any{"key": "t", "value": "v", "category": "config"},
+		}},
 	})
 	if err != nil {
 		t.Fatalf("CallTool(memento_add_batch): %v", err)
@@ -362,8 +369,8 @@ func TestMCPServerAddBatchSurfacesPartialSuccess(t *testing.T) {
 	if err := json.Unmarshal(raw, &out); err != nil {
 		t.Fatalf("structured content: %v (%s)", err, raw)
 	}
-	if len(out.Items) != 1 {
-		t.Fatalf("items = %d, want 1: %s", len(out.Items), raw)
+	if len(out.Items) != 2 {
+		t.Fatalf("items = %d, want 2: %s", len(out.Items), raw)
 	}
 	it := out.Items[0]
 	if it.Error == "" {
@@ -372,11 +379,14 @@ func TestMCPServerAddBatchSurfacesPartialSuccess(t *testing.T) {
 	if !it.Created {
 		t.Errorf("item.created = false, want true (the fact doc stored; only the journal lagged): %s", raw)
 	}
-	// The aggregate must agree with the row (the patch twin pins the same):
-	// a summary that contradicts what the item says is the audit lie the
-	// counters exist to prevent.
-	if out.Created != 1 || out.Changed != 1 || out.Touched != 0 {
-		t.Errorf("counters = created:%d changed:%d touched:%d, want 1/1/0: %s", out.Created, out.Changed, out.Touched, raw)
+	if out.Items[1].Error != "" || out.Items[1].Created {
+		t.Errorf("the same-value item must be a clean non-created touch, got %+v: %s", out.Items[1], raw)
+	}
+	// The aggregate must agree with the rows (the patch twin pins the same):
+	// a summary that contradicts what the items say is the audit lie the
+	// counters exist to prevent. The touch item makes touched discriminative.
+	if out.Created != 1 || out.Changed != 1 || out.Touched != 1 {
+		t.Errorf("counters = created:%d changed:%d touched:%d, want 1/1/1: %s", out.Created, out.Changed, out.Touched, raw)
 	}
 }
 
