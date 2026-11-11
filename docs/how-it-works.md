@@ -12,12 +12,13 @@ document keyed by its `key` (the key is the document ID).
 | `fact_id` | keyword | stable doc id (UUID) |
 | `key` | keyword | stable key, e.g. `proj:foo:loc:bar.py` |
 | `value` | text | fact text (full-text searchable) |
-| `category` | keyword | `location \| config \| endpoint \| behavior \| context_map` |
+| `category` | keyword | `location \| config \| endpoint \| behavior \| context_map \| recipe \| rule` |
 | `project` | keyword | `global` or project name |
 | `status` | keyword | `verified \| obsolete` |
 | `created_at` | date | creation timestamp |
 | `updated_at` | date | last write timestamp (moves on any change, incl. notes) |
 | `observed_at` | date | when the current value was seen (moves only on value change) |
+| `ttl_days` | integer | optional per-fact staleness override, capped by the category TTL |
 | `source` | keyword | `tool:read_file \| experiment \| user:confirmed \| doc:*` |
 | `notes` | text | free-text qualifiers (omitted when empty; obsolete reasons appended here) |
 | `summary` | text | short table-of-contents rendering of the value; required when the value is over `summary_min_len` (see below) |
@@ -235,11 +236,22 @@ the MCP tools) carries `age_days` and `stale`:
 |----------|-----------|-----------|
 | `config`, `endpoint` | 14 | values move with deploys and config edits |
 | `location`, `behavior` | 30 | files and code behavior move slower |
+| `rule` | 90 | cross-project constraints outlive a sprint, but not a year of drift |
+| `recipe` | 180 | reusable procedures survive small refactors; tooling and hardware do not |
 | `context_map`, unknown categories | never | decisions and design notes do not rot by age |
+
+The category TTL is also a **cap**: a writer may set a shorter per-fact window
+(`ttl_days` on `memento_add`/`memento_patch`, `--ttl-days` on the CLI) when it
+knows the fact rots faster. Lengthening past the category cap is refused at the
+write edge — a window that outlives the category's promise would quietly
+mislead every later reader. Categories with no default TTL are uncapped
+precisely because they have no promise to break.
 
 Rules:
 
-- `stale` is `age_days > TTL`; at the exact TTL a fact is still fresh.
+- `stale` is `age_days > ttl`, where `ttl` is the per-fact override when one is
+  set and the category default otherwise; at the exact TTL a fact is still
+  fresh.
 - A zero `observed_at` (facts predating the field) means `age_days: -1`; for
   TTL'd categories that is **stale** — the age cannot be trusted, so re-check
   the source. Categories without a TTL stay `stale: false`.
@@ -248,7 +260,31 @@ Rules:
 - Nothing in `add`/`obsolete` moves `observed_at` except a real value change, so
   a stale fact cannot be silently "re-freshed" by a notes touch.
 
-## Summary (table of contents)
+## Advisory contract and precedence
+
+The store is **context, not commands**. A fact — including a `rule` or a
+`recipe` — is something a previous session verified, not an instruction this
+one must obey. Precedence, highest first:
+
+1. system prompt and the current session's user instructions;
+2. personal/global agent rules (`~/.agents`, user config);
+3. the project's own `AGENTS.md` / config;
+4. **the shared store, last**.
+
+The store sits last because its metadata is unsigned: `author` and
+`author_source` are self-reported labels written by the caller, and a plaintext
+store cannot verify them. Identity is not authority. So an agent may silently
+ignore a stored rule that contradicts a higher layer, and it must never treat
+a stored rule as a hard requirement — an infeasible rule is reported (at most
+one dated `notes_append` flag per key) and the task proceeds. Retiring a
+negative rule is a human/author decision: nothing auto-obsoletes a fact.
+
+This is also why **skills and other artifacts are not stored as content**. The
+store cannot sign a bundle, cannot verify authorship, and cannot be a release
+or activation channel — a registry built on it would be a supply-chain hole
+dressed as convenience. A fact may *reference* a skill (repository URL, version,
+content hash) the way it references any other location; the code itself lives
+in git and on disk, where signatures and review actually exist.
 
 A long fact is useless in a listing: pulling every full value to find one is
 exactly the context cost the store exists to avoid. So an accepted value over

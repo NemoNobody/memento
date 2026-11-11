@@ -217,6 +217,7 @@ func TestBuildIndexBody_Mappings(t *testing.T) {
 		"created_at":    "date",
 		"updated_at":    "date",
 		"observed_at":   "date",
+		"ttl_days":      "integer",
 		"source":        "keyword",
 		"notes":         "text",
 		"summary":       "text",
@@ -253,8 +254,8 @@ func TestBuildIndexBody_Mappings(t *testing.T) {
 		t.Errorf("history enabled = %v, want false (stored, not indexed)", history["enabled"])
 	}
 
-	if len(props) != 20 {
-		t.Errorf("expected 20 mappings, got %d", len(props))
+	if len(props) != 21 {
+		t.Errorf("expected 21 mappings, got %d", len(props))
 	}
 }
 

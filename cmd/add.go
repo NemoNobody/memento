@@ -20,6 +20,7 @@ var addFlags struct {
 	source      string
 	notes       string
 	summary     string
+	ttlDays     int
 	allowSecret bool
 }
 
@@ -43,7 +44,7 @@ func AddCmd() *cobra.Command {
 				fatalErr(errors.New("value must not be empty"))
 			}
 			if !model.ValidCategory(category) {
-				fatalErr(fmt.Errorf("unknown category %q (want location|config|endpoint|behavior|context_map)", category))
+				fatalErr(fmt.Errorf("unknown category %q (want location|config|endpoint|behavior|context_map|recipe|rule)", category))
 			}
 			// Canonicalize for storage: the TTL table and the search category
 			// filter are case-sensitive, so a mixed-case write would silently
@@ -79,6 +80,7 @@ func AddCmd() *cobra.Command {
 			ctx := context.Background()
 			f := model.NewFact(key, value, category, project, addFlags.source, addFlags.notes)
 			f.Summary = addFlags.summary
+			f.TTLDays = addFlags.ttlDays
 			res, err := c.Add(ctx, f)
 			if err != nil {
 				fatalErr(err)
@@ -117,6 +119,8 @@ func AddCmd() *cobra.Command {
 		"qualifiers: what was checked, how far, caveats")
 	cmd.Flags().StringVar(&addFlags.summary, "summary", "",
 		"short table-of-contents rendering of the value (under summary_max_len chars); required when the value is longer than summary_min_len; ignored when the value is unchanged (same-value re-add touches notes/source only)")
+	cmd.Flags().IntVar(&addFlags.ttlDays, "ttl-days", 0,
+		"optional staleness window in days; may only shorten the category default (config/endpoint 14, location/behavior 30, recipe 180, rule 90; context_map uncapped)")
 	cmd.Flags().BoolVar(&addFlags.allowSecret, "allow-secret", false,
 		"confirm the flagged text is not a secret (secret_guard=ask only, after user approval)")
 	return cmd

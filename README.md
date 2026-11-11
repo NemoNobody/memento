@@ -32,8 +32,10 @@ Each fact carries evidence, not verdicts:
   `allow` opts out;
 - **staleness**: reads compute `age_days` and `stale` from `observed_at` and a
   per-category TTL (`config`/`endpoint` 14 days, `location`/`behavior` 30 days,
-  `context_map` and unknown categories never). `stale: true` is an instruction
-  to re-verify against the source, not to discard the fact.
+  `rule` 90, `recipe` 180, `context_map` and unknown categories never). A writer
+  may shorten the window per fact (`ttl_days`), never lengthen it past the
+  category cap. `stale: true` is an instruction to re-verify against the source,
+  not to discard the fact.
 
 Two statuses: `verified` (the subject exists) and `obsolete` (the subject is
 gone — file deleted, endpoint removed). The store holds the evidence; the agent

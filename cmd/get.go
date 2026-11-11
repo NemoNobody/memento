@@ -117,6 +117,15 @@ func printFact(w io.Writer, f *model.Fact, now time.Time, history bool, entries 
 	b.WriteString("observed_at: ")
 	b.WriteString(displayTime(f.ObservedAt))
 	b.WriteString("\n")
+	if f.TTLDays > 0 {
+		// The override is the one TTL number the reader cannot infer from the
+		// category; show it with the default it replaces.
+		b.WriteString("ttl_days: ")
+		b.WriteString(strconv.Itoa(f.TTLDays))
+		b.WriteString(" (per-fact override; category default ")
+		b.WriteString(strconv.Itoa(model.TTLDays(f.Category)))
+		b.WriteString("d)\n")
+	}
 	b.WriteString("age_days: ")
 	b.WriteString(displayAge(f.AgeDays(now)))
 	b.WriteString("\n")
@@ -220,22 +229,24 @@ func staleMark(f *model.Fact, now time.Time) string {
 // so the reader knows exactly what to re-verify, and an unknown observation
 // time is treated as stale (the age cannot be trusted).
 func displayStale(f *model.Fact, now time.Time) string {
-	ttl := model.TTLDays(f.Category)
+	ttl := f.EffectiveTTLDays()
 	if ttl == 0 {
 		return "false (category has no TTL)"
 	}
+	ttlLabel := "ttl for " + strconv.Quote(f.Category) + " is " + strconv.Itoa(ttl) + "d"
+	if f.TTLDays > 0 {
+		ttlLabel = "ttl is " + strconv.Itoa(ttl) + "d (per-fact override)"
+	}
 	if f.ObservedAt.IsZero() {
-		return "true (observed_at unknown, ttl for " + strconv.Quote(f.Category) + " is " + strconv.Itoa(ttl) + "d)"
+		return "true (observed_at unknown, " + ttlLabel + ")"
 	}
 	if f.Stale(now) {
 		var b strings.Builder
 		b.WriteString("true (age ")
 		b.WriteString(strconv.Itoa(f.AgeDays(now)))
-		b.WriteString("d, ttl for ")
-		b.WriteString(strconv.Quote(f.Category))
-		b.WriteString(" is ")
-		b.WriteString(strconv.Itoa(ttl))
-		b.WriteString("d) — re-verify before trusting")
+		b.WriteString("d, ")
+		b.WriteString(ttlLabel)
+		b.WriteString(") — re-verify before trusting")
 		return b.String()
 	}
 	return "false"

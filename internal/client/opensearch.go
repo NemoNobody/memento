@@ -288,6 +288,7 @@ func buildIndexBody(replicas int) map[string]interface{} {
 				"created_at":  map[string]interface{}{"type": "date"},
 				"updated_at":  map[string]interface{}{"type": "date"},
 				"observed_at": map[string]interface{}{"type": "date"},
+				"ttl_days":    map[string]interface{}{"type": "integer"},
 				"source":      map[string]interface{}{"type": "keyword"},
 				"notes":       map[string]interface{}{"type": "text"},
 				// Summary is the table-of-contents rendering of value: searchable
@@ -360,6 +361,7 @@ func (c *Client) EnsureIndex(ctx context.Context) error {
 const addCorrectionScript = `
 ctx._source.value = params.value;
 ctx._source.category = params.category;
+if (params.ttl_days != null) { ctx._source.ttl_days = params.ttl_days; }
 ctx._source.observed_at = params.observed_at;
 if (params.source != null && params.source != "") { ctx._source.source = params.source; }
 if (params.notes != null && params.notes != "") { ctx._source.notes = params.notes; }
@@ -425,6 +427,14 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 	if err := c.checkSummaryCap(f); err != nil {
 		return AddResult{}, err
 	}
+	// Shape before store (the summary-cap rule): a writer-chosen staleness
+	// window must fit the category cap even before we know whether this is a
+	// create, a touch, or a correction.
+	if f.TTLDays != 0 {
+		if err := model.ValidTTLOverride(f.Category, f.TTLDays); err != nil {
+			return AddResult{}, contractErrorf("add fact: %v", err)
+		}
+	}
 	existing, seqNo, primaryTerm, err := c.getFactVersion(ctx, f.Key)
 	if errors.Is(err, ErrNotFound) {
 		// Summary bounds are enforced on accepted values only (create and
@@ -483,6 +493,23 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 
 	now := time.Now().UTC().Format(time.RFC3339)
 
+	// A write may move the category; the ttl_days that survives this write —
+	// including a stored override the request does not mention — must fit the
+	// incoming category's cap, or the fact would outlive what the category
+	// promises auditors.
+	effTTL := f.TTLDays
+	if effTTL == 0 {
+		effTTL = existing.TTLDays
+	}
+	if effTTL > 0 {
+		if err := model.ValidTTLOverride(f.Category, effTTL); err != nil {
+			if f.TTLDays == 0 {
+				return AddResult{}, contractErrorf("add fact: the stored ttl_days=%d exceeds the max for category %q (%dd): re-add with a smaller ttl_days to move the category", effTTL, f.Category, model.TTLDays(f.Category))
+			}
+			return AddResult{}, contractErrorf("add fact: %v", err)
+		}
+	}
+
 	if existing.Value == f.Value {
 		// Re-declaring a dead fact alive IS a fresh verification (the Patch
 		// resurrect rule, kept symmetric): flipping obsolete→verified on a
@@ -498,6 +525,11 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 			"status":     "verified",
 			"updated_by": c.resolveAuthor(ctx).Author,
 			"updated_at": now,
+		}
+		if f.TTLDays != 0 {
+			// A touch may retune the staleness window (qualifier-like, not
+			// journaled); omitted means "keep the stored one".
+			doc["ttl_days"] = f.TTLDays
 		}
 		if resurrect {
 			observed := time.Now().UTC()
@@ -594,6 +626,13 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 	entry := c.newJournalEntryFor(ctx, &stated, existing.FactID, f.ObservedAt)
 	ref := uuid.New().String()
 
+	// ttl_days follows the patch convention: nil keeps the stored window, a
+	// positive value replaces it (the shape was already checked above).
+	var ttlParam interface{}
+	if f.TTLDays != 0 {
+		ttlParam = f.TTLDays
+	}
+
 	body, _ := json.Marshal(map[string]interface{}{
 		"script": map[string]interface{}{
 			"lang":   "painless",
@@ -601,6 +640,7 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 			"params": map[string]interface{}{
 				"value":       f.Value,
 				"category":    f.Category,
+				"ttl_days":    ttlParam,
 				"observed_at": f.ObservedAt.UTC().Format(time.RFC3339),
 				"source":      f.Source,
 				"notes":       f.Notes,
@@ -983,6 +1023,7 @@ type PatchFields struct {
 	Source      string // replaces source when non-empty
 	Status      string // verified | obsolete — a transition is journaled (audit symmetry)
 	Reason      string // why it became obsolete (folded into notes; guard-checked)
+	TTLDays     int    // retunes the staleness window (bounded by the category cap); 0 = untouched
 }
 
 // PatchResult reports what the patch did.
@@ -1010,6 +1051,7 @@ if (params.reason_append != null) {
   ctx._source.notes = n.isEmpty() ? params.reason_append : n + params.nsep + params.reason_append;
 }
 if (params.source != null) { ctx._source.source = params.source; }
+if (params.ttl_days != null) { ctx._source.ttl_days = params.ttl_days; }
 if (params.status != null) { ctx._source.status = params.status; }
 if (params.observed_at != null) { ctx._source.observed_at = params.observed_at; }
 if (params.current_ref != null) { ctx._source.current_ref = params.current_ref; }
@@ -1024,8 +1066,11 @@ ctx._source.updated_by = params.updated_by;
 // error would drown in the "do not retry" advice).
 func ValidatePatchFields(p PatchFields) error {
 	if p.Value == "" && p.Summary == "" && p.Notes == "" && p.NotesAppend == "" &&
-		p.Source == "" && p.Status == "" && p.Reason == "" {
-		return fmt.Errorf("patch: nothing to change (provide value, summary, notes, notes_append, source, status, or reason)")
+		p.Source == "" && p.Status == "" && p.Reason == "" && p.TTLDays == 0 {
+		return fmt.Errorf("patch: nothing to change (provide value, summary, notes, notes_append, source, status, reason, or ttl_days)")
+	}
+	if p.TTLDays < 0 {
+		return fmt.Errorf("patch: ttl_days must be positive, got %d", p.TTLDays)
 	}
 	if p.Reason != "" && p.Status != "obsolete" {
 		return fmt.Errorf("patch: reason is only accepted with status=obsolete")
@@ -1064,6 +1109,14 @@ func (c *Client) Patch(ctx context.Context, key string, p PatchFields) (PatchRes
 	}
 	if err != nil {
 		return PatchResult{}, fmt.Errorf("patch: %w", err)
+	}
+
+	// The cap belongs to the fact's stored category: a writer may shorten the
+	// window, never lengthen it past what the category promises.
+	if p.TTLDays > 0 {
+		if err := model.ValidTTLOverride(existing.Category, p.TTLDays); err != nil {
+			return PatchResult{}, contractErrorf("patch: %v", err)
+		}
 	}
 
 	valueChanged := p.Value != "" && p.Value != existing.Value
@@ -1147,6 +1200,7 @@ func (c *Client) Patch(ctx context.Context, key string, p PatchFields) (PatchRes
 		"notes_append":  nil,
 		"reason_append": nil,
 		"source":        nil,
+		"ttl_days":      nil,
 		"status":        nil,
 		"observed_at":   nil,
 		"current_ref":   nil,
@@ -1186,6 +1240,9 @@ func (c *Client) Patch(ctx context.Context, key string, p PatchFields) (PatchRes
 	}
 	if p.Source != "" {
 		params["source"] = p.Source
+	}
+	if p.TTLDays > 0 {
+		params["ttl_days"] = p.TTLDays
 	}
 	if p.Status != "" {
 		params["status"] = p.Status

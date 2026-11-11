@@ -304,7 +304,7 @@ type historyView struct {
 type factView struct {
 	Key          string        `json:"key" jsonschema:"stable fact key, e.g. proj:foo:loc:bar.py"`
 	Value        string        `json:"value,omitempty" jsonschema:"the fact itself (compact mode: only a 100-rune head when the fact has no summary)"`
-	Category     string        `json:"category" jsonschema:"location | config | endpoint | behavior | context_map"`
+	Category     string        `json:"category" jsonschema:"location | config | endpoint | behavior | context_map | recipe | rule"`
 	Project      string        `json:"project" jsonschema:"project name, or 'global'"`
 	Status       string        `json:"status" jsonschema:"verified | obsolete"`
 	Source       string        `json:"source" jsonschema:"where it came from, e.g. tool:read_file, doc:README, user:confirmed"`
@@ -314,9 +314,10 @@ type factView struct {
 	UpdatedBy    string        `json:"updated_by,omitempty" jsonschema:"self-reported label of the last writer; the birth author fields are write-once"`
 	Notes        string        `json:"notes,omitempty" jsonschema:"qualifiers: what was checked, how far, caveats (compact mode: first 100 runes)"`
 	ObservedAt   string        `json:"observed_at" jsonschema:"RFC3339 when the current value was observed"`
+	TTLDays      int           `json:"ttl_days,omitempty" jsonschema:"per-fact staleness override in days, when the writer chose one (otherwise the category default: config/endpoint 14, location/behavior 30, recipe 180, rule 90, context_map never)"`
 	AgeDays      int           `json:"age_days" jsonschema:"whole days since the observation; -1 when observed_at is unknown"`
 	AgeHours     int           `json:"age_hours" jsonschema:"whole hours since the observation; -1 when observed_at is unknown (0 age_days can mean 1 hour or 23 — hours disambiguate fresh facts)"`
-	Stale        bool          `json:"stale" jsonschema:"true when age passes the category TTL (config/endpoint 14d, location/behavior 30d, context_map never) — re-verify against the source before trusting"`
+	Stale        bool          `json:"stale" jsonschema:"true when age passes the effective TTL (the per-fact ttl_days override when set, otherwise the category default: config/endpoint 14d, location/behavior 30d, recipe 180d, rule 90d, context_map never) — re-verify against the source before trusting"`
 	History      []historyView `json:"history,omitempty" jsonschema:"previous observations, oldest first; present only when include_history=true"`
 	CreatedAt    string        `json:"created_at,omitempty" jsonschema:"RFC3339 creation time (dropped in compact mode)"`
 	UpdatedAt    string        `json:"updated_at" jsonschema:"RFC3339 last update time; a same-value touch moves it (age/stale do not)"`
@@ -369,6 +370,7 @@ func newFactView(f model.Fact, includeHistory, compact bool) factView {
 		UpdatedBy:    f.UpdatedBy,
 		Notes:        f.Notes,
 		ObservedAt:   rfc3339OrEmpty(f.ObservedAt),
+		TTLDays:      f.TTLDays,
 		AgeDays:      f.AgeDays(time.Now().UTC()),
 		AgeHours:     f.AgeHours(time.Now().UTC()),
 		Stale:        f.Stale(time.Now().UTC()),
@@ -543,7 +545,7 @@ func (s *mcpServer) search(ctx context.Context, req *mcp.CallToolRequest, in sea
 	// An unknown category filter answers a silent zero forever (the term is
 	// exact on the stored canonical): refuse the typo at the edge instead.
 	if in.Category != "" && !model.ValidCategory(in.Category) {
-		return nil, factsOutput{}, fmt.Errorf("memento_search: unknown category %q (filters match the stored canonical: location | config | endpoint | behavior | context_map)", in.Category)
+		return nil, factsOutput{}, fmt.Errorf("memento_search: unknown category %q (filters match the stored canonical: location | config | endpoint | behavior | context_map | recipe | rule)", in.Category)
 	}
 	status, serr := resolveStatus(in.Status)
 	if serr != nil {
@@ -673,10 +675,11 @@ const (
 type addInput struct {
 	Key      string `json:"key" jsonschema:"stable fact key, e.g. proj:foo:loc:bar.py — re-use the same key to update"`
 	Value    string `json:"value" jsonschema:"the fact text"`
-	Category string `json:"category" jsonschema:"location | config | endpoint | behavior | context_map"`
+	Category string `json:"category" jsonschema:"location | config | endpoint | behavior | context_map | recipe | rule"`
 	Project  string `json:"project,omitempty" jsonschema:"project name; defaults to 'global'"`
 	Source   string `json:"source,omitempty" jsonschema:"where the fact came from (tool:read_file, doc:README, user:confirmed); defaults to tool:mcp"`
 	Notes    string `json:"notes,omitempty" jsonschema:"qualifiers: what was checked, how far, caveats — carried to later sessions"`
+	TTLDays  int    `json:"ttl_days,omitempty" jsonschema:"optional staleness window in days, set it only when you know this fact rots faster than its category default; it may only shorten the window (cap: config/endpoint 14, location/behavior 30, recipe 180, rule 90; context_map uncapped)"`
 	Summary  string `json:"summary,omitempty" jsonschema:"short table-of-contents rendering of the value (under summary_max_len chars); required when the value is longer than summary_min_len; not applied on same-value re-adds, but an over-cap summary is still refused at every edge"`
 
 	// ConfirmSecret bypasses a guard hit at secret_guard=ask. It is the agent's
@@ -736,7 +739,7 @@ func (s *mcpServer) addOne(ctx context.Context, cfg *config.Config, c *client.Cl
 		return addOutput{}, errors.New("memento_add: value is required")
 	}
 	if !model.ValidCategory(strings.ToLower(in.Category)) {
-		return addOutput{}, fmt.Errorf("memento_add: unknown category %q (want location | config | endpoint | behavior | context_map)", in.Category)
+		return addOutput{}, fmt.Errorf("memento_add: unknown category %q (want location | config | endpoint | behavior | context_map | recipe | rule)", in.Category)
 	}
 	// Canonicalize for storage: the TTL table and the search category filter
 	// are case-sensitive, so a mixed-case write would silently never age and
@@ -774,6 +777,7 @@ func (s *mcpServer) addOne(ctx context.Context, cfg *config.Config, c *client.Cl
 	}
 	f := model.NewFact(in.Key, in.Value, in.Category, in.Project, in.Source, in.Notes)
 	f.Summary = in.Summary
+	f.TTLDays = in.TTLDays
 	res, err := c.Add(ctx, f)
 	if err != nil {
 		// Partial success (the fact doc landed, the journal/link follow-up
@@ -897,6 +901,7 @@ type patchInput struct {
 	Source      string `json:"source,omitempty" jsonschema:"replaces source when non-empty"`
 	Status      string `json:"status,omitempty" jsonschema:"verified | obsolete: a transition is journaled; obsolete→verified sets observed_at=now (re-declaring alive is a fresh verification)"`
 	Reason      string `json:"reason,omitempty" jsonschema:"why it became obsolete (only with status=obsolete; folded into notes)"`
+	TTLDays     int    `json:"ttl_days,omitempty" jsonschema:"retune the staleness window in days (bounded by the category cap: config/endpoint 14, location/behavior 30, recipe 180, rule 90; context_map uncapped); omitted = untouched; a qualifier touch, not journaled"`
 
 	// ConfirmSecret bypasses a guard hit at secret_guard=ask (see addInput).
 	ConfirmSecret bool `json:"confirm_secret,omitempty" jsonschema:"confirm a guard hit is a false positive (secret_guard=ask only); set only after the user approved the exact finding"`
@@ -940,6 +945,7 @@ func patchFields(in patchInput) client.PatchFields {
 		Source:      in.Source,
 		Status:      in.Status,
 		Reason:      in.Reason,
+		TTLDays:     in.TTLDays,
 	}
 }
 

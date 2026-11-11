@@ -9,7 +9,7 @@ import (
 // (silent rot), so callers reject them at the edge. Matching is
 // case-insensitive because tool input arrives in arbitrary case.
 func TestValidCategory(t *testing.T) {
-	valid := []string{"config", "endpoint", "location", "behavior", "context_map", "Config", "CONTEXT_MAP"}
+	valid := []string{"config", "endpoint", "location", "behavior", "context_map", "Config", "CONTEXT_MAP", "recipe", "rule", "Recipe", "RULE"}
 	for _, c := range valid {
 		if !ValidCategory(c) {
 			t.Errorf("ValidCategory(%q) = false, want true", c)
@@ -156,6 +156,8 @@ func TestTTLDays(t *testing.T) {
 		"endpoint":    14,
 		"location":    30,
 		"behavior":    30,
+		"recipe":      180,
+		"rule":        90,
 		"context_map": 0,
 		"decision":    0,
 		"":            0,
@@ -165,6 +167,65 @@ func TestTTLDays(t *testing.T) {
 		if got := TTLDays(category); got != want {
 			t.Errorf("TTLDays(%q) = %d, want %d", category, got, want)
 		}
+	}
+}
+
+// TestValidTTLOverride pins the writer-bounded-cap contract: a chosen window
+// may shorten the category default, never lengthen it past the cap; a
+// no-TTL category is uncapped precisely because it has no promise to break.
+func TestValidTTLOverride(t *testing.T) {
+	ok := []struct {
+		category string
+		ttl      int
+	}{
+		{"config", 7},
+		{"config", 14},
+		{"location", 1},
+		{"recipe", 180},
+		{"rule", 30},
+		{"context_map", 3650}, // uncapped: it has no default TTL to outlive
+	}
+	for _, c := range ok {
+		if err := ValidTTLOverride(c.category, c.ttl); err != nil {
+			t.Errorf("ValidTTLOverride(%q, %d) = %v, want nil", c.category, c.ttl, err)
+		}
+	}
+	if err := ValidTTLOverride("config", 15); err == nil {
+		t.Error("over-cap override must be refused")
+	}
+	if err := ValidTTLOverride("recipe", 181); err == nil {
+		t.Error("over-cap override must be refused (recipe)")
+	}
+	for _, bad := range []int{0, -1} {
+		if err := ValidTTLOverride("config", bad); err == nil {
+			t.Errorf("ttl_days=%d must be refused", bad)
+		}
+	}
+}
+
+// TestEffectiveTTLDays pins that the per-fact override wins over the
+// category default, and that unset (0) falls back to it.
+func TestEffectiveTTLDays(t *testing.T) {
+	if got := (&Fact{Category: "config", TTLDays: 3}).EffectiveTTLDays(); got != 3 {
+		t.Errorf("override: EffectiveTTLDays = %d, want 3", got)
+	}
+	if got := (&Fact{Category: "config"}).EffectiveTTLDays(); got != 14 {
+		t.Errorf("unset: EffectiveTTLDays = %d, want category default 14", got)
+	}
+	if got := (&Fact{Category: "context_map", TTLDays: 90}).EffectiveTTLDays(); got != 90 {
+		t.Errorf("context_map override: EffectiveTTLDays = %d, want 90", got)
+	}
+
+	// Staleness reads the effective window: an override stales earlier than
+	// the category default would.
+	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	tight := &Fact{Category: "location", TTLDays: 2, ObservedAt: now.Add(-80 * time.Hour)}
+	if !tight.Stale(now) {
+		t.Error("override of 2d must stale an 80h-old location fact")
+	}
+	wide := &Fact{Category: "location", ObservedAt: now.Add(-80 * time.Hour)}
+	if wide.Stale(now) {
+		t.Error("without an override the 30d location TTL must keep it fresh")
 	}
 }
 

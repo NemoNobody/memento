@@ -19,7 +19,7 @@ func TestMCPSearchUnknownCategoryRefused(t *testing.T) {
 	// Canonical categories (case/whitespace variants) must pass the shape
 	// check — they may still fail later on the unreachable store, but never
 	// with the category refusal.
-	for _, cat := range []string{" location ", "CONFIG"} {
+	for _, cat := range []string{" location ", "CONFIG", "recipe", " Rule "} {
 		_, _, err := s.search(context.Background(), nil, searchInput{Query: "q", Category: cat})
 		if err != nil && strings.Contains(err.Error(), "unknown category") {
 			t.Errorf("canonical category %q must not be refused: %v", cat, err)

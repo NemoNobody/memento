@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -16,18 +17,24 @@ type HistoryEntry struct {
 
 // Fact represents a stored fact in the memory store.
 type Fact struct {
-	FactID     string         `json:"fact_id" yaml:"fact_id"`
-	Key        string         `json:"key" yaml:"key"`
-	Value      string         `json:"value" yaml:"value"`
-	Category   string         `json:"category" yaml:"category"`
-	Project    string         `json:"project" yaml:"project"`
-	Status     string         `json:"status" yaml:"status"`
-	CreatedAt  time.Time      `json:"created_at" yaml:"created_at"`
-	UpdatedAt  time.Time      `json:"updated_at" yaml:"updated_at"`
-	ObservedAt time.Time      `json:"observed_at" yaml:"observed_at"`
-	Source     string         `json:"source" yaml:"source"`
-	Notes      string         `json:"notes,omitempty" yaml:"notes,omitempty"`
-	History    []HistoryEntry `json:"history,omitempty" yaml:"history,omitempty"`
+	FactID     string    `json:"fact_id" yaml:"fact_id"`
+	Key        string    `json:"key" yaml:"key"`
+	Value      string    `json:"value" yaml:"value"`
+	Category   string    `json:"category" yaml:"category"`
+	Project    string    `json:"project" yaml:"project"`
+	Status     string    `json:"status" yaml:"status"`
+	CreatedAt  time.Time `json:"created_at" yaml:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at" yaml:"updated_at"`
+	ObservedAt time.Time `json:"observed_at" yaml:"observed_at"`
+	Source     string    `json:"source" yaml:"source"`
+	Notes      string    `json:"notes,omitempty" yaml:"notes,omitempty"`
+
+	// TTLDays is an optional writer-chosen staleness window in days. It may
+	// only shorten the category default (the category value is the cap a
+	// writer may pick; 0-category categories are uncapped). 0 means "not set:
+	// use the category default".
+	TTLDays int            `json:"ttl_days,omitempty" yaml:"ttl_days,omitempty"`
+	History []HistoryEntry `json:"history,omitempty" yaml:"history,omitempty"`
 
 	// Summary is a short (table-of-contents) rendering of Value. It is
 	// required once a value passes config.SummaryMinLen, so listings stay
@@ -96,11 +103,18 @@ func (f *Fact) Valid() bool {
 // should be re-verified before being trusted. 0 (including unknown categories)
 // means the fact never goes stale. The store provides the signal; the agent
 // judges — staleness is an instruction to re-check, not to discard.
+//
+// The same number is also the cap on a writer-chosen per-fact window
+// (Fact.TTLDays): a writer may shorten a TTL when it knows the fact rots
+// faster, never lengthen it past what the category promises. A 0 category is
+// uncapped precisely because it has no promise to break.
 var ttlDaysByCategory = map[string]int{
 	"config":   14,
 	"endpoint": 14,
 	"location": 30,
 	"behavior": 30,
+	"recipe":   180,
+	"rule":     90,
 }
 
 // ValidCategory reports whether category is one of the known categories —
@@ -109,7 +123,7 @@ var ttlDaysByCategory = map[string]int{
 // the dark; callers reject them at the edge.
 func ValidCategory(category string) bool {
 	switch strings.ToLower(category) {
-	case "config", "endpoint", "location", "behavior", "context_map":
+	case "config", "endpoint", "location", "behavior", "context_map", "recipe", "rule":
 		return true
 	}
 	return false
@@ -120,6 +134,20 @@ func ValidCategory(category string) bool {
 // canonicalizing categories still age correctly.
 func TTLDays(category string) int {
 	return ttlDaysByCategory[strings.ToLower(category)]
+}
+
+// ValidTTLOverride checks a writer-chosen per-fact staleness window against
+// the category cap. It is the single contract behind "boundaries may come
+// from the writer, the category sets the maximum": an over-cap request would
+// silently outlive what the category promises auditors.
+func ValidTTLOverride(category string, ttl int) error {
+	if ttl <= 0 {
+		return fmt.Errorf("ttl_days must be positive, got %d", ttl)
+	}
+	if cap := TTLDays(category); cap > 0 && ttl > cap {
+		return fmt.Errorf("ttl_days %d exceeds the max for category %q (%dd): a writer may shorten a staleness window, never lengthen it past the category cap", ttl, strings.ToLower(category), cap)
+	}
+	return nil
 }
 
 // AgeDays returns whole days since the last observation, or -1 when
@@ -150,11 +178,21 @@ func (f *Fact) AgeHours(now time.Time) int {
 	return h
 }
 
-// Stale reports whether the fact is past its category TTL and should be
+// EffectiveTTLDays returns the staleness window actually in force: the
+// per-fact override when one was chosen, otherwise the category default.
+// 0 means the fact never goes stale.
+func (f *Fact) EffectiveTTLDays() int {
+	if f.TTLDays > 0 {
+		return f.TTLDays
+	}
+	return TTLDays(f.Category)
+}
+
+// Stale reports whether the fact is past its effective TTL and should be
 // re-verified. An unknown observation time is stale by definition: the agent
 // cannot tell how old it is, so it must re-read the source.
 func (f *Fact) Stale(now time.Time) bool {
-	ttl := TTLDays(f.Category)
+	ttl := f.EffectiveTTLDays()
 	if ttl == 0 {
 		return false
 	}
