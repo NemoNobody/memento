@@ -125,7 +125,25 @@ func TestRobotsAllowed(t *testing.T) {
 }
 
 // newRobotsServer serves robots.txt (counted) plus /secret and /public.
+// resetRobotsCache isolates the process-global robots cache around tests
+// that fetch: httptest reuses ports, and a "http://127.0.0.1:PORT" entry
+// cached by one test is cache-hit by a later test whose server lands on
+// the same port (the cancelled-fetch test intermittently saw the previous
+// test's good verdict). Robots tests fetch through newRobotsServer, so
+// the reset hangs there.
+func resetRobotsCache(t *testing.T) {
+	t.Helper()
+	clear := func() {
+		robotsCache.Lock()
+		robotsCache.m = map[string]robotsEntry{}
+		robotsCache.Unlock()
+	}
+	clear()
+	t.Cleanup(clear)
+}
+
 func newRobotsServer(t *testing.T, robotsBody string, hits *int32) *httptest.Server {
+	resetRobotsCache(t)
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {

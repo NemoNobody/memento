@@ -163,12 +163,10 @@ func isVersionConflict(err error) bool {
 
 // conflictAnswer is the single shared gate both shapes flow through —
 // see isVersionConflict for the why.
-func conflictAnswer(status int, typ, text string, raceInRootCause bool) bool {
+func conflictAnswer(status int, typ, text string, raceInNested bool) bool {
 	return status == http.StatusConflict &&
-		typ != "resource_already_exists_exception" &&
-		!strings.Contains(text, "resource_already_exists") &&
-		!raceInRootCause &&
-		(!strings.Contains(text, "index [") || !strings.Contains(text, "already exists")) &&
+		!raceSignature(typ, text) &&
+		!raceInNested &&
 		(typ == "version_conflict_engine_exception" ||
 			strings.Contains(text, "version_conflict") ||
 			strings.Contains(text, "version conflict") ||
