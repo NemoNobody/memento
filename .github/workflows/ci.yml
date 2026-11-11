@@ -3,7 +3,9 @@ name: CI
 on:
   push:
     branches: [master]
+    tags: ["v*"]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -65,7 +67,11 @@ jobs:
   # know it actually works there is to run it. The runner's login keychain is
   # unlocked, and the test namespaces its entry, so nothing of the runner's is
   # touched.
+  # macOS is gated: the Keychain provider is worth verifying for a release, but
+  # a macOS runner bills 10x minutes on a private repo, and every push does not
+  # need it. Run it on demand with `gh workflow run ci.yml`; releases trigger it.
   macos:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7

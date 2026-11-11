@@ -126,7 +126,9 @@ func TestCollectStatusConfigChain(t *testing.T) {
 	t.Setenv("MEMENTO_CONF", "")
 	t.Setenv("OPENSEARCH_URL", "")
 	t.Setenv("OPENSEARCH_PASSWORD", "")
-	t.Setenv("HOME", dir) // ~/.memento.conf absent; the file present is ./memento.conf
+	// Both names: os.UserHomeDir reads USERPROFILE on Windows.
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
 
 	rep := collectStatus(context.Background(), "", true)
 	if rep.ConfigFile == "memento.conf" || rep.ConfigFile == filepath.Join(dir, "memento.conf") {

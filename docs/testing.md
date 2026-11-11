@@ -60,7 +60,13 @@ turns on:
 
 - Linux: `make test-keyring` in the `build-test` job (Secret Service over D-Bus).
 - macOS: the `macos` job runs `MEMENTO_KEYRING_TEST=1 go test ./internal/keyring/`
-  against the runner's login Keychain (the zalando provider: `security` CLI).
+  against the runner's login Keychain (the zalando provider: `security` CLI). It is
+  gated to tags and `workflow_dispatch`: a macOS runner bills 10x minutes on a
+  private repo, so a release check is the right cadence (`gh workflow run ci.yml`
+  forces it).
+- Windows: the `windows` job runs `vet`, `build` and the platform-neutral
+  packages' tests on every push — it caught a HOME-vs-USERPROFILE assumption in
+  a config test the Linux suite could never see.
 - Windows: build + platform-neutral tests only; the Credential Manager path is
   unverified (no runner coverage yet).
 

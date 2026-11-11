@@ -165,7 +165,7 @@ func TestFindConfigPathNoCWD(t *testing.T) {
 		t.Fatal(err)
 	}
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 	t.Setenv("MEMENTO_CONF", "")
 	t.Chdir(dir)
 
@@ -678,7 +678,7 @@ func TestFindConfigPath(t *testing.T) {
 	// case 4: home .memento.conf wins (no cwd or exec file).
 	removeFile(t, execConf)
 	homeDir := t.TempDir()
-	t.Setenv("HOME", homeDir)
+	setHome(t, homeDir)
 	homeFile := filepath.Join(homeDir, ".memento.conf")
 	if err := os.WriteFile(homeFile, []byte(`{}`), 0644); err != nil {
 		t.Fatalf("write home .memento.conf: %v", err)
@@ -690,7 +690,7 @@ func TestFindConfigPath(t *testing.T) {
 
 	// case 5: nothing found.
 	removeFile(t, homeFile)
-	t.Setenv("HOME", t.TempDir())
+	setHome(t, t.TempDir())
 	if p := FindConfigPath(); p != "" {
 		t.Errorf("no-file path = %q, want empty", p)
 	}
@@ -711,4 +711,14 @@ func TestNormalizeRender(t *testing.T) {
 			t.Errorf("normalizeRender(%q) must be refused", bad)
 		}
 	}
+}
+
+// setHome points the user home at dir on every platform: os.UserHomeDir reads
+// USERPROFILE on Windows and $HOME elsewhere. Setting only HOME passes on
+// Linux and leaves the Windows CI job with an empty home (the job exists to
+// catch exactly this class of platform assumption).
+func setHome(t *testing.T, dir string) {
+	t.Helper()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
 }
