@@ -77,8 +77,9 @@ func TestPermWarning(t *testing.T) {
 // TestStatusEnvVarsMatchConfig pins the "kept in sync" claim of
 // statusEnvVars: every env variable config.LoadConfigFrom reads must be
 // listed in status (names only), and the list must not name a variable the
-// loader no longer reads. The comment alone drifted once already (the render
-// trio went missing in round 5); the source of the loader is the contract.
+// loader no longer reads. A hand-maintained doc comment drifted before (three
+// render env names silently went missing), so the loader's source — not the
+// comment — is the contract this test pins.
 func TestStatusEnvVarsMatchConfig(t *testing.T) {
 	src, err := os.ReadFile("../internal/config/config.go")
 	if err != nil {

@@ -63,7 +63,7 @@ Disallow: /private
 	}
 }
 
-// TestRobotsGroupUnion (round 4, RFC 9309 2.2.1): when the same agent
+// TestRobotsGroupUnion (RFC 9309 2.2.1): when the same agent
 // appears in several groups, their rules are COMBINED into one — files
 // commonly append extra groups, and any single-group pick (first or last)
 // silently drops half the stated policy. The exact-agent class supersedes
@@ -247,7 +247,7 @@ func TestRobotsWildcards(t *testing.T) {
 	}{
 		{"/x.php", false},
 		{"/a/b.php", false},
-		{"/x.php.php", false}, // round 2: the leftmost ".php" ending mid-path must not rescue the URL
+		{"/x.php.php", false}, // ".php" is end-anchored: the mid-path ".php" must not rescue the URL
 		{"/x.php?y=1", true},  // '$': the match must reach the path end
 		{"/x.php5", true},     // '$' end-anchor
 		{"/private/x", false},
@@ -274,10 +274,9 @@ func TestRobotsWildcards(t *testing.T) {
 	}
 }
 
-// Round 2: the anchored suffix is cut away BEFORE the middle parts match.
-// Leftmost checking let "/*.php$" miss "/x.php.php", and a left-matched
-// middle part could overlap the suffix region and deny paths the rule does
-// not cover.
+// The anchored suffix is cut away BEFORE the middle parts match. Leftmost
+// checking let "/*.php$" miss "/x.php.php", and a left-matched middle part
+// could overlap the suffix region and deny paths the rule does not cover.
 func TestMatchRobotPathAnchoredSuffix(t *testing.T) {
 	cases := []struct {
 		rule, path string

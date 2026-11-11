@@ -149,9 +149,9 @@ func TestNormalizeURL(t *testing.T) {
 		strings.Contains(got, "utm_") || !strings.Contains(got, "sig=") {
 		t.Errorf("utm cut broken: %q, %v", got, err)
 	}
-	// Round 2: "utm_" inside a VALUE (a redirect target, a signature
-	// fragment) must not trigger the rebuild: the exact encoding and order
-	// of a signed query survive.
+	// "utm_" inside a VALUE (a redirect target, a signature fragment) must
+	// not trigger the rebuild: the exact encoding and order of a signed
+	// query survive.
 	if got, err := NormalizeURL("https://ex.com/p?next=%2Fsearch%3Futm_source%3Dx&sig=a+b", true); err != nil ||
 		!strings.Contains(got, "sig=a+b") || !strings.Contains(got, "utm_source") {
 		t.Errorf("utm-in-value must not rebuild the query: %q, %v", got, err)

@@ -138,8 +138,8 @@ func isAlreadyExists(err error) bool {
 // The predicate also DECIDES SUCCESS (the deterministic-id journal
 // collision), and a middlebox-rewritten 409 must not fake an append that
 // never happened — so both shapes delegate to ONE conflictAnswer gate
-// (kept shared on purpose: fifteen review rounds kept re-opening holes
-// where only one branch was patched) that requires, before any acceptor
+// (kept shared on purpose: whenever the two branches were patched apart,
+// one of them kept re-opening a hole) that requires, before any acceptor
 // answers:
 //   - the body's declared 409. For classified bodies opensearch-go
 //     takes the status from the body (the typed errors carry no
