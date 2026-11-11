@@ -362,6 +362,53 @@ Then set `opensearch_user: "memento"` in the config and run `memento creds set`
   every client start — so hand-edits to the stamped replica count do not
   survive; pin the count with `index_replicas` in the memento config instead.
 
+### Shared store: several users, project separation
+
+A single OpenSearch can back many people and many agents — that is one of the
+reasons the store is a server, not an embedded file. Two ways to draw the
+boundaries, composable:
+
+- **Separate index namespaces (simplest, hard isolation).** Give each team its
+  own config: `index_name: team-a-memento`, `docs_index_name:
+  team-a-memento-docs`. Everything the app manages — journal indices,
+  templates, pipelines — derives from the prefix, so namespaces never touch.
+  One least-privilege role per namespace (swap the patterns in the recipe
+  above). Cross-team visibility then requires an explicit shared project or a
+  second config, by choice.
+- **Document-Level Security (same index, filtered views).** Keep one shared
+  index set and create a role per group whose index_permissions carry a DLS
+  query on the `project` field:
+
+  ```json
+  {"index_patterns": ["memento"],
+   "dls": "{\"term\":{\"project\":\"team-a\"}}",
+   "allowed_actions": ["read", "search", "indices:admin/get",
+                       "indices:data/write/index",
+                       "indices:data/write/update", "indices:admin/create"]}
+  }
+  ```
+
+  DLS is enforced by the server on every search **and** on get-by-id (a
+  foreign fact simply reads as "not found"), and it applies to the journal
+  too — journal entries carry the same `project` field, so history visibility
+  follows fact visibility. Use `role` + `rolesmapping` per group; a user may
+  hold several such roles to see several projects.
+
+Two honest caveats for the shared layout:
+
+- `manage_index_templates`/`manage_ingest_pipelines` are cluster-level: every
+  memento user's client keeps the journal template aligned (see above). For a
+  cooperative shared store this is fine; if tenants must not touch shared
+  infra, run one service account that owns the infra and give humans DLS-only
+  read/write roles (writes work once the infra exists).
+- The store is still plaintext. Per-project DLS is *access control*, not
+  encryption: never put secrets in facts, docs or journal — the secret-guard
+  is there to keep even honest mistakes out.
+
+Per-user authorship then comes for free: each user's writes carry their
+server-authenticated name (`author: "..." (security)`), and the journal shows
+who changed what.
+
 The dev compose (`make dev-opensearch`) runs with the security plugin off and
 no auth at all — that is the documented dev posture (localhost-only bind).
 
