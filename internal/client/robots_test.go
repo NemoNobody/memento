@@ -175,7 +175,7 @@ func TestCheckRobots(t *testing.T) {
 	ctx := context.Background()
 	cfg := robotsCfg()
 
-	// Unique port per test isolates the in-process robots cache.
+	// newRobotsServer resets the in-process robots cache around the test.
 	if err := CheckRobots(ctx, cfg, srv.URL+"/secret"); err == nil {
 		t.Error("disallowed path must be rejected")
 	} else if !strings.Contains(err.Error(), "robots.txt") {
