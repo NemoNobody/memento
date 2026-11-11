@@ -37,13 +37,30 @@ TYPE_MAP = {
 }
 
 
+META_FIELDS = [
+    # OSD exposes _index as a meta field; without it in the saved field list
+    # aggregations on it fail with "Could not locate that index-pattern-field"
+    {
+        "name": "_index",
+        "type": "string",
+        "esTypes": ["_index"],
+        "count": 0,
+        "scripted": False,
+        "searchable": True,
+        "aggregatable": True,
+        "readFromDocValues": False,
+    },
+]
+
+
 def flatten(props, prefix=""):
     fields = []
     for name, spec in props.items():
         path = f"{prefix}{name}"
         t = spec.get("type")
-        if t is None and "properties" in spec:  # object: walk in
-            fields.extend(flatten(spec["properties"], path + "."))
+        if t is None:
+            if "properties" in spec:  # object: walk in
+                fields.extend(flatten(spec["properties"], path + "."))
             continue
         mapped = TYPE_MAP.get(t)
         if mapped is None:
@@ -61,7 +78,7 @@ def flatten(props, prefix=""):
         })
         if "fields" in spec:  # multi-fields (e.g. text + .keyword subfield)
             for sub, sspec in spec["fields"].items():
-                sm = TYPE_MAP.get(sspec.get("type"))
+                sm = TYPE_MAP.get(sspec.get("type") or "")
                 if sm is None:
                     continue
                 st, sa, sd = sm
@@ -80,14 +97,15 @@ def flatten(props, prefix=""):
 
 def main():
     conf_path = sys.argv[1] if len(sys.argv) > 1 else "memento.conf"
-    conf = json.load(open(conf_path, encoding="utf-8"))
+    with open(conf_path, encoding="utf-8") as f:
+        conf = json.load(f)
     url = os.environ.get("MEMENTO_OS_URL") or conf.get("opensearch_url")
     user = os.environ.get("MEMENTO_OS_USER") or conf.get("opensearch_user", "admin")
     pw = os.environ.get("OPENSEARCH_PASSWORD")
     if not pw:
         memento = os.environ.get("MEMENTO_BIN") or "memento"
         pw = subprocess.run([memento, "creds", "get"],
-                            capture_output=True, text=True).stdout.strip()
+                            capture_output=True, text=True, check=False).stdout.strip()
     if not url or not pw:
         sys.exit("cluster url/password unresolved (config + creds get or env)")
 
@@ -105,7 +123,11 @@ def main():
         "memento-docs": "memento-docs",
     }
     ndjson_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "objects.ndjson")
-    objs = [json.loads(l) for l in open(ndjson_path, encoding="utf-8")]
+    objs = []
+    with open(ndjson_path, encoding="utf-8") as f:
+        for line in f:
+            if line.strip():
+                objs.append(json.loads(line))
 
     for o in objs:
         if o["type"] != "index-pattern":
@@ -124,7 +146,7 @@ def main():
             props = entry.get("mappings", {}).get("properties", {})
             for name, spec in props.items():
                 merged.setdefault(name, spec)
-        fields = sorted(flatten(merged), key=lambda f: f["name"])
+        fields = sorted(flatten(merged) + [dict(m) for m in META_FIELDS], key=lambda f: f["name"])
         o["attributes"]["fields"] = json.dumps(fields)
         print(f"{title}: {len(fields)} field(s) baked")
 

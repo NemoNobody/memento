@@ -48,6 +48,10 @@ Bundle invariants (OSD 3.x quirks, all learned live):
   "panel_N","gridData":{"x","y","w","h","i"},"embeddableConfig":{}}`);
   the map form `{"p1":{...}}` saves without complaint but the dashboard
   renders completely empty;
+- the classic grid is **12 columns** wide: keep `x+w<=12`, overflowing
+  panels stack/squash near the origin;
+- patterns must list the `_index` meta field explicitly (aggregatable
+  "string", esType `_index`) for aggs on it (gen_fields.py META_FIELDS);
 - `visState` aggs live at the TOP level (`{"title","type","params",
   "aggs":[...]}`), not under `params`;
 - the dashboard pins `timeRestore` + `now-90d..now`, otherwise the
