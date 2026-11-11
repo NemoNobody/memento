@@ -459,9 +459,12 @@ func TestJournalCollisionStringShape(t *testing.T) {
 		}
 	})
 	t.Run("index-level already-exists is not a doc collision", func(t *testing.T) {
-		// One body per string-shape guard, each lacking the marker the
-		// other guard reads: deleting either guard individually must
-		// fail one of these bodies.
+		// One body per marker: the first pins the string branch's
+		// resource_already_exists guard alone (no "index [" marker);
+		// the second body alone would still fail via the compound's
+		// "already exists" half, so the "index [" half is pinned where a
+		// body carries the marker with real conflict wording (the
+		// both-shapes success loop below).
 		for _, body := range []string{
 			// names the exception type, no "index [" marker
 			`{"error":"resource_already_exists_exception: [k2] already exists","status":409}`,
