@@ -180,7 +180,7 @@ the fact doc:
   reserved for same-value re-confirmation by a different author; `retire`
   marks the verified→obsolete transition, so "when and by whom was this
   retired" is a query), `value`,
-  `notes`, `source`, `created_at`, author fields. `op_type=create`: appends
+  `notes`, `source`, `keywords`, `created_at`, author fields. `op_type=create`: appends
   never overwrite each other, there is no CAS.
 - Entries live in `<index>-history-<period-date>`: the period granularity is
   `history_index_period` (config; env `MEMENTO_HISTORY_PERIOD`; default
@@ -278,7 +278,9 @@ a `keyword` array: exact match, no analysis. That makes tags the cheapest
 cross-project slice (`memento_search` with `keyword: "perf"` over all projects)
 and the association layer an agent needs without a graph database. An empty
 list on a re-add leaves the stored tags alone (the notes/source convention);
-keywords are a stored qualifier, not a journaled observation.
+keywords are a stored qualifier, not a journaled observation. Every accepted
+value's journal entry carries the tag set as of that moment, so re-tagging is
+safe: the previous set stays recoverable from the entry that carried it.
 
 ## Advisory contract and precedence
 

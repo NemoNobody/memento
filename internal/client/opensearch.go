@@ -571,6 +571,9 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 			if f.Notes != "" {
 				stated.Notes = f.Notes
 			}
+			if len(f.Keywords) > 0 {
+				stated.Keywords = f.Keywords
+			}
 			if f.Source != "" {
 				stated.Source = f.Source
 			}
@@ -654,6 +657,11 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 	if stated.Notes == "" {
 		stated.Notes = existing.Notes
 	}
+	if len(stated.Keywords) == 0 {
+		// Tags follow the notes/source rule: omitted means "keep the stored
+		// set", and the journaled snapshot must state what the doc will hold.
+		stated.Keywords = existing.Keywords
+	}
 	entry := c.newJournalEntryFor(ctx, &stated, existing.FactID, f.ObservedAt)
 	ref := uuid.New().String()
 
@@ -723,6 +731,7 @@ func (c *Client) newJournalEntryFor(ctx context.Context, f *model.Fact, factID s
 		ts = time.Now().UTC()
 	}
 	e := model.NewJournalEntry(f.Key, factID, f.Project, f.Category, model.OpWrite, f.Value, f.Notes, f.Source, ts)
+	e.Keywords = f.Keywords
 	c.resolveAuthor(ctx).applyTo(e)
 	return e
 }

@@ -95,6 +95,7 @@ func buildJournalTemplateBody(prefix string, replicas int) map[string]interface{
 					"project":       map[string]interface{}{"type": "keyword"},
 					"category":      map[string]interface{}{"type": "keyword"},
 					"op":            map[string]interface{}{"type": "keyword"},
+					"keywords":      map[string]interface{}{"type": "keyword"},
 					"value":         map[string]interface{}{"type": "text"},
 					"notes":         map[string]interface{}{"type": "text"},
 					"source":        map[string]interface{}{"type": "keyword"},

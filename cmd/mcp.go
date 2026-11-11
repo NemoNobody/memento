@@ -1375,10 +1375,11 @@ type journalEntryView struct {
 	FactID       string    `json:"fact_id,omitempty" jsonschema:"stable fact identity the entry belongs to"`
 	Project      string    `json:"project,omitempty" jsonschema:"project of the entry"`
 	Category     string    `json:"category,omitempty" jsonschema:"category at the time of the entry"`
-	Op           string    `json:"op" jsonschema:"write (an accepted value) | rediscovery (reserved: same value, different author)"`
+	Op           string    `json:"op" jsonschema:"write (an accepted value) | rediscovery (reserved: same value, different author) | retire (verified→obsolete transition)"`
 	Value        string    `json:"value" jsonschema:"the accepted value at that moment"`
 	Notes        string    `json:"notes,omitempty" jsonschema:"notes shipped with the write"`
 	Source       string    `json:"source,omitempty" jsonschema:"source shipped with the write"`
+	Keywords     []string  `json:"keywords,omitempty" jsonschema:"tag set as of this accepted value (a tag-only change is a touch, so the previous set stays in the last entry that carried it)"`
 	CreatedAt    time.Time `json:"created_at" jsonschema:"writer-side observation time (UTC)"`
 	Author       string    `json:"author,omitempty" jsonschema:"who appended this entry (self-reported label)"`
 	AuthorSource string    `json:"author_source,omitempty" jsonschema:"security | config | os | none for this writer"`
@@ -1393,7 +1394,8 @@ func newJournalEntryViews(entries []model.JournalEntry) []journalEntryView {
 		views = append(views, journalEntryView{
 			FactKey: e.FactKey, FactID: e.FactID, Project: e.Project, Category: e.Category,
 			Op: e.Op, Value: e.Value, Notes: e.Notes, Source: e.Source, CreatedAt: e.CreatedAt,
-			Author: e.Author, AuthorSource: e.AuthorSource, Model: e.Model,
+			Keywords: e.Keywords,
+			Author:   e.Author, AuthorSource: e.AuthorSource, Model: e.Model,
 			Host: e.Host, Session: e.Session,
 		})
 	}

@@ -36,14 +36,18 @@ func ValidOp(op string) bool {
 type JournalEntry struct {
 	// FactKey is the fact key this entry observes; fact_id is kept so entries
 	// survive key renames and stay groupable.
-	FactKey   string    `json:"fact_key"`
-	FactID    string    `json:"fact_id,omitempty"`
-	Project   string    `json:"project,omitempty"`
-	Category  string    `json:"category,omitempty"`
-	Op        string    `json:"op"`
-	Value     string    `json:"value"`
-	Notes     string    `json:"notes,omitempty"`
-	Source    string    `json:"source,omitempty"`
+	FactKey  string `json:"fact_key"`
+	FactID   string `json:"fact_id,omitempty"`
+	Project  string `json:"project,omitempty"`
+	Category string `json:"category,omitempty"`
+	Op       string `json:"op"`
+	Value    string `json:"value"`
+	Notes    string `json:"notes,omitempty"`
+	Source   string `json:"source,omitempty"`
+	// Keywords is the tag set as of this accepted value. Tags themselves are a
+	// stored qualifier (a tag-only change is a touch, not a journal entry), so
+	// the previous set stays recoverable from the entry that carried it.
+	Keywords  []string  `json:"keywords,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 
 	// Authorship of this entry: who appended it (self-reported labels, see

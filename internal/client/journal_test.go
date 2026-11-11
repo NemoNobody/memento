@@ -1321,3 +1321,37 @@ func TestJournalInfra403SkipsCreate(t *testing.T) {
 		t.Errorf("journal appends = %d, want 1", len(journalAppends(fake)))
 	}
 }
+
+// TestAddJournalsKeywords pins that an accepted value's entry carries the tag
+// set. Tags are a stored qualifier (a tag-only change is a touch, not an entry),
+// so the previous set must stay recoverable from the last entry that carried it
+// — that is what makes re-tagging safe.
+func TestAddJournalsKeywords(t *testing.T) {
+	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
+		if code, body := journalRoutesOK(r); code != http.StatusInternalServerError {
+			return code, body
+		}
+		switch {
+		case r.Method == http.MethodGet && r.Path == "/memento/_doc/kw":
+			return http.StatusNotFound, `{"status":404,"error":"document_missing_exception"}`
+		case r.Method == http.MethodPut && r.Path == "/memento/_doc/kw":
+			return http.StatusOK, `{"result":"created","_seq_no":1,"_primary_term":1}`
+		case r.Method == http.MethodPost && r.Path == "/memento/_update/kw":
+			return http.StatusOK, `{"result":"updated"}`
+		}
+		return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Method + ` ` + r.Path + `"}`
+	})
+
+	f := model.NewFact("kw", "v", "config", "p", "user:confirmed", "")
+	f.Keywords = []string{"perf", "go"}
+	if _, err := c.Add(context.Background(), f); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	appends := journalAppends(fake)
+	if len(appends) != 1 {
+		t.Fatalf("journal appends = %d, want 1", len(appends))
+	}
+	if !strings.Contains(appends[0].Body, `"keywords":["perf","go"]`) {
+		t.Errorf("journal entry must carry the tag set: %s", appends[0].Body)
+	}
+}
