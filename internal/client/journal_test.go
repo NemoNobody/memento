@@ -459,12 +459,13 @@ func TestJournalCollisionStringShape(t *testing.T) {
 		}
 	})
 	t.Run("index-level already-exists is not a doc collision", func(t *testing.T) {
-		// One body per marker: the first pins the string branch's
-		// resource_already_exists guard alone (no "index [" marker);
-		// the second body alone would still fail via the compound's
-		// "already exists" half, so the "index [" half is pinned where a
-		// body carries the marker with real conflict wording (the
-		// both-shapes success loop below).
+		// First body pins the string resource_already_exists guard alone
+		// (no "index [" marker). The second body alone would still fail
+		// via the compound's "already exists" half — the "index [" half
+		// of the compound is pinned by the MARKER-FREE "already exists"
+		// success bodies below (deleting it turns the guard into a
+		// blanket "already exists" exclusion), and the "already exists"
+		// half by the marker-plus-conflict-wording success bodies.
 		for _, body := range []string{
 			// names the exception type, no "index [" marker
 			`{"error":"resource_already_exists_exception: [k2] already exists","status":409}`,
@@ -572,6 +573,33 @@ func TestJournalCollisionStringShape(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestUUIDAppendCollisionIsNotSuccess pins the idempotent flag's other
+// half: the correction path's journal ref is a fresh uuid that cannot
+// pre-exist, so a 409 with collision wording there is an anomaly (a
+// rewritten body or middlebox) — the accepted correction must report
+// the lagged entry, never return a clean success whose current_ref
+// points at an entry that was never written.
+func TestUUIDAppendCollisionIsNotSuccess(t *testing.T) {
+	c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+		if code, body := journalInfraOK(r); code != http.StatusInternalServerError {
+			return code, body
+		}
+		switch {
+		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
+			return http.StatusOK, `{"_index":"memento","_id":"k","_version":1,"_seq_no":1,"_primary_term":1,"found":true,"_source":{"key":"k","value":"old","category":"config","project":"p","status":"verified"}}`
+		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+		case r.Method == http.MethodPost && strings.HasPrefix(r.Path, "/memento-history-"):
+			return http.StatusConflict, `{"error":"version conflict, document already exists","status":409}`
+		}
+		return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Method + " " + r.Path + `"}`
+	})
+	_, err := c.Add(context.Background(), model.NewFact("k", "new", "config", "p", "s", ""))
+	if err == nil || !strings.Contains(err.Error(), "journal entry lagged") {
+		t.Fatalf("a 409 over a fresh uuid ref must report the lagged entry, got: %v", err)
+	}
 }
 
 func TestMigrateFactMovesArrayToJournal(t *testing.T) {

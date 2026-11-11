@@ -395,7 +395,7 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 				ts = f.UpdatedAt
 			}
 			ref := journalEntryID(f.Key, model.OpWrite, f.Value, f.Notes, f.Source, ts)
-			if _, jErr := c.appendJournalID(ctx, c.newJournalEntryFor(ctx, f, f.FactID, ts), ref, ""); jErr != nil {
+			if _, jErr := c.appendJournalID(ctx, c.newJournalEntryFor(ctx, f, f.FactID, ts), ref, "", true); jErr != nil {
 				return AddResult{Created: true, Changed: true}, fmt.Errorf("add: the fact doc was stored, the journal entry lagged: %w", jErr)
 			}
 			if lErr := c.linkCurrentRef(ctx, f.Key, ref, birthSeq, birthTerm); lErr != nil {
@@ -488,8 +488,8 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 			return AddResult{}, wrapWriteError("add fact", err)
 		}
 		if entry != nil {
-			if _, jErr := c.appendJournalID(ctx, entry, ref, ""); jErr != nil {
-				return AddResult{Changed: true}, fmt.Errorf("add: resurrection accepted, the journal entry lagged: %w", jErr)
+			if _, jErr := c.appendJournalID(ctx, entry, ref, "", false); jErr != nil {
+				return AddResult{Changed: true}, fmt.Errorf("add: correction accepted, the journal entry lagged: %w", jErr)
 			}
 		}
 		// Same value: notes/source moved, observed_at must not (the
@@ -555,7 +555,7 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 		// doc-first order is what makes this answer truthful).
 		return AddResult{}, wrapWriteError("add fact", err)
 	}
-	if _, jErr := c.appendJournalID(ctx, entry, ref, ""); jErr != nil {
+	if _, jErr := c.appendJournalID(ctx, entry, ref, "", false); jErr != nil {
 		return AddResult{Changed: true, PreviousSummary: existing.Summary}, fmt.Errorf("add: correction accepted, the journal entry lagged: %w", jErr)
 	}
 	// The value was accepted as a new version (journal entry + correction):
@@ -884,7 +884,7 @@ func (c *Client) Obsolete(ctx context.Context, key, reason string) error {
 		return wrapWriteError("obsolete fact", err)
 	}
 	if entry != nil {
-		if _, jErr := c.appendJournalID(ctx, entry, currentRef, ""); jErr != nil {
+		if _, jErr := c.appendJournalID(ctx, entry, currentRef, "", false); jErr != nil {
 			return fmt.Errorf("obsolete: the transition was accepted, the journal entry lagged: %w", jErr)
 		}
 	}
@@ -1147,7 +1147,7 @@ func (c *Client) Patch(ctx context.Context, key string, p PatchFields) (PatchRes
 		return PatchResult{}, wrapWriteError("patch fact", err)
 	}
 	if entry != nil {
-		if _, jErr := c.appendJournalID(ctx, entry, currentRef, ""); jErr != nil {
+		if _, jErr := c.appendJournalID(ctx, entry, currentRef, "", false); jErr != nil {
 			return PatchResult{Changed: valueChanged || statusChanged, Status: newStatus}, fmt.Errorf("patch: accepted, the journal entry lagged: %w", jErr)
 		}
 	}

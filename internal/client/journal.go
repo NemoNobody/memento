@@ -179,7 +179,7 @@ func statusIs(err error, code int) bool {
 // AppendJournal appends one accepted entry (op_type=create: appends never
 // overwrite each other) and returns the entry id.
 func (c *Client) AppendJournal(ctx context.Context, e *model.JournalEntry) (string, error) {
-	return c.appendJournalID(ctx, e, "", "")
+	return c.appendJournalID(ctx, e, "", "", false)
 }
 
 // appendJournalID appends one entry, optionally under a caller-chosen doc
@@ -188,9 +188,13 @@ func (c *Client) AppendJournal(ctx context.Context, e *model.JournalEntry) (stri
 // migration path uses this to survive partial-failure reruns. indexName
 // overrides the target index: the migration derives it from the entry's
 // stored observation time (stable), not the display timestamp (the
-// rerun's clock), so a rerun crossing a period boundary lands on the SAME
-// doc id in the SAME index and the collision holds.
-func (c *Client) appendJournalID(ctx context.Context, e *model.JournalEntry, id string, indexName string) (string, error) {
+// doc id in the SAME index and the collision holds. idempotent marks ids
+// derived from the fact's content (journalEntryID hashes): only those can
+// legitimately collide on a rerun. Fresh uuid refs (the touch/resurrect/
+// correction paths) can never pre-exist, so a 409 there is an anomaly — a
+// rewritten body or a middlebox — and must surface, never masquerade as a
+// completed append with a dangling current_ref.
+func (c *Client) appendJournalID(ctx context.Context, e *model.JournalEntry, id string, indexName string, idempotent bool) (string, error) {
 	if !model.ValidOp(e.Op) {
 		return "", fmt.Errorf("journal: unknown op %q", e.Op)
 	}
@@ -215,7 +219,7 @@ func (c *Client) appendJournalID(ctx context.Context, e *model.JournalEntry, id 
 		},
 	})
 	if err != nil {
-		if id != "" && isVersionConflict(err) {
+		if idempotent && isVersionConflict(err) {
 			// The entry is already there (a retry of a deterministic id):
 			// the append succeeded before the caller's view of it broke.
 			return id, nil
@@ -564,7 +568,7 @@ func (c *Client) MigrateFact(ctx context.Context, f *model.Fact, now time.Time) 
 		// now-fallback): the collision must find the entry the previous run
 		// wrote, and doc ids are per-index.
 		histIdx := journalIndexName(c.cfg.IndexName, c.cfg.HistoryIndexPeriod, idTs)
-		if _, err := c.appendJournalID(ctx, e, journalEntryID(f.Key, model.OpWrite, h.Value, "", h.Source, idTs), histIdx); err != nil {
+		if _, err := c.appendJournalID(ctx, e, journalEntryID(f.Key, model.OpWrite, h.Value, "", h.Source, idTs), histIdx, true); err != nil {
 			return appended, fmt.Errorf("migrate %q: history entry: %w", f.Key, err)
 		}
 		appended++
@@ -588,7 +592,7 @@ func (c *Client) MigrateFact(ctx context.Context, f *model.Fact, now time.Time) 
 		info.applyTo(cur)
 		ref = journalEntryID(f.Key, model.OpWrite, f.Value, f.Notes, f.Source, idTs)
 		curIdx := journalIndexName(c.cfg.IndexName, c.cfg.HistoryIndexPeriod, idTs)
-		if _, err := c.appendJournalID(ctx, cur, ref, curIdx); err != nil {
+		if _, err := c.appendJournalID(ctx, cur, ref, curIdx, true); err != nil {
 			return appended, fmt.Errorf("migrate %q: current entry: %w", f.Key, err)
 		}
 		appended++
