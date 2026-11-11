@@ -2,12 +2,14 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/NemoNobody/memento/internal/model"
+	"github.com/opensearch-project/opensearch-go/v4"
 )
 
 // CAS contract under test: snapshot-derived writes (the touch, the
@@ -263,6 +265,59 @@ func TestAddGatewayStatusRewriteIsNotConflict(t *testing.T) {
 	}
 	if err == nil || !strings.Contains(err.Error(), "version_conflict_engine_exception") {
 		t.Fatalf("the upstream failure must surface honestly, got: %v", err)
+	}
+}
+
+// TestIsVersionConflictDelegatesBothShapes pins the shape wiring itself:
+// both error shapes must flow through the shared conflictAnswer gate,
+// so a future edit that re-inlines a diverging predicate into either
+// branch fails HERE, not only at some call-site fixture. The table is
+// built from the same bodies as the call-site pins.
+func TestIsVersionConflictDelegatesBothShapes(t *testing.T) {
+	raceRC := `{"error":{"type":"version_conflict_engine_exception","reason":"[k2] already exists","root_cause":[{"type":"resource_already_exists_exception","reason":"index [memento-history-2026-11/uuid] already exists"}]},"status":409}`
+	mkStruct := func(body string) *opensearch.StructError {
+		var ste opensearch.StructError
+		if err := json.Unmarshal([]byte(body), &ste); err != nil {
+			t.Fatalf("fixture %s: %v", body, err)
+		}
+		return &ste
+	}
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"struct canonical conflict", mkStruct(casConflictBody), true},
+		{"struct doc-create conflict", mkStruct(`{"error":{"type":"version_conflict_engine_exception","reason":"[k]: version conflict, document already exists (current version [3])"},"status":409}`), true},
+		{"struct race type", mkStruct(`{"error":{"type":"resource_already_exists_exception","reason":"index [memento-history-2026-11/uuid] already exists"},"status":409}`), false},
+		{"struct race in root_cause", mkStruct(raceRC), false},
+		{"struct status rewritten to 500", mkStruct(`{"error":{"type":"version_conflict_engine_exception","reason":"[k]: version conflict, required seq_no [5]"},"status":500}`), false},
+		{"struct sub-409 wording", mkStruct(`{"error":{"type":"mapper_parsing_exception","reason":"document already exists"},"status":400}`), false},
+		{"string conflict", &opensearch.StringError{Err: "document already exists", Status: http.StatusConflict}, true},
+		{"string race marker", &opensearch.StringError{Err: "index [memento-history-2026-11/uuid] already exists", Status: http.StatusConflict}, false},
+		{"string race type name", &opensearch.StringError{Err: "resource_already_exists_exception: [k2] already exists", Status: http.StatusConflict}, false},
+		{"string sub-409", &opensearch.StringError{Err: "document already exists", Status: http.StatusBadRequest}, false},
+	} {
+		if got := isVersionConflict(tc.err); got != tc.want {
+			t.Errorf("%s: isVersionConflict = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestGatewayHTTPErrorWithConflictBodyIsConflict documents the OTHER
+// half of the status contract: the typed errors carry no transport
+// status (opensearch-go parses the body and drops the HTTP code), so
+// when the gateway rewrites HTTP 409→500 but passes a genuine conflict
+// body through, the body's declared 409 wins and the write fails as a
+// named conflict — honest "re-read and retry" beats losing the
+// conflict signal entirely (which would fake append success).
+func TestGatewayHTTPErrorWithConflictBodyIsConflict(t *testing.T) {
+	var got recordedRequest
+	c, _ := newFakeClient(t, casRespond(casSource, http.StatusInternalServerError, casConflictBody, &got))
+
+	_, err := c.Add(context.Background(), model.NewFact("k", "same", "config", "p", "test:cas", "retouched"))
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("a genuine conflict body under a rewritten HTTP code must stay a conflict, got: %v", err)
 	}
 }
 

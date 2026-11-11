@@ -477,6 +477,10 @@ func TestJournalCollisionStringShape(t *testing.T) {
 			// wording — the guards must outrank the type acceptor, or a
 			// rewritten body fakes the append through the canonical door
 			`{"error":{"type":"version_conflict_engine_exception","reason":"index [memento-history-2026-11/uuid] already exists"},"status":409}`,
+			// struct shape: top type AND reason rewritten off the race
+			// signature, but the root_cause array still names the index
+			// race — the guard must read it too
+			`{"error":{"type":"mapper_parsing_exception","reason":"[k2] already exists","root_cause":[{"type":"resource_already_exists_exception","reason":"index [memento-history-2026-11/uuid] already exists"}]},"status":409}`,
 		} {
 			c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
 				if code, b := journalInfraOK(r); code != http.StatusInternalServerError {

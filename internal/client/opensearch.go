@@ -127,43 +127,63 @@ func isAlreadyExists(err error) bool {
 // isNotFound, it answers from either error shape the client can produce.
 // The predicate also DECIDES SUCCESS (the deterministic-id journal
 // collision), and a middlebox-rewritten 409 must not fake an append that
-// never happened — so both branches run the SAME guard set before any
-// acceptor answers:
-//   - status 409 (a gateway rewriting the status while keeping the
-//     engine's type is not an engine conflict; trusting it sends CAS
-//     callers into a futile re-read-and-retry loop on a permanent error,
-//     and fakes success at the append site),
-//   - no index-creation-race signature: the engine's index-race body
-//     carries the "index [" marker together with "already exists" (and
-//     may name resource_already_exists_exception in type or reason);
-//     doc-level collisions name the document id, never "index [". The
-//     race writes NO document, so reading it as a doc collision would
-//     fake a journal append and dangle current_ref — and the guards must
-//     cover the canonical type too: a middlebox can rewrite type AND
-//     keep the race wording, or keep the type AND rewrite the status,
-//     and either combination decided success in one shape only.
+// never happened — so both shapes delegate to ONE conflictAnswer gate
+// (kept shared on purpose: fifteen review rounds kept re-opening holes
+// where only one branch was patched) that requires, before any acceptor
+// answers:
+//   - the body's declared 409. The typed errors carry no transport
+//     status (opensearch-go parses the body and drops the HTTP code),
+//     so the body's self-reported status is the only signal — a gateway
+//     that rewrites the HTTP code but passes a genuine conflict body
+//     still classifies as conflict by contract (pinned);
+//   - no index-creation-race signature anywhere in the body: the race
+//     writes NO document, so reading it as a doc collision would fake a
+//     journal append and dangle current_ref. The race names
+//     resource_already_exists_exception (type or reason, including the
+//     root_cause array) or carries the "index ["+"already exists"
+//     marker pair; doc-level collisions name the document id, never
+//     "index [".
 //
-// On top of the guards the struct branch accepts the canonical
-// error.type or the reason wording; the string branch (type is gone in
-// that shape) accepts only the wording. Genuine engine collisions name
-// themselves in either shape.
+// Acceptors per shape: struct answers from error.type (canonical
+// version_conflict_engine_exception) or the reason wording; string
+// shape (error.type is gone there) from the wording only. Genuine
+// engine collisions name themselves in either shape, across 2.x/3.x
+// wording (the acceptor vocabulary — "version conflict", "already
+// exists", the exception names — has been stable since 6.x).
 func isVersionConflict(err error) bool {
 	var ste *opensearch.StructError
 	if errors.As(err, &ste) {
-		return ste.Status == http.StatusConflict &&
-			ste.Err.Type != "resource_already_exists_exception" &&
-			!strings.Contains(ste.Err.Reason, "resource_already_exists") &&
-			(!strings.Contains(ste.Err.Reason, "index [") || !strings.Contains(ste.Err.Reason, "already exists")) &&
-			(ste.Err.Type == "version_conflict_engine_exception" ||
-				strings.Contains(ste.Err.Reason, "version_conflict") ||
-				strings.Contains(ste.Err.Reason, "version conflict") ||
-				strings.Contains(ste.Err.Reason, "already exists"))
+		return conflictAnswer(ste.Status, ste.Err.Type, ste.Err.Reason, rootCauseNamesIndexRace(ste.Err.RootCause))
 	}
 	var se *opensearch.StringError
-	return errors.As(err, &se) && se.Status == http.StatusConflict &&
-		!strings.Contains(se.Err, "resource_already_exists") &&
-		(!strings.Contains(se.Err, "index [") || !strings.Contains(se.Err, "already exists")) &&
-		(strings.Contains(se.Err, "version_conflict") || strings.Contains(se.Err, "version conflict") || strings.Contains(se.Err, "already exists"))
+	return errors.As(err, &se) && conflictAnswer(se.Status, "", se.Err, false)
+}
+
+// conflictAnswer is the single shared gate both shapes flow through —
+// see isVersionConflict for the why.
+func conflictAnswer(status int, typ, text string, raceInRootCause bool) bool {
+	return status == http.StatusConflict &&
+		typ != "resource_already_exists_exception" &&
+		!strings.Contains(text, "resource_already_exists") &&
+		!raceInRootCause &&
+		(!strings.Contains(text, "index [") || !strings.Contains(text, "already exists")) &&
+		(typ == "version_conflict_engine_exception" ||
+			strings.Contains(text, "version_conflict") ||
+			strings.Contains(text, "version conflict") ||
+			strings.Contains(text, "already exists"))
+}
+
+// rootCauseNamesIndexRace catches a middlebox that rewrote the
+// top-level type and reason off the race signature but left the engine
+// naming the index race in the root_cause array.
+func rootCauseNamesIndexRace(causes []opensearch.RootCause) bool {
+	for _, rc := range causes {
+		if rc.Type == "resource_already_exists_exception" ||
+			strings.Contains(rc.Reason, "resource_already_exists") {
+			return true
+		}
+	}
+	return false
 }
 
 // isClusterBlock reports whether the error is OpenSearch refusing a write
