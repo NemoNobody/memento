@@ -131,11 +131,17 @@ func isAlreadyExists(err error) bool {
 // genuine engine collisions name themselves in either shape. The substring
 // fallbacks require status 409 so unrelated 4xx wording (e.g. a 400 whose
 // reason mentions an index that already exists) cannot read as a collision.
+// resource_already_exists_exception is excluded from the fallback even at
+// 409: it is the INDEX-level race (two processes auto-creating the same
+// dated history index), where no document was written — reading it as a
+// doc collision would fake a journal append that never happened. The
+// canonical collision type needs no fallback (it matches on type above).
 func isVersionConflict(err error) bool {
 	var ste *opensearch.StructError
 	if errors.As(err, &ste) {
 		return ste.Err.Type == "version_conflict_engine_exception" ||
-			(ste.Status == http.StatusConflict &&
+			(ste.Err.Type != "resource_already_exists_exception" &&
+				ste.Status == http.StatusConflict &&
 				(strings.Contains(ste.Err.Reason, "version conflict") ||
 					strings.Contains(ste.Err.Reason, "already exists")))
 	}

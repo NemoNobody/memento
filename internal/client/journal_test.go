@@ -429,6 +429,26 @@ func TestJournalCollisionStringShape(t *testing.T) {
 			t.Errorf("appended = %d, want 1 (reason-substring collision-as-success)", appended)
 		}
 	})
+	t.Run("index-level already-exists is not a doc collision", func(t *testing.T) {
+		c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+			if code, body := journalInfraOK(r); code != http.StatusInternalServerError {
+				return code, body
+			}
+			switch {
+			case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-"):
+				return http.StatusConflict, `{"error":{"type":"resource_already_exists_exception","reason":"index [memento-history-2026-11/uuid] already exists"},"status":409}`
+			}
+			return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Method + " " + r.Path + `"}`
+		})
+		f := model.NewFact("k", "v", "config", "p", "s", "")
+		appended, err := c.MigrateFact(context.Background(), f, time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC))
+		if err == nil || !strings.Contains(err.Error(), "journal append") {
+			t.Fatalf("the index-creation race must fail the append honestly: %v", err)
+		}
+		if appended != 0 {
+			t.Errorf("appended = %d, want 0: no document was written", appended)
+		}
+	})
 }
 
 func TestMigrateFactMovesArrayToJournal(t *testing.T) {
