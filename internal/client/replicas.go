@@ -55,6 +55,7 @@ func (c *Client) reconcileReplicas(ctx context.Context) {
 	c.replicasFixOnce.Do(func() {
 		c.fixIndexReplicas(ctx, c.cfg.IndexName, desired)
 		c.fixIndexReplicas(ctx, c.cfg.DocsIndexName, desired)
+		c.fixHistoryReplicas(ctx, desired)
 	})
 }
 
@@ -78,14 +79,44 @@ func (c *Client) fixIndexReplicas(ctx context.Context, index string, desired int
 	if !ok {
 		return
 	}
-	var settings map[string]json.RawMessage
-	if err := json.Unmarshal(idx.Settings, &settings); err != nil {
+	if repDrifted(idx.Settings, desired) {
+		c.putReplicas(ctx, index, desired)
+	}
+}
+
+// fixHistoryReplicas closes the same loop for the period indices the journal
+// template already stamped: a cluster that grew after they were created must
+// replicate their history too, not only future periods. One wildcard GET, a
+// corrective PUT only for the indices that actually drifted.
+func (c *Client) fixHistoryReplicas(ctx context.Context, desired int) {
+	flat := true
+	get, err := c.api.Indices.Settings.Get(ctx, &opensearchapi.SettingsGetReq{
+		Indices: []string{journalWildcard(c.cfg.IndexName)},
+		Params:  opensearchapi.SettingsGetParams{FlatSettings: &flat},
+	})
+	if err != nil {
 		return
 	}
-	cur, ok := settingInt(settings["index.number_of_replicas"])
-	if !ok || cur == desired {
-		return
+	for name, idx := range get.GetIndices() {
+		if repDrifted(idx.Settings, desired) {
+			c.putReplicas(ctx, name, desired)
+		}
 	}
+}
+
+// repDrifted reports whether an index settings blob disagrees with the desired
+// replica count. Unparseable or absent counts are "no opinion": never write
+// toward a number we could not read back.
+func repDrifted(settings json.RawMessage, desired int) bool {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(settings, &m); err != nil {
+		return false
+	}
+	cur, ok := settingInt(m["index.number_of_replicas"])
+	return ok && cur != desired
+}
+
+func (c *Client) putReplicas(ctx context.Context, index string, desired int) {
 	body, _ := json.Marshal(map[string]interface{}{"index.number_of_replicas": desired})
 	_, _ = c.api.Indices.Settings.Put(ctx, opensearchapi.SettingsPutReq{
 		Indices: []string{index},

@@ -22,8 +22,12 @@ usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --version)     VERSION=$2; shift 2 ;;
-    --install-dir) INSTALL_DIR=$2; shift 2 ;;
+    --version)
+      [ $# -ge 2 ] || { echo "--version needs a value (e.g. --version v0.7.0)" >&2; exit 1; }
+      VERSION=$2; shift 2 ;;
+    --install-dir)
+      [ $# -ge 2 ] || { echo "--install-dir needs a path" >&2; exit 1; }
+      INSTALL_DIR=$2; shift 2 ;;
     --help|-h)     usage ;;
     *) echo "unknown argument: $1 (--help)" >&2; exit 1 ;;
   esac

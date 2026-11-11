@@ -29,7 +29,9 @@ func replicasBase(stamped string, healthDataNodes int) func(recordedRequest) (in
 			return http.StatusOK, `{"memento":{"settings":{"index.number_of_replicas":` + stamped + `}}}`
 		case r.Method == http.MethodGet && r.Path == "/memento-docs/_settings":
 			return http.StatusNotFound, `{"status":404,"error":{"type":"index_not_found_exception"}}`
-		case r.Method == http.MethodPut && r.Path == "/memento/_settings":
+		case r.Method == http.MethodGet && r.Path == "/memento-history-*/_settings":
+			return http.StatusOK, `{"memento-history-2026.10":{"settings":{"index.number_of_replicas":"0"}},"memento-history-2026.11":{"settings":{"index.number_of_replicas":"1"}}}`
+		case r.Method == http.MethodPut && strings.HasSuffix(r.Path, "/_settings"):
 			return http.StatusOK, `{"acknowledged":true}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected: ` + r.Method + " " + r.Path + `"}`
@@ -57,6 +59,14 @@ func TestReconcileRaisesReplicasOnGrownCluster(t *testing.T) {
 	if got := fake.requestsFor(http.MethodPut, "/memento-docs/_settings"); len(got) != 0 {
 		t.Errorf("missing docs index must not be written to, got %d puts", len(got))
 	}
+	// History period indices: only the drifted period is corrected, the
+	// already-correct one is left alone.
+	if got := fake.requestsFor(http.MethodPut, "/memento-history-2026.10/_settings"); len(got) != 1 {
+		t.Errorf("history 2026.10 puts = %d, want 1", len(got))
+	}
+	if got := fake.requestsFor(http.MethodPut, "/memento-history-2026.11/_settings"); len(got) != 0 {
+		t.Errorf("history 2026.11 puts = %d, want 0 (already at desired)", len(got))
+	}
 }
 
 func TestReconcileSkippedWhenProbeFails(t *testing.T) {
@@ -70,6 +80,9 @@ func TestReconcileSkippedWhenProbeFails(t *testing.T) {
 	}
 	if puts := fake.requestsFor(http.MethodPut, "/memento/_settings"); len(puts) != 0 {
 		t.Errorf("puts = %d, want 0 on unknown topology", len(puts))
+	}
+	if puts := fake.requestsFor(http.MethodPut, "/memento-history-2026.10/_settings"); len(puts) != 0 {
+		t.Errorf("history puts = %d, want 0 on unknown topology", len(puts))
 	}
 }
 

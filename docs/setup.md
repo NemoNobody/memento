@@ -284,9 +284,9 @@ What the app touches, permission by permission:
 | Target | Why | Actions |
 |---|---|---|
 | cluster | version probe, `status` health/disk, journal infra | `cluster:monitor/main`, `cluster:monitor/health`, `cluster:monitor/nodes/stats`, `manage_index_templates`, `manage_ingest_pipelines` |
-| `memento` (facts) | index checks, read, search, create/update docs | `read`, `search`, `indices:admin/get`, `indices:data/write/index`, `indices:data/write/update`, `indices:admin/create` — **no delete** (the app never deletes facts; `obsolete` is a status, and index loss must be an admin decision) |
+| `memento` (facts) | index checks, read, search, create/update docs, replica-count realignment | `read`, `search`, `indices:admin/get`, `indices:data/write/index`, `indices:data/write/update`, `indices:admin/create`, `indices:admin/settings/update` (drift correction of `number_of_replicas`) — **no delete** (the app never deletes facts; `obsolete` is a status, and index loss must be an admin decision) |
 | `memento-history-*` | append entries, read journal, `prune`, pin the ts pipeline | `read`, `search`, `indices:admin/get`, `indices:data/write/*` (append-only by app design; `delete` here exists only for the manual `prune`), `indices:admin/create` (a new period index is auto-created on the first append of that period), `indices:admin/settings/update` (the app pins the ts pipeline on journal indices) |
-| `memento-docs` | fetch cache: store, read, search, re-tag snapshots | `read`, `search`, `indices:admin/get`, `indices:data/write/index`, `indices:data/write/update` (re-tagging a stored snapshot with a different project), `indices:admin/create` |
+| `memento-docs` | fetch cache: store, read, search, re-tag snapshots, replica-count realignment | `read`, `search`, `indices:admin/get`, `indices:data/write/index`, `indices:data/write/update` (re-tagging a stored snapshot with a different project), `indices:admin/create`, `indices:admin/settings/update` |
 
 `indices:admin/get` covers the index-existence HEAD the app runs on every
 start and the `GET /<index>` settings read behind `memento status`.
@@ -294,7 +294,10 @@ start and the `GET /<index>` settings read behind `memento status`.
 If you provisioned the §7 role **before v0.7.0**, update it: journal appends
 now also require `indices:admin/create` and `indices:admin/settings/update`
 on `memento-history-*` (without them appends fail loudly with 403), and the
-docs index needs `indices:data/write/update` for re-tagging.
+docs index needs `indices:data/write/update` for re-tagging. Since **v0.8.0**
+the facts and docs patterns also need `indices:admin/settings/update`: the
+client realigns replica counts at startup, and without the permission that
+realignment is silently refused (the app treats it as best-effort).
 
 `GET /_security/authinfo` (the authorship probe) is self-service: every
 authenticated user may call it for themselves, so no extra permission is
@@ -318,7 +321,8 @@ cat > /tmp/memento_role.json << 'EOF'
     {"index_patterns": ["memento"],
      "allowed_actions": ["read", "search", "indices:admin/get",
                          "indices:data/write/index",
-                         "indices:data/write/update", "indices:admin/create"]},
+                         "indices:data/write/update", "indices:admin/create",
+                         "indices:admin/settings/update"]},
     {"index_patterns": ["memento-history-*"],
      "allowed_actions": ["read", "search", "indices:admin/get",
                          "indices:data/write/*",
@@ -326,7 +330,9 @@ cat > /tmp/memento_role.json << 'EOF'
     {"index_patterns": ["memento-docs"],
      "allowed_actions": ["read", "search", "indices:admin/get",
                          "indices:data/write/index",
-                         "indices:data/write/update", "indices:admin/create"]}
+                         "indices:data/write/update",
+                         "indices:admin/create",
+                         "indices:admin/settings/update"]}
   ]
 }
 EOF

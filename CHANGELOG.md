@@ -341,8 +341,9 @@ Hardening (pre-release review conveyor):
   first fetch, so an absent index now reads as an empty result (same posture as
   journal wildcard reads).
 - Replica counts now follow the topology as a steady-state property, not just
-  at index creation: on startup the client re-checks the facts/docs indices and
-  the journal template and corrects drift (`PUT _settings` / template re-PUT).
+  at index creation: on startup the client re-checks the facts/docs indices,
+  every existing history period index and the journal template, and corrects
+  drift (`PUT _settings` / template re-PUT).
   A single-node install that later grows into a cluster self-heals instead of
   staying unreplicated. In auto mode nothing is written when the health probe
   fails — an unknown topology is never "fixed" toward 0; an explicit
