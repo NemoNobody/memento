@@ -27,6 +27,20 @@ func TestMCPSearchUnknownCategoryRefused(t *testing.T) {
 	}
 }
 
+// TestMCPSearchKeywordShapedLikeTheWriteEdge pins the tag filter's shape rule:
+// a multi-token tag can never match the stored canonical, so it is refused at
+// the edge instead of answering a silent zero.
+func TestMCPSearchKeywordShapedLikeTheWriteEdge(t *testing.T) {
+	s := &mcpServer{}
+	_, _, err := s.search(context.Background(), nil, searchInput{Query: "q", Keyword: "two words"})
+	if err == nil || !strings.Contains(err.Error(), "whitespace") {
+		t.Errorf("multi-token keyword must be refused, got %v", err)
+	}
+	if _, _, err := s.search(context.Background(), nil, searchInput{Query: "q", Keyword: "   "}); err == nil {
+		t.Error("blank keyword must be refused")
+	}
+}
+
 // TestMCPPruneNegativeKeepRefused (finding 132): a negative keep used to
 // collapse silently into the configured default.
 func TestMCPPruneNegativeKeepRefused(t *testing.T) {

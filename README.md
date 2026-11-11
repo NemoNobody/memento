@@ -27,6 +27,9 @@ Each fact carries evidence, not verdicts:
 - **summary**: a value over `summary_min_len` must ship a short table-of-
   contents rendering (kept under `summary_max_len`), so store listings stay
   skimmable without pulling full values into context;
+- **keywords**: up to 10 normalized tags per fact (lowercase single tokens),
+  exact-match filterable — cross-project slices (`perf`, `security`, `strata`)
+  without a graph backlog, and recipes/rules stay findable by topic;
 - **secret guard**: writes scan for credential-like text (the index is
   plaintext) — `reject` by default, `ask` needs an explicit confirmation,
   `allow` opts out;
