@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/NemoNobody/memento/internal/client"
+	"github.com/NemoNobody/memento/internal/model"
 	"github.com/spf13/cobra"
 )
 
@@ -17,6 +18,7 @@ var searchFlags struct {
 	project  string
 	category string
 	status   string
+	keyword  string
 	limit    int
 }
 
@@ -61,7 +63,18 @@ func SearchCmd() *cobra.Command {
 			// Write edges store the lowercase canonical category; the term
 			// filter is case-sensitive and whitespace-exact, so canonicalize
 			// the filter the same way (search -c " Config" must match "config").
-			facts, meta, err := c.Search(ctx, query, strings.TrimSpace(searchFlags.project), strings.ToLower(strings.TrimSpace(searchFlags.category)), status, searchFlags.limit)
+			keyword := ""
+			if searchFlags.keyword != "" {
+				kw, kerr := model.NormalizeKeywords([]string{searchFlags.keyword})
+				if kerr != nil {
+					fatalErr(kerr)
+				}
+				if len(kw) == 0 {
+					fatalErr(errors.New("--keyword must not be blank"))
+				}
+				keyword = kw[0]
+			}
+			facts, meta, err := c.Search(ctx, query, strings.TrimSpace(searchFlags.project), strings.ToLower(strings.TrimSpace(searchFlags.category)), status, keyword, searchFlags.limit)
 			if err != nil {
 				fatalErr(err)
 			}
@@ -101,6 +114,7 @@ func SearchCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&searchFlags.project, "project", "p", "", "project name")
 	cmd.Flags().StringVarP(&searchFlags.category, "category", "c", "", "category")
 	cmd.Flags().StringVarP(&searchFlags.status, "status", "s", "verified", "status filter: verified, obsolete, any")
+	cmd.Flags().StringVar(&searchFlags.keyword, "keyword", "", "tag filter: exact keyword match (stored tags are lowercase single tokens)")
 	cmd.Flags().IntVar(&searchFlags.limit, "limit", 10, "max hits to return (0 = up to 1000)")
 	return cmd
 }

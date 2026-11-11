@@ -20,6 +20,7 @@ var addFlags struct {
 	source      string
 	notes       string
 	summary     string
+	keywords    []string
 	ttlDays     int
 	allowSecret bool
 }
@@ -81,6 +82,11 @@ func AddCmd() *cobra.Command {
 			f := model.NewFact(key, value, category, project, addFlags.source, addFlags.notes)
 			f.Summary = addFlags.summary
 			f.TTLDays = addFlags.ttlDays
+			kw, kerr := model.NormalizeKeywords(addFlags.keywords)
+			if kerr != nil {
+				fatalErr(kerr)
+			}
+			f.Keywords = kw
 			res, err := c.Add(ctx, f)
 			if err != nil {
 				fatalErr(err)
@@ -121,6 +127,8 @@ func AddCmd() *cobra.Command {
 		"short table-of-contents rendering of the value (under summary_max_len chars); required when the value is longer than summary_min_len; ignored when the value is unchanged (same-value re-add touches notes/source only)")
 	cmd.Flags().IntVar(&addFlags.ttlDays, "ttl-days", 0,
 		"optional staleness window in days; may only shorten the category default (config/endpoint 14, location/behavior 30, recipe 180, rule 90; context_map uncapped)")
+	cmd.Flags().StringSliceVar(&addFlags.keywords, "keyword", nil,
+		"tag for cross-project slices and filtered search (repeatable; normalized to lowercase single tokens, max 10)")
 	cmd.Flags().BoolVar(&addFlags.allowSecret, "allow-secret", false,
 		"confirm the flagged text is not a secret (secret_guard=ask only, after user approval)")
 	return cmd

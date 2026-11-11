@@ -11,7 +11,7 @@ import (
 )
 
 func TestBuildSearchBody_NoFilters(t *testing.T) {
-	got := buildSearchBody("hello world", "", "", "", 0)
+	got := buildSearchBody("hello world", "", "", "", "", 0)
 	q := got["query"].(map[string]interface{})
 	boolQ := q["bool"].(map[string]interface{})
 	must := boolQ["must"].(map[string]interface{})
@@ -34,7 +34,7 @@ func TestBuildSearchBody_NoFilters(t *testing.T) {
 }
 
 func TestBuildSearchBody_Limit(t *testing.T) {
-	got := buildSearchBody("hello", "", "", "", 7)
+	got := buildSearchBody("hello", "", "", "", "", 7)
 	if size, ok := got["size"].(int); !ok || size != 7 {
 		t.Errorf("size = %v, want 7", got["size"])
 	}
@@ -55,7 +55,7 @@ func TestBuildNavBodiesSizeCapped(t *testing.T) {
 }
 
 func TestBuildSearchBody_AllFilters(t *testing.T) {
-	got := buildSearchBody("hello", "proj1", "config", "verified", 0)
+	got := buildSearchBody("hello", "proj1", "config", "verified", "", 0)
 	q := got["query"].(map[string]interface{})
 	boolQ := q["bool"].(map[string]interface{})
 	must := boolQ["must"].(map[string]interface{})
@@ -96,7 +96,7 @@ func TestBuildSearchBody_AllFilters(t *testing.T) {
 }
 
 func TestBuildSearchBody_SingleFilter(t *testing.T) {
-	got := buildSearchBody("hello", "", "config", "", 0)
+	got := buildSearchBody("hello", "", "config", "", "", 0)
 	q := got["query"].(map[string]interface{})
 	boolQ := q["bool"].(map[string]interface{})
 	must := boolQ["must"].(map[string]interface{})
@@ -117,6 +117,22 @@ func TestBuildSearchBody_SingleFilter(t *testing.T) {
 	term := m["term"].(map[string]interface{})
 	if term["category"].(string) != "config" {
 		t.Errorf("filter[0] category = %v, want config", term["category"])
+	}
+}
+
+// TestBuildSearchBody_KeywordFilter pins that the tag filter is a plain term on
+// the keywords array (exact match on the stored canonical, no analysis).
+func TestBuildSearchBody_KeywordFilter(t *testing.T) {
+	got := buildSearchBody("hello", "", "", "", "perf", 0)
+	q := got["query"].(map[string]interface{})
+	boolQ := q["bool"].(map[string]interface{})
+	filters, ok := boolQ["filter"].([]map[string]interface{})
+	if !ok || len(filters) != 1 {
+		t.Fatalf("filters = %v, want one keyword term", boolQ["filter"])
+	}
+	term := filters[0]["term"].(map[string]interface{})
+	if term["keywords"].(string) != "perf" {
+		t.Errorf("keywords term = %v, want perf", term["keywords"])
 	}
 }
 
@@ -218,6 +234,7 @@ func TestBuildIndexBody_Mappings(t *testing.T) {
 		"updated_at":    "date",
 		"observed_at":   "date",
 		"ttl_days":      "integer",
+		"keywords":      "keyword",
 		"source":        "keyword",
 		"notes":         "text",
 		"summary":       "text",
@@ -254,8 +271,8 @@ func TestBuildIndexBody_Mappings(t *testing.T) {
 		t.Errorf("history enabled = %v, want false (stored, not indexed)", history["enabled"])
 	}
 
-	if len(props) != 21 {
-		t.Errorf("expected 21 mappings, got %d", len(props))
+	if len(props) != 22 {
+		t.Errorf("expected 22 mappings, got %d", len(props))
 	}
 }
 

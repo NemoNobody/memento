@@ -76,6 +76,12 @@ type Client struct {
 	// been pinned in this process (see ensureJournalIndexPipeline).
 	journalIdxPipeline map[string]bool
 
+	// mappingMu/mappingOK guard the additive mapping reconcile (see
+	// reconcileMapping): it runs once per process, and a refused PUT (a field
+	// already exists with another type) must not mark it done.
+	mappingMu sync.Mutex
+	mappingOK bool
+
 	// authorMu guards the writer-label cache: a security-resolved identity
 	// lives for the process; a degraded chain is re-probed with backoff
 	// (see resolveAuthor).
@@ -278,37 +284,45 @@ func buildIndexBody(replicas int) map[string]interface{} {
 			"index.number_of_replicas": replicas,
 		},
 		"mappings": map[string]interface{}{
-			"properties": map[string]interface{}{
-				"fact_id":     map[string]interface{}{"type": "keyword"},
-				"key":         map[string]interface{}{"type": "keyword"},
-				"value":       map[string]interface{}{"type": "text"},
-				"category":    map[string]interface{}{"type": "keyword"},
-				"project":     map[string]interface{}{"type": "keyword"},
-				"status":      map[string]interface{}{"type": "keyword"},
-				"created_at":  map[string]interface{}{"type": "date"},
-				"updated_at":  map[string]interface{}{"type": "date"},
-				"observed_at": map[string]interface{}{"type": "date"},
-				"ttl_days":    map[string]interface{}{"type": "integer"},
-				"source":      map[string]interface{}{"type": "keyword"},
-				"notes":       map[string]interface{}{"type": "text"},
-				// Summary is the table-of-contents rendering of value: searchable
-				// text, so listings and BM25 can work from it.
-				"summary": map[string]interface{}{"type": "text"},
-				// Stored, never indexed: legacy history arrays predate the journal
-				// and are read with the fact, not searched.
-				"history": map[string]interface{}{"type": "object", "enabled": false},
-				// Journal entry id of the current value (see model.Fact.CurrentRef).
-				"current_ref": map[string]interface{}{"type": "keyword"},
-				// Authorship labels (self-reported; see model.Fact): exact-match
-				// fields for "who wrote what" queries, never full-text.
-				"author":        map[string]interface{}{"type": "keyword"},
-				"author_source": map[string]interface{}{"type": "keyword"},
-				"model":         map[string]interface{}{"type": "keyword"},
-				"host":          map[string]interface{}{"type": "keyword"},
-				"session":       map[string]interface{}{"type": "keyword"},
-				"updated_by":    map[string]interface{}{"type": "keyword"},
-			},
+			"properties": buildIndexProperties(),
 		},
+	}
+}
+
+// buildIndexProperties is the single field catalog: index creation and the
+// additive mapping reconcile share it, so a field can never exist in one and
+// be forgotten in the other.
+func buildIndexProperties() map[string]interface{} {
+	return map[string]interface{}{
+		"fact_id":     map[string]interface{}{"type": "keyword"},
+		"key":         map[string]interface{}{"type": "keyword"},
+		"value":       map[string]interface{}{"type": "text"},
+		"category":    map[string]interface{}{"type": "keyword"},
+		"project":     map[string]interface{}{"type": "keyword"},
+		"status":      map[string]interface{}{"type": "keyword"},
+		"created_at":  map[string]interface{}{"type": "date"},
+		"updated_at":  map[string]interface{}{"type": "date"},
+		"observed_at": map[string]interface{}{"type": "date"},
+		"ttl_days":    map[string]interface{}{"type": "integer"},
+		"keywords":    map[string]interface{}{"type": "keyword"},
+		"source":      map[string]interface{}{"type": "keyword"},
+		"notes":       map[string]interface{}{"type": "text"},
+		// Summary is the table-of-contents rendering of value: searchable
+		// text, so listings and BM25 can work from it.
+		"summary": map[string]interface{}{"type": "text"},
+		// Stored, never indexed: legacy history arrays predate the journal
+		// and are read with the fact, not searched.
+		"history": map[string]interface{}{"type": "object", "enabled": false},
+		// Journal entry id of the current value (see model.Fact.CurrentRef).
+		"current_ref": map[string]interface{}{"type": "keyword"},
+		// Authorship labels (self-reported; see model.Fact): exact-match
+		// fields for "who wrote what" queries, never full-text.
+		"author":        map[string]interface{}{"type": "keyword"},
+		"author_source": map[string]interface{}{"type": "keyword"},
+		"model":         map[string]interface{}{"type": "keyword"},
+		"host":          map[string]interface{}{"type": "keyword"},
+		"session":       map[string]interface{}{"type": "keyword"},
+		"updated_by":    map[string]interface{}{"type": "keyword"},
 	}
 }
 
@@ -325,6 +339,10 @@ func (c *Client) EnsureIndex(ctx context.Context) error {
 	switch {
 	case err == nil:
 		c.reconcileReplicas(ctx)
+		// Best effort, like the replica reconcile: a mapping the cluster
+		// refuses (a field already exists with another type) must not break
+		// reads, and the once-guard stays open so a later run retries.
+		_ = c.reconcileMapping(ctx)
 		return nil
 	case resp != nil && resp.StatusCode == http.StatusNotFound:
 		// The index is missing: create it below. The status code is checked
@@ -362,6 +380,7 @@ const addCorrectionScript = `
 ctx._source.value = params.value;
 ctx._source.category = params.category;
 if (params.ttl_days != null) { ctx._source.ttl_days = params.ttl_days; }
+if (params.keywords != null) { ctx._source.keywords = params.keywords; }
 ctx._source.observed_at = params.observed_at;
 if (params.source != null && params.source != "") { ctx._source.source = params.source; }
 if (params.notes != null && params.notes != "") { ctx._source.notes = params.notes; }
@@ -426,6 +445,13 @@ type AddResult struct {
 func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 	if err := c.checkSummaryCap(f); err != nil {
 		return AddResult{}, err
+	}
+	// Shape before store: keyword normalization is shared with the MCP edge,
+	// and storing the raw form would split one tag across two spellings.
+	if kw, err := model.NormalizeKeywords(f.Keywords); err != nil {
+		return AddResult{}, contractErrorf("add fact: %v", err)
+	} else {
+		f.Keywords = kw
 	}
 	// Shape before store (the summary-cap rule): a writer-chosen staleness
 	// window must fit the category cap even before we know whether this is a
@@ -531,6 +557,11 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 			// journaled); omitted means "keep the stored one".
 			doc["ttl_days"] = f.TTLDays
 		}
+		if len(f.Keywords) > 0 {
+			// Same rule as ttl_days: keywords are a stored qualifier, not a
+			// journaled observation; an empty list means "leave them alone".
+			doc["keywords"] = f.Keywords
+		}
 		if resurrect {
 			observed := time.Now().UTC()
 			stated := *existing
@@ -632,6 +663,10 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 	if f.TTLDays != 0 {
 		ttlParam = f.TTLDays
 	}
+	var kwParam interface{}
+	if len(f.Keywords) > 0 {
+		kwParam = f.Keywords
+	}
 
 	body, _ := json.Marshal(map[string]interface{}{
 		"script": map[string]interface{}{
@@ -641,6 +676,7 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 				"value":       f.Value,
 				"category":    f.Category,
 				"ttl_days":    ttlParam,
+				"keywords":    kwParam,
 				"observed_at": f.ObservedAt.UTC().Format(time.RFC3339),
 				"source":      f.Source,
 				"notes":       f.Notes,
@@ -832,8 +868,8 @@ func conflictError(op, key string, err error) error {
 // "no caller cap": the size is then NavSizeCap (1000), not the server's
 // default of 10, which would silently truncate. Relevance order is
 // OpenSearch's.
-func (c *Client) Search(ctx context.Context, query string, project, category, status string, limit int) ([]model.Fact, SearchMeta, error) {
-	return c.search(ctx, buildSearchBody(query, project, category, status, limit))
+func (c *Client) Search(ctx context.Context, query, project, category, status, keyword string, limit int) ([]model.Fact, SearchMeta, error) {
+	return c.search(ctx, buildSearchBody(query, project, category, status, keyword, limit))
 }
 
 // List returns all facts for a project whose key starts with prefix.
@@ -1379,7 +1415,7 @@ func (c *Client) Prune(ctx context.Context, key string, keep int) (int, error) {
 // buildSearchBody builds the search query body for a keyword search.
 // The result budget matters as soon as one index holds bulk text (docs):
 // an uncapped search ships every hit into the caller's context.
-func buildSearchBody(query string, project, category, status string, limit int) map[string]interface{} {
+func buildSearchBody(query string, project, category, status, keyword string, limit int) map[string]interface{} {
 	filters := []map[string]interface{}{}
 	if project != "" {
 		filters = append(filters, map[string]interface{}{"term": map[string]interface{}{"project": project}})
@@ -1389,6 +1425,10 @@ func buildSearchBody(query string, project, category, status string, limit int) 
 	}
 	if status != "" {
 		filters = append(filters, map[string]interface{}{"term": map[string]interface{}{"status": status}})
+	}
+	if keyword != "" {
+		// A term filter on the keyword array: exact tag match, no analysis.
+		filters = append(filters, map[string]interface{}{"term": map[string]interface{}{"keywords": keyword}})
 	}
 	boolQuery := map[string]interface{}{
 		"must": map[string]interface{}{

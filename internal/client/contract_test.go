@@ -906,7 +906,7 @@ func TestSearchMetaTotalAndSkipped(t *testing.T) {
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected request: ` + r.Method + ` ` + r.Path + `"}`
 	})
 
-	facts, meta, err := c.Search(context.Background(), "q", "", "", "", 0)
+	facts, meta, err := c.Search(context.Background(), "q", "", "", "", "", 0)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}

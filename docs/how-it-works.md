@@ -19,6 +19,13 @@ document keyed by its `key` (the key is the document ID).
 | `updated_at` | date | last write timestamp (moves on any change, incl. notes) |
 | `observed_at` | date | when the current value was seen (moves only on value change) |
 | `ttl_days` | integer | optional per-fact staleness override, capped by the category TTL |
+| `keywords` | keyword[] | normalized tags: lowercase single tokens, deduped, max 10 |
+
+The catalog is applied twice: on index creation, and additively on an existing
+index (`PUT _mapping`, once per process). Without the second pass a field added
+after the index existed would be typed by the first write's dynamic mapping —
+a `keywords` array would become `text` with a `keyword` subfield, and an exact
+tag filter would silently stop matching tags the analyzer splits.
 | `source` | keyword | `tool:read_file \| experiment \| user:confirmed \| doc:*` |
 | `notes` | text | free-text qualifiers (omitted when empty; obsolete reasons appended here) |
 | `summary` | text | short table-of-contents rendering of the value; required when the value is over `summary_min_len` (see below) |
@@ -259,6 +266,17 @@ Rules:
   store provides the signal; the agent judges.
 - Nothing in `add`/`obsolete` moves `observed_at` except a real value change, so
   a stale fact cannot be silently "re-freshed" by a notes touch.
+
+## Keywords
+
+A fact may carry up to 10 tags (`keywords` on `memento_add`, `--keyword` on the
+CLI). Tags are normalized at the write edge — trimmed, lowercased, one token
+each, deduplicated in first-seen order — because the filter is a plain term on
+a `keyword` array: exact match, no analysis. That makes tags the cheapest
+cross-project slice (`memento_search` with `keyword: "perf"` over all projects)
+and the association layer an agent needs without a graph database. An empty
+list on a re-add leaves the stored tags alone (the notes/source convention);
+keywords are a stored qualifier, not a journaled observation.
 
 ## Advisory contract and precedence
 

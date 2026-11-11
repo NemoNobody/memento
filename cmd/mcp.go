@@ -313,6 +313,7 @@ type factView struct {
 	AuthorSource string        `json:"author_source,omitempty" jsonschema:"security | config | os | none — which chain link named the author"`
 	UpdatedBy    string        `json:"updated_by,omitempty" jsonschema:"self-reported label of the last writer; the birth author fields are write-once"`
 	Notes        string        `json:"notes,omitempty" jsonschema:"qualifiers: what was checked, how far, caveats (compact mode: first 100 runes)"`
+	Keywords     []string      `json:"keywords,omitempty" jsonschema:"normalized tags (lowercase single tokens); the keyword filter of memento_search matches these exactly"`
 	ObservedAt   string        `json:"observed_at" jsonschema:"RFC3339 when the current value was observed"`
 	TTLDays      int           `json:"ttl_days,omitempty" jsonschema:"per-fact staleness override in days, when the writer chose one (otherwise the category default: config/endpoint 14, location/behavior 30, recipe 180, rule 90, context_map never)"`
 	AgeDays      int           `json:"age_days" jsonschema:"whole days since the observation; -1 when observed_at is unknown"`
@@ -369,6 +370,7 @@ func newFactView(f model.Fact, includeHistory, compact bool) factView {
 		AuthorSource: f.AuthorSource,
 		UpdatedBy:    f.UpdatedBy,
 		Notes:        f.Notes,
+		Keywords:     f.Keywords,
 		ObservedAt:   rfc3339OrEmpty(f.ObservedAt),
 		TTLDays:      f.TTLDays,
 		AgeDays:      f.AgeDays(time.Now().UTC()),
@@ -514,6 +516,7 @@ type searchInput struct {
 	Query          string `json:"query" jsonschema:"text to look for in fact values, notes and summaries (keys are not searched)"`
 	Project        string `json:"project,omitempty" jsonschema:"limit results to this project"`
 	Category       string `json:"category,omitempty" jsonschema:"limit results to this category"`
+	Keyword        string `json:"keyword,omitempty" jsonschema:"limit results to facts carrying this exact tag (keywords are stored as lowercase single tokens)"`
 	Status         string `json:"status,omitempty" jsonschema:"limit results to this status: verified (default), obsolete, or any"`
 	Limit          int    `json:"limit,omitempty" jsonschema:"max hits to return (default 10, cap 50): the context budget for search results"`
 	IncludeHistory bool   `json:"include_history,omitempty" jsonschema:"include the full history chain (default: current value only); ships only on full rows (compact=false)"`
@@ -551,6 +554,19 @@ func (s *mcpServer) search(ctx context.Context, req *mcp.CallToolRequest, in sea
 	if serr != nil {
 		return nil, factsOutput{}, serr
 	}
+	// A keyword filter is a term on the stored canonical tags: normalize the
+	// same way the write edge does, or " Perf " answers a silent zero.
+	keyword := ""
+	if in.Keyword != "" {
+		kw, kerr := model.NormalizeKeywords([]string{in.Keyword})
+		if kerr != nil {
+			return nil, factsOutput{}, fmt.Errorf("memento_search: %v", kerr)
+		}
+		if len(kw) == 0 {
+			return nil, factsOutput{}, errors.New("memento_search: keyword must not be blank")
+		}
+		keyword = kw[0]
+	}
 	compact := true
 	if in.Compact != nil {
 		compact = *in.Compact
@@ -561,7 +577,7 @@ func (s *mcpServer) search(ctx context.Context, req *mcp.CallToolRequest, in sea
 	if err != nil {
 		return nil, factsOutput{}, storeError("memento_search", err)
 	}
-	facts, meta, err := c.Search(ctx, in.Query, in.Project, in.Category, status, limit)
+	facts, meta, err := c.Search(ctx, in.Query, in.Project, in.Category, status, keyword, limit)
 	if err != nil {
 		return nil, factsOutput{}, storeError("memento_search", err)
 	}
@@ -673,14 +689,15 @@ const (
 )
 
 type addInput struct {
-	Key      string `json:"key" jsonschema:"stable fact key, e.g. proj:foo:loc:bar.py — re-use the same key to update"`
-	Value    string `json:"value" jsonschema:"the fact text"`
-	Category string `json:"category" jsonschema:"location | config | endpoint | behavior | context_map | recipe | rule"`
-	Project  string `json:"project,omitempty" jsonschema:"project name; defaults to 'global'"`
-	Source   string `json:"source,omitempty" jsonschema:"where the fact came from (tool:read_file, doc:README, user:confirmed); defaults to tool:mcp"`
-	Notes    string `json:"notes,omitempty" jsonschema:"qualifiers: what was checked, how far, caveats — carried to later sessions"`
-	TTLDays  int    `json:"ttl_days,omitempty" jsonschema:"optional staleness window in days, set it only when you know this fact rots faster than its category default; it may only shorten the window (cap: config/endpoint 14, location/behavior 30, recipe 180, rule 90; context_map uncapped)"`
-	Summary  string `json:"summary,omitempty" jsonschema:"short table-of-contents rendering of the value (under summary_max_len chars); required when the value is longer than summary_min_len; not applied on same-value re-adds, but an over-cap summary is still refused at every edge"`
+	Key      string   `json:"key" jsonschema:"stable fact key, e.g. proj:foo:loc:bar.py — re-use the same key to update"`
+	Value    string   `json:"value" jsonschema:"the fact text"`
+	Category string   `json:"category" jsonschema:"location | config | endpoint | behavior | context_map | recipe | rule"`
+	Project  string   `json:"project,omitempty" jsonschema:"project name; defaults to 'global'"`
+	Source   string   `json:"source,omitempty" jsonschema:"where the fact came from (tool:read_file, doc:README, user:confirmed); defaults to tool:mcp"`
+	Notes    string   `json:"notes,omitempty" jsonschema:"qualifiers: what was checked, how far, caveats — carried to later sessions"`
+	Keywords []string `json:"keywords,omitempty" jsonschema:"tags for cross-project slices and filtered search (normalized to lowercase single tokens, max 10, deduplicated); an empty list leaves the stored tags alone on a same-value re-add"`
+	TTLDays  int      `json:"ttl_days,omitempty" jsonschema:"optional staleness window in days, set it only when you know this fact rots faster than its category default; it may only shorten the window (cap: config/endpoint 14, location/behavior 30, recipe 180, rule 90; context_map uncapped)"`
+	Summary  string   `json:"summary,omitempty" jsonschema:"short table-of-contents rendering of the value (under summary_max_len chars); required when the value is longer than summary_min_len; not applied on same-value re-adds, but an over-cap summary is still refused at every edge"`
 
 	// ConfirmSecret bypasses a guard hit at secret_guard=ask. It is the agent's
 	// barrier: show the masked finding to the user first, set this only after
@@ -778,6 +795,13 @@ func (s *mcpServer) addOne(ctx context.Context, cfg *config.Config, c *client.Cl
 	f := model.NewFact(in.Key, in.Value, in.Category, in.Project, in.Source, in.Notes)
 	f.Summary = in.Summary
 	f.TTLDays = in.TTLDays
+	// Normalized at the edge as well as in the client: the error must name the
+	// tool call, and client.Add re-normalizes for the CLI path.
+	kw, kwErr := model.NormalizeKeywords(in.Keywords)
+	if kwErr != nil {
+		return addOutput{}, fmt.Errorf("memento_add: %v", kwErr)
+	}
+	f.Keywords = kw
 	res, err := c.Add(ctx, f)
 	if err != nil {
 		// Partial success (the fact doc landed, the journal/link follow-up

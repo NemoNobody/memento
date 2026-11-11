@@ -1,6 +1,8 @@
 package model
 
 import (
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -167,6 +169,35 @@ func TestTTLDays(t *testing.T) {
 		if got := TTLDays(category); got != want {
 			t.Errorf("TTLDays(%q) = %d, want %d", category, got, want)
 		}
+	}
+}
+
+// TestNormalizeKeywords pins the tag canonical form the write edge stores and
+// the search term filter matches: lowercase, trimmed, single-token, deduped.
+func TestNormalizeKeywords(t *testing.T) {
+	got, err := NormalizeKeywords([]string{" Perf ", "GO", "perf", "", "  "})
+	if err != nil {
+		t.Fatalf("NormalizeKeywords: %v", err)
+	}
+	if len(got) != 2 || got[0] != "perf" || got[1] != "go" {
+		t.Errorf("got %v, want [perf go] (trimmed, lowercased, deduped, order kept)", got)
+	}
+	if got, err := NormalizeKeywords(nil); err != nil || got != nil {
+		t.Errorf("nil input: got %v, %v; want nil, nil", got, err)
+	}
+	if _, err := NormalizeKeywords([]string{"two words"}); err == nil {
+		t.Error("whitespace inside a tag must be refused")
+	}
+	long := strings.Repeat("x", MaxKeywordLen+1)
+	if _, err := NormalizeKeywords([]string{long}); err == nil {
+		t.Error("over-long tag must be refused")
+	}
+	many := make([]string, MaxKeywords+1)
+	for i := range many {
+		many[i] = "k" + strconv.Itoa(i)
+	}
+	if _, err := NormalizeKeywords(many); err == nil {
+		t.Error("over-count tag set must be refused")
 	}
 }
 

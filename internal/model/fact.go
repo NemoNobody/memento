@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -40,6 +41,12 @@ type Fact struct {
 	// required once a value passes config.SummaryMinLen, so listings stay
 	// skimmable; the client write path enforces the length bounds.
 	Summary string `json:"summary,omitempty" yaml:"summary,omitempty"`
+
+	// Keywords is a small normalized tag set: cross-project slices, filtered
+	// reports, and the association layer search needs. Tags are single
+	// lowercase tokens (see NormalizeKeywords), so a term filter matches
+	// exactly and a typo cannot silently split a tag in two.
+	Keywords []string `json:"keywords,omitempty" yaml:"keywords,omitempty"`
 
 	// Authorship labels: who/what recorded the fact, on which host, in which
 	// agent session. SELF-REPORTED by design — audit metadata, not an
@@ -134,6 +141,47 @@ func ValidCategory(category string) bool {
 // canonicalizing categories still age correctly.
 func TTLDays(category string) int {
 	return ttlDaysByCategory[strings.ToLower(category)]
+}
+
+// Keyword bounds. Keywords are navigation labels, not prose: a fact with more
+// than MaxKeywords of them is a fact whose author has not decided what it is
+// about, and an over-long tag is a sentence in the wrong field.
+const (
+	MaxKeywords   = 10
+	MaxKeywordLen = 40
+)
+
+// NormalizeKeywords canonicalizes a tag list for storage: trimmed, lowercased,
+// single-token, deduplicated in first-seen order, and bounded. The write edge
+// calls it for every path (CLI, MCP, add_batch) so the stored array is always
+// the form the term filter matches.
+func NormalizeKeywords(in []string) ([]string, error) {
+	if len(in) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(in))
+	seen := make(map[string]struct{}, len(in))
+	for _, raw := range in {
+		k := strings.ToLower(strings.TrimSpace(raw))
+		if k == "" {
+			continue
+		}
+		if utf8.RuneCountInString(k) > MaxKeywordLen {
+			return nil, fmt.Errorf("keyword %q is %d characters, over the %d limit: a tag is a label, not a sentence", k, utf8.RuneCountInString(k), MaxKeywordLen)
+		}
+		if strings.ContainsAny(k, " \t\n") {
+			return nil, fmt.Errorf("keyword %q contains whitespace: use one tag per entry", k)
+		}
+		if _, dup := seen[k]; dup {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, k)
+	}
+	if len(out) > MaxKeywords {
+		return nil, fmt.Errorf("%d keywords over the %d limit: keep the tag set a summary, not an index", len(out), MaxKeywords)
+	}
+	return out, nil
 }
 
 // ValidTTLOverride checks a writer-chosen per-fact staleness window against
