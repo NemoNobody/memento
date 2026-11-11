@@ -42,14 +42,15 @@ func GetCmd() *cobra.Command {
 			// indices. Fetch it (best-effort: a journal read failure is
 			// reported under the fact, not a fatal error after the fact).
 			var entries []model.JournalEntry
-			var jTotal int
+			var jTotal, jSkipped int
 			var jErr error
 			if getFlags.history && len(f.History) == 0 {
 				var jMeta client.JournalMeta
 				entries, jMeta, jErr = c.JournalEntries(ctx, key, 20)
 				jTotal = jMeta.Total
+				jSkipped = jMeta.Skipped
 			}
-			if err := printFact(os.Stdout, f, time.Now().UTC(), getFlags.history, entries, jTotal, jErr); err != nil {
+			if err := printFact(os.Stdout, f, time.Now().UTC(), getFlags.history, entries, jTotal, jSkipped, jErr); err != nil {
 				fatalErr(err)
 			}
 		},
@@ -64,7 +65,7 @@ func GetCmd() *cobra.Command {
 // testable: journal-era facts have no in-doc history array, and --history
 // renders the fetched journal instead (or says explicitly that there is
 // nothing, rather than printing nothing).
-func printFact(w io.Writer, f *model.Fact, now time.Time, history bool, entries []model.JournalEntry, jTotal int, jErr error) error {
+func printFact(w io.Writer, f *model.Fact, now time.Time, history bool, entries []model.JournalEntry, jTotal, jSkipped int, jErr error) error {
 	var b strings.Builder
 	b.WriteString("key: ")
 	b.WriteString(strconv.Quote(f.Key))
@@ -145,12 +146,21 @@ func printFact(w io.Writer, f *model.Fact, now time.Time, history bool, entries 
 			b.WriteString("history (journal, newest first): ")
 			b.WriteString(strconv.Itoa(jTotal))
 			b.WriteString(" entries")
-			if jTotal > len(entries) {
+			// Skipped counts toward what the page held: calling undecodable
+			// entries "not shown due to the limit" hides index corruption behind
+			// ordinary truncation advice (the journal viewer names corruption;
+			// get must not silently downgrade it).
+			if jTotal > len(entries)+jSkipped {
 				b.WriteString(" — showing the newest ")
 				b.WriteString(strconv.Itoa(len(entries)))
 				b.WriteString(" (see `memento journal ")
 				b.WriteString(strconv.Quote(f.Key))
 				b.WriteString("`)")
+			}
+			if jSkipped > 0 {
+				b.WriteString(" — ")
+				b.WriteString(strconv.Itoa(jSkipped))
+				b.WriteString(" entries failed to decode (index corruption: report to the user)")
 			}
 			b.WriteString("\n")
 			for _, e := range entries {

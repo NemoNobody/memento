@@ -37,7 +37,7 @@ func TestPrintFactsPrefersSummary(t *testing.T) {
 func TestPrintFactShowsSummary(t *testing.T) {
 	var buf bytes.Buffer
 	f := &model.Fact{Key: "k", Value: "v", Summary: "toc", Status: "verified", Category: "config", Project: "p"}
-	if err := printFact(&buf, f, time.Now(), false, nil, 0, nil); err != nil {
+	if err := printFact(&buf, f, time.Now(), false, nil, 0, 0, nil); err != nil {
 		t.Fatalf("printFact: %v", err)
 	}
 	out := buf.String()

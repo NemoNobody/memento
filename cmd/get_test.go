@@ -32,7 +32,7 @@ func TestPrintFactHistoryShapes(t *testing.T) {
 	f := testFact()
 	f.History = []model.HistoryEntry{{Value: "old", ObservedAt: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), Source: "tool:mcp"}}
 	var buf bytes.Buffer
-	if err := printFact(&buf, f, now, true, nil, 0, nil); err != nil {
+	if err := printFact(&buf, f, now, true, nil, 0, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(buf.String(), "history:\n") || !strings.Contains(buf.String(), `"old"`) {
@@ -45,7 +45,7 @@ func TestPrintFactHistoryShapes(t *testing.T) {
 		{Op: "write", Value: "older", CreatedAt: time.Date(2026, 11, 1, 8, 0, 0, 0, time.UTC)},
 	}
 	buf.Reset()
-	if err := printFact(&buf, f, now, true, entries, 5, nil); err != nil {
+	if err := printFact(&buf, f, now, true, entries, 5, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
@@ -56,8 +56,24 @@ func TestPrintFactHistoryShapes(t *testing.T) {
 		t.Errorf("journal entry values missing: %s", out)
 	}
 
+	// Undecodable entries must not masquerade as a page cut: with 4 total,
+	// 2 shown and 2 corrupt, the page held everything decodable — the
+	// renderer must name the corruption, not send the user to `memento
+	// journal` for entries that no command can decode.
 	buf.Reset()
-	if err := printFact(&buf, testFact(), now, true, nil, 0, nil); err != nil {
+	if err := printFact(&buf, f, now, true, entries, 4, 2, nil); err != nil {
+		t.Fatal(err)
+	}
+	out = buf.String()
+	if strings.Contains(out, "showing the newest") {
+		t.Errorf("undecodable entries are not truncation: %s", out)
+	}
+	if !strings.Contains(out, "2 entries failed to decode (index corruption") {
+		t.Errorf("corruption must be named: %s", out)
+	}
+
+	buf.Reset()
+	if err := printFact(&buf, testFact(), now, true, nil, 0, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(buf.String(), "history: none") {
@@ -65,7 +81,7 @@ func TestPrintFactHistoryShapes(t *testing.T) {
 	}
 
 	buf.Reset()
-	if err := printFact(&buf, testFact(), now, true, nil, 0, errors.New("cluster down")); err != nil {
+	if err := printFact(&buf, testFact(), now, true, nil, 0, 0, errors.New("cluster down")); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(buf.String(), "history: journal read failed: cluster down") {
@@ -73,7 +89,7 @@ func TestPrintFactHistoryShapes(t *testing.T) {
 	}
 
 	buf.Reset()
-	if err := printFact(&buf, testFact(), now, false, entries, 5, nil); err != nil {
+	if err := printFact(&buf, testFact(), now, false, entries, 5, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(buf.String(), "history") {
@@ -93,7 +109,7 @@ func TestDisplayTimeUTCAndZero(t *testing.T) {
 	f := testFact()
 	f.UpdatedAt = time.Time{}
 	var buf bytes.Buffer
-	if err := printFact(&buf, f, time.Now().UTC(), false, nil, 0, nil); err != nil {
+	if err := printFact(&buf, f, time.Now().UTC(), false, nil, 0, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(buf.String(), "updated_at: unknown") {

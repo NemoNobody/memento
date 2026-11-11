@@ -98,9 +98,13 @@ no mixed readers to stage around.`,
 				b.WriteString(strconv.Itoa(skipped))
 				b.WriteString("\n")
 			}
-			if meta.Total > len(facts) {
+			if meta.Total > len(facts)+meta.Skipped {
+				// Only a real page cut says "rerun": with the corrupt-history
+				// arm, Total permanently exceeds what the page decoded even when
+				// the page is complete (the remainder is undecodable, counted in
+				// decode-skipped) — telling agents to rerun forever is a loop trap.
 				b.WriteString("note: scan cap ")
-				b.WriteString(strconv.Itoa(len(facts)))
+				b.WriteString(strconv.Itoa(len(facts) + meta.Skipped))
 				b.WriteString(" < total ")
 				b.WriteString(strconv.Itoa(meta.Total))
 				b.WriteString(" — rerun until the plan is empty\n")
