@@ -131,11 +131,12 @@ func isAlreadyExists(err error) bool {
 // (kept shared on purpose: fifteen review rounds kept re-opening holes
 // where only one branch was patched) that requires, before any acceptor
 // answers:
-//   - the body's declared 409. The typed errors carry no transport
-//     status (opensearch-go parses the body and drops the HTTP code),
-//     so the body's self-reported status is the only signal — a gateway
-//     that rewrites the HTTP code but passes a genuine conflict body
-//     still classifies as conflict by contract (pinned);
+//   - the body's declared 409. For classified bodies opensearch-go
+//     takes the status from the body (the typed errors carry no
+//     transport code; only its final unclassified fallback uses the
+//     HTTP code), so the body's self-reported status is the gate — a
+//     gateway that rewrites the HTTP code but passes a genuine
+//     conflict body through still classifies as conflict (pinned);
 //   - no index-creation-race signature anywhere in the body: the race
 //     writes NO document, so reading it as a doc collision would fake a
 //     journal append and dangle current_ref. The race names
@@ -175,11 +176,13 @@ func conflictAnswer(status int, typ, text string, raceInRootCause bool) bool {
 
 // rootCauseNamesIndexRace catches a middlebox that rewrote the
 // top-level type and reason off the race signature but left the engine
-// naming the index race in the root_cause array.
+// naming the index race in the root_cause array — same signature the
+// top-level guards use (exception name or the marker pair).
 func rootCauseNamesIndexRace(causes []opensearch.RootCause) bool {
 	for _, rc := range causes {
 		if rc.Type == "resource_already_exists_exception" ||
-			strings.Contains(rc.Reason, "resource_already_exists") {
+			strings.Contains(rc.Reason, "resource_already_exists") ||
+			(strings.Contains(rc.Reason, "index [") && strings.Contains(rc.Reason, "already exists")) {
 			return true
 		}
 	}

@@ -291,6 +291,7 @@ func TestIsVersionConflictDelegatesBothShapes(t *testing.T) {
 		{"struct doc-create conflict", mkStruct(`{"error":{"type":"version_conflict_engine_exception","reason":"[k]: version conflict, document already exists (current version [3])"},"status":409}`), true},
 		{"struct race type", mkStruct(`{"error":{"type":"resource_already_exists_exception","reason":"index [memento-history-2026-11/uuid] already exists"},"status":409}`), false},
 		{"struct race in root_cause", mkStruct(raceRC), false},
+		{"struct race marker pair in root_cause only", mkStruct(`{"error":{"type":"mapper_parsing_exception","reason":"[k2] already exists","root_cause":[{"type":"engine_exception","reason":"index [memento-history-2026-11/uuid] already exists"}]},"status":409}`), false},
 		{"struct status rewritten to 500", mkStruct(`{"error":{"type":"version_conflict_engine_exception","reason":"[k]: version conflict, required seq_no [5]"},"status":500}`), false},
 		{"struct sub-409 wording", mkStruct(`{"error":{"type":"mapper_parsing_exception","reason":"document already exists"},"status":400}`), false},
 		{"string conflict", &opensearch.StringError{Err: "document already exists", Status: http.StatusConflict}, true},
@@ -305,11 +306,12 @@ func TestIsVersionConflictDelegatesBothShapes(t *testing.T) {
 }
 
 // TestGatewayHTTPErrorWithConflictBodyIsConflict documents the OTHER
-// half of the status contract: the typed errors carry no transport
-// status (opensearch-go parses the body and drops the HTTP code), so
-// when the gateway rewrites HTTP 409→500 but passes a genuine conflict
-// body through, the body's declared 409 wins and the write fails as a
-// named conflict — honest "re-read and retry" beats losing the
+// half of the status contract: for classified error bodies
+// opensearch-go takes the status from the body (only its final
+// unclassified fallback uses the HTTP code), so when the gateway
+// rewrites HTTP 409→500 but passes a genuine conflict body through,
+// the body's declared 409 wins and the write fails as a named
+// conflict — honest "re-read and retry" beats losing the
 // conflict signal entirely (which would fake append success).
 func TestGatewayHTTPErrorWithConflictBodyIsConflict(t *testing.T) {
 	var got recordedRequest
