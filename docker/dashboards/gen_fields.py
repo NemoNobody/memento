@@ -21,12 +21,13 @@ import subprocess
 import sys
 import urllib.request
 
-# OSD field descriptor shape (legacy index-pattern fields attribute):
-# text is type "string" (not aggregatable); every keyword/number/date/bool
-# is searchable+aggregatable with doc values.
 TYPE_MAP = {
+    # "type" must be the OSD field type (OSD_FIELD_TYPES enum), not the raw
+    # es type: terms.buckets filterFieldTypes match it exactly, and a saved
+    # field of type "keyword" fails with "is invalid for use with the Terms
+    # aggregation" — esType keyword normalizes to OSD "string".
     "text": ("string", False, False),
-    "keyword": ("keyword", True, True),
+    "keyword": ("string", True, True),
     "date": ("date", True, True),
     "boolean": ("boolean", True, True),
     "long": ("number", True, True),
