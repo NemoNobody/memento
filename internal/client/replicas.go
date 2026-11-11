@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"strconv"
+	"sync"
 
+	"github.com/NemoNobody/memento/internal/config"
 	"github.com/opensearch-project/opensearch-go/v4/opensearchapi"
 )
 
@@ -33,7 +35,11 @@ func (c *Client) desiredReplicas(ctx context.Context) (int, bool) {
 func (c *Client) autoReplicas(ctx context.Context) (int, bool) {
 	c.replicasOnce.Do(func() {
 		c.replicasVal = 0
-		if h, err := c.api.Cluster.Health(ctx, nil); err == nil {
+		if h, err := c.api.Cluster.Health(ctx, nil); err == nil && h.NumberOfDataNodes > 0 {
+			// A probe that answers with no data nodes is not a trustworthy
+			// topology: "fixing" toward 0 off a zero-node reply would strip
+			// replicas from a real cluster mid-blip, the same harm as a
+			// failed probe.
 			c.replicasProbeOK = true
 			if h.NumberOfDataNodes > 1 {
 				c.replicasVal = 1
@@ -43,13 +49,32 @@ func (c *Client) autoReplicas(ctx context.Context) (int, bool) {
 	return c.replicasVal, c.replicasProbeOK
 }
 
+// reconciledStores claims one reconcile pass per store per process: the MCP
+// server builds a fresh client per tool call, so a per-client once is not a
+// process-level dedup — every call would pay the probe + settings GETs
+// again. The key is URL|IndexName; the claiming client performs the pass,
+// every other client for the same store skips it. The topology does not
+// change within one process run, so one pass is enough.
+var reconciledStores sync.Map
+
+func storeAlreadyReconciled(cfg *config.Config) bool {
+	_, loaded := reconciledStores.LoadOrStore(cfg.OpenSearchURL+"|"+cfg.IndexName, struct{}{})
+	return loaded
+}
+
 // reconcileReplicas aligns existing memento indices with the desired count.
 // Called once per process from EnsureIndex; it is best-effort by design — a
 // failed settings write (read-only store, blip) never fails the operation the
 // caller actually asked for.
 func (c *Client) reconcileReplicas(ctx context.Context) {
+	if storeAlreadyReconciled(c.cfg) {
+		return
+	}
 	desired, ok := c.desiredReplicas(ctx)
 	if !ok {
+		// Unknown topology: do not consume the process-wide claim, the next
+		// client may get a trustworthy probe.
+		reconciledStores.Delete(c.cfg.OpenSearchURL + "|" + c.cfg.IndexName)
 		return
 	}
 	c.replicasFixOnce.Do(func() {
@@ -125,20 +150,32 @@ func (c *Client) putReplicas(ctx context.Context, index string, desired int) {
 }
 
 // templateStampedReplicas extracts the replica count baked into the journal
-// index template (-1 = absent/unparseable, treated as "no opinion").
+// index template (-1 = absent/unparseable, treated as "no opinion"). The
+// template GET returns NESTED settings regardless of flat_settings (only
+// index _settings answers flat), so the nested form is tried first and the
+// flat key is a fallback.
 func templateStampedReplicas(resp *opensearchapi.IndexTemplateGetResp) int {
 	if resp == nil || len(resp.IndexTemplates) == 0 {
 		return -1
 	}
-	var settings map[string]json.RawMessage
-	if err := json.Unmarshal(resp.IndexTemplates[0].IndexTemplate.Template.Settings, &settings); err != nil {
-		return -1
+	raw := resp.IndexTemplates[0].IndexTemplate.Template.Settings
+	var flat map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &flat); err == nil {
+		if n, ok := settingInt(flat["index.number_of_replicas"]); ok {
+			return n
+		}
 	}
-	n, ok := settingInt(settings["index.number_of_replicas"])
-	if !ok {
-		return -1
+	var nested struct {
+		Index struct {
+			NumberOfReplicas json.RawMessage `json:"number_of_replicas"`
+		} `json:"index"`
 	}
-	return n
+	if err := json.Unmarshal(raw, &nested); err == nil {
+		if n, ok := settingInt(nested.Index.NumberOfReplicas); ok {
+			return n
+		}
+	}
+	return -1
 }
 
 // settingInt reads a flat setting that may arrive as a JSON string ("1") or

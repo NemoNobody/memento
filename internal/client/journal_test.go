@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/NemoNobody/memento/internal/config"
 	"github.com/NemoNobody/memento/internal/model"
 )
 
@@ -1243,5 +1244,80 @@ func TestMigrateFactLinkedWithArrayAppendsOnlyHistory(t *testing.T) {
 	}
 	if got := len(fake.requestsFor(http.MethodPost, "/memento/_update/k")); got != 1 {
 		t.Errorf("updates after no-op = %d, want still 1", got)
+	}
+}
+
+// journalDriftRePutAnswers answers a drift scenario: template stamped 0, a
+// 3-node topology (desired 1), and lets the caller decide what the corrective
+// template PUT returns.
+func journalDriftRePutAnswers(tplPutStatus int) func(recordedRequest) (int, string) {
+	return func(r recordedRequest) (int, string) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasPrefix(r.Path, "/_ingest/pipeline/"):
+			return http.StatusOK, `{"memento-journal-ts":{"processors":[]}}`
+		case r.Method == http.MethodGet && r.Path == "/_index_template/memento-journal":
+			return http.StatusOK, `{"index_templates":[{"name":"memento-journal","index_template":{"template":{"settings":{"index":{"number_of_replicas":"0"}}}}}]}`
+		case r.Method == http.MethodGet && r.Path == "/_cluster/health":
+			return http.StatusOK, `{"status":"green","number_of_data_nodes":3}`
+		case r.Method == http.MethodPut && r.Path == "/_index_template/memento-journal":
+			if tplPutStatus == http.StatusForbidden {
+				return http.StatusForbidden, `{"status":403,"error":{"type":"security_exception"}}`
+			}
+			return http.StatusOK, `{"acknowledged":true}`
+		case r.Method == http.MethodPut && strings.HasSuffix(r.Path, "/_settings"):
+			return http.StatusOK, `{"acknowledged":true}`
+		case r.Method == http.MethodPost && strings.HasPrefix(r.Path, "/memento-history-") && strings.Contains(r.Path, "/_doc"):
+			return http.StatusOK, `{"_id":"e1","result":"created"}`
+		}
+		return http.StatusInternalServerError, `{"status":500,"error":"unexpected: ` + r.Method + " " + r.Path + `"}`
+	}
+}
+
+func TestJournalDriftRePutFailureIsTolerated(t *testing.T) {
+	// The template exists and appends work with it; a failed corrective re-PUT
+	// (read-only store / permission gap) must NOT fail the append.
+	c, fake := newFakeClientCfg(t, func(cfg *config.Config) {
+		cfg.IndexReplicas = -1
+	}, journalDriftRePutAnswers(http.StatusForbidden))
+	e := model.NewJournalEntry("k", "id", "p", "config", model.OpWrite, "v", "", "s", time.Date(2026, 11, 11, 10, 0, 0, 0, time.UTC))
+	if _, err := c.AppendJournal(context.Background(), e); err != nil {
+		t.Fatalf("AppendJournal must survive a failed drift re-PUT: %v", err)
+	}
+	if puts := fake.requestsFor(http.MethodPut, "/_index_template/memento-journal"); len(puts) != 1 {
+		t.Errorf("drift re-PUT attempts = %d, want 1 (attempted then tolerated)", len(puts))
+	}
+}
+
+func TestJournalInfra403SkipsCreate(t *testing.T) {
+	// A shared-store DLS role cannot read the pipeline or the template (403).
+	// It must NOT attempt to create either (it would fail too); the append must
+	// proceed against the externally-managed infra.
+	c, fake := newFakeClientCfg(t, func(cfg *config.Config) {
+		cfg.IndexReplicas = -1
+	}, func(r recordedRequest) (int, string) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasPrefix(r.Path, "/_ingest/pipeline/"):
+			return http.StatusForbidden, `{"status":403,"error":{"type":"security_exception"}}`
+		case r.Method == http.MethodGet && strings.HasPrefix(r.Path, "/_index_template/"):
+			return http.StatusForbidden, `{"status":403,"error":{"type":"security_exception"}}`
+		case r.Method == http.MethodPut && strings.HasSuffix(r.Path, "/_settings"):
+			return http.StatusOK, `{"acknowledged":true}`
+		case r.Method == http.MethodPost && strings.HasPrefix(r.Path, "/memento-history-") && strings.Contains(r.Path, "/_doc"):
+			return http.StatusOK, `{"_id":"e1","result":"created"}`
+		}
+		return http.StatusInternalServerError, `{"status":500,"error":"unexpected: ` + r.Method + " " + r.Path + `"}`
+	})
+	e := model.NewJournalEntry("k", "id", "p", "config", model.OpWrite, "v", "", "s", time.Date(2026, 11, 11, 10, 0, 0, 0, time.UTC))
+	if _, err := c.AppendJournal(context.Background(), e); err != nil {
+		t.Fatalf("AppendJournal with 403 on infra GET: %v", err)
+	}
+	if p := fake.requestsFor(http.MethodPut, "/_ingest/pipeline/memento-journal-ts"); len(p) != 0 {
+		t.Errorf("pipeline create attempts = %d, want 0 on 403", len(p))
+	}
+	if p := fake.requestsFor(http.MethodPut, "/_index_template/memento-journal"); len(p) != 0 {
+		t.Errorf("template create attempts = %d, want 0 on 403", len(p))
+	}
+	if len(journalAppends(fake)) != 1 {
+		t.Errorf("journal appends = %d, want 1", len(journalAppends(fake)))
 	}
 }

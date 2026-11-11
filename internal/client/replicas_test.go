@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/NemoNobody/memento/internal/config"
 	"github.com/NemoNobody/memento/internal/model"
+	"github.com/opensearch-project/opensearch-go/v4/opensearchapi"
 )
 
 // replicasBase answers the fixed parts of a reconcile pass: the facts index
@@ -126,7 +128,7 @@ func TestJournalTemplateDriftReinstalled(t *testing.T) {
 		case r.Method == http.MethodGet && strings.HasPrefix(r.Path, "/_ingest/pipeline/"):
 			return http.StatusOK, `{"memento-journal-ts":{"processors":[]}}`
 		case r.Method == http.MethodGet && r.Path == "/_index_template/memento-journal":
-			return http.StatusOK, `{"index_templates":[{"name":"memento-journal","index_template":{"template":{"settings":{"index.number_of_replicas":"0"}}}}]}`
+			return http.StatusOK, `{"index_templates":[{"name":"memento-journal","index_template":{"template":{"settings":{"index":{"number_of_replicas":"0","default_pipeline":"memento-journal-ts"}}}}}]}`
 		case r.Method == http.MethodGet && r.Path == "/_cluster/health":
 			return http.StatusOK, `{"status":"green","number_of_data_nodes":3}`
 		case r.Method == http.MethodPut && r.Path == "/_index_template/memento-journal":
@@ -158,7 +160,7 @@ func TestJournalTemplateNoReinstallOnMatch(t *testing.T) {
 		case r.Method == http.MethodGet && strings.HasPrefix(r.Path, "/_ingest/pipeline/"):
 			return http.StatusOK, `{"memento-journal-ts":{"processors":[]}}`
 		case r.Method == http.MethodGet && r.Path == "/_index_template/memento-journal":
-			return http.StatusOK, `{"index_templates":[{"name":"memento-journal","index_template":{"template":{"settings":{"index.number_of_replicas":1}}}}]}`
+			return http.StatusOK, `{"index_templates":[{"name":"memento-journal","index_template":{"template":{"settings":{"index":{"number_of_replicas":1}}}}}]}`
 		case r.Method == http.MethodGet && r.Path == "/_cluster/health":
 			return http.StatusOK, `{"status":"green","number_of_data_nodes":3}`
 		case r.Method == http.MethodPut && r.Path == "/_index_template/memento-journal":
@@ -177,5 +179,81 @@ func TestJournalTemplateNoReinstallOnMatch(t *testing.T) {
 	}
 	if tplPuts != 0 {
 		t.Errorf("template puts = %d, want 0 on match", tplPuts)
+	}
+}
+
+func TestTemplateStampedReplicas_Forms(t *testing.T) {
+	// GET /_index_template returns NESTED settings in production (the old flat
+	// test body was the bug); the flat key stays as a fallback.
+	cases := map[string]int{
+		`{"index_templates":[{"name":"memento-journal","index_template":{"template":{"settings":{"index":{"number_of_replicas":"0","default_pipeline":"p"}}}}}]}`: 0,
+		`{"index_templates":[{"name":"memento-journal","index_template":{"template":{"settings":{"index":{"number_of_replicas":1}}}}}]}`:                          1,
+		`{"index_templates":[{"name":"memento-journal","index_template":{"template":{"settings":{"index.number_of_replicas":"2"}}}}]}`:                            2,
+		`{"index_templates":[{"name":"memento-journal","index_template":{"template":{"settings":{"index":{"number_of_shards":"1"}}}}}]}`:                          -1,
+		`{"index_templates":[{"name":"memento-journal","index_template":{"template":{"settings":null}}}]}`:                                                        -1,
+		`{"index_templates":[]}`: -1,
+	}
+	for body, want := range cases {
+		var resp opensearchapi.IndexTemplateGetResp
+		if err := json.Unmarshal([]byte(body), &resp); err != nil {
+			t.Fatalf("unmarshal %s: %v", body, err)
+		}
+		if got := templateStampedReplicas(&resp); got != want {
+			t.Errorf("body %s: templateStampedReplicas = %d, want %d", body, got, want)
+		}
+	}
+	if got := templateStampedReplicas(nil); got != -1 {
+		t.Errorf("nil response = %d, want -1", got)
+	}
+}
+
+func TestReconcileZeroDataNodesUnknown(t *testing.T) {
+	// A healthy-looking probe that reports zero data nodes is not a trustworthy
+	// topology: reconcile must never write toward 0 off it.
+	c, fake := newFakeClientCfg(t, func(cfg *config.Config) {
+		cfg.IndexReplicas = -1
+	}, replicasBase(`1`, 0))
+	if err := c.EnsureIndex(context.Background()); err != nil {
+		t.Fatalf("EnsureIndex: %v", err)
+	}
+	if puts := fake.requestsFor(http.MethodPut, "/memento/_settings"); len(puts) != 0 {
+		t.Errorf("puts = %d, want 0 on a zero-node topology", len(puts))
+	}
+}
+
+func TestReconcileHistoryWildcardMissing(t *testing.T) {
+	// No history indices yet (or the role cannot read them): the wildcard GET
+	// 404s — reconcile must succeed and write nothing for history.
+	base := replicasBase(`1`, 2)
+	c, fake := newFakeClientCfg(t, func(cfg *config.Config) {
+		cfg.IndexReplicas = -1
+	}, func(r recordedRequest) (int, string) {
+		if r.Method == http.MethodGet && r.Path == "/memento-history-*/_settings" {
+			return http.StatusNotFound, `{"status":404,"error":{"type":"index_not_found_exception"}}`
+		}
+		return base(r)
+	})
+	if err := c.EnsureIndex(context.Background()); err != nil {
+		t.Fatalf("EnsureIndex: %v", err)
+	}
+	if puts := fake.requestsFor(http.MethodPut, "/memento/_settings"); len(puts) != 0 {
+		t.Errorf("facts puts = %d, want 0 on match", len(puts))
+	}
+}
+
+func TestReconcilePutFailureBestEffort(t *testing.T) {
+	// A failed corrective settings write (read-only store) must not fail the
+	// operation the caller asked for.
+	base := replicasBase(`"0"`, 2)
+	c, _ := newFakeClientCfg(t, func(cfg *config.Config) {
+		cfg.IndexReplicas = -1
+	}, func(r recordedRequest) (int, string) {
+		if r.Method == http.MethodPut && strings.HasSuffix(r.Path, "/_settings") {
+			return http.StatusForbidden, `{"status":403,"error":{"type":"security_exception"}}`
+		}
+		return base(r)
+	})
+	if err := c.EnsureIndex(context.Background()); err != nil {
+		t.Fatalf("EnsureIndex must survive a failed replica PUT: %v", err)
 	}
 }

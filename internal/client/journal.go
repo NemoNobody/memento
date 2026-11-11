@@ -140,7 +140,7 @@ func (c *Client) ensureJournalInfra(ctx context.Context) error {
 	}
 	pipeline := journalPipelineName(c.cfg.IndexName)
 	_, getErr := c.api.Ingest.Get(ctx, &opensearchapi.IngestGetReq{PipelineIDs: []string{pipeline}})
-	if getErr != nil {
+	if getErr != nil && !statusIs(getErr, 403) {
 		body, _ := json.Marshal(buildJournalPipelineBody(c.cfg.IndexName))
 		if _, mkErr := c.api.Ingest.Create(ctx, opensearchapi.IngestCreateReq{
 			PipelineID: pipeline,
@@ -149,9 +149,18 @@ func (c *Client) ensureJournalInfra(ctx context.Context) error {
 			return wrapWriteError("create journal pipeline", mkErr)
 		}
 	}
+	// 403 on the pipeline GET: the role has no ingest rights, so the infra is
+	// externally managed (the shared-store DLS recipe). Skipping the create is
+	// the only way a read/write-only role can append at all.
 
 	tpl := journalTemplateName(c.cfg.IndexName)
 	got, exErr := c.api.IndexTemplate.Get(ctx, &opensearchapi.IndexTemplateGetReq{IndexTemplates: tpl})
+	if exErr != nil && statusIs(exErr, 403) {
+		// Same story as the pipeline: no template read permission = externally
+		// managed template, leave it alone and let the append proceed.
+		c.journalInfraOK = true
+		return nil
+	}
 	if exErr != nil {
 		// Missing (or briefly unreadable): create. A lost create-race just
 		// re-PUTs the same body — composable templates are replaced by name.
@@ -173,7 +182,11 @@ func (c *Client) ensureJournalInfra(ctx context.Context) error {
 				IndexTemplate: tpl,
 				Body:          strings.NewReader(string(body)),
 			}); mkErr != nil {
-				return wrapWriteError("update journal template", mkErr)
+				// Best-effort: the template exists and appends work with it;
+				// a failed alignment (read-only store, permission gap) must not
+				// fail the write the caller asked for. The create branch above
+				// stays fatal — without a template the appends are broken.
+				_ = mkErr
 			}
 		}
 	}
