@@ -230,6 +230,22 @@ func TestAddSub409WordingIsNotConflict(t *testing.T) {
 	}
 }
 
+// TestAddConflictCanonicalTypeRewrittenReason: the canonical type
+// disjunct must answer on its own — a proxy that keeps the engine's
+// version_conflict_engine_exception type but rewrites the reason away
+// from the fallback wording is still a CAS conflict, not a plain
+// cluster error.
+func TestAddConflictCanonicalTypeRewrittenReason(t *testing.T) {
+	var got recordedRequest
+	c, _ := newFakeClient(t, casRespond(casSource, http.StatusConflict,
+		`{"error":{"type":"version_conflict_engine_exception","reason":"document version mismatch"},"status":409}`, &got))
+
+	_, err := c.Add(context.Background(), model.NewFact("k", "same", "config", "p", "test:cas", "retouched"))
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("error = %v, want ErrConflict (canonical type must classify without fallback wording)", err)
+	}
+}
+
 func TestPatchValueChangeIsNotConditional(t *testing.T) {
 	var got recordedRequest
 	c, _ := newFakeClient(t, casRespond(casSource, http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`, &got))

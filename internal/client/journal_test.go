@@ -541,6 +541,11 @@ func TestJournalCollisionStringShape(t *testing.T) {
 			// one disjunct from the string branch fails here.
 			`{"error":"document already exists","status":409}`,
 			`{"error":"version_conflict for document [k]","status":409}`,
+			// the race-wording compound must be CONJUNCTIVE: an "index ["
+			// marker with real conflict wording and no "already exists"
+			// is a doc collision, not the index race.
+			`{"error":{"type":"search_phase_execution_exception","reason":"index [memento]: version conflict, required seq_no [5]"},"status":409}`,
+			`{"error":"index [memento]: version conflict, required seq_no [5]","status":409}`,
 		} {
 			c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
 				if code, b := journalInfraOK(r); code != http.StatusInternalServerError {
