@@ -193,8 +193,9 @@ func (c *Client) AppendJournal(ctx context.Context, e *model.JournalEntry) (stri
 // derived from the fact's content (journalEntryID hashes key/op/value/
 // notes/source/observation time): only those can legitimately collide on
 // a rerun, and that tuple identifies the logical write — project is
-// write-once and never enters the hash, and a category move is a new
-// version carrying a different value. Fresh uuid refs (the touch/
+// write-once and never enters the hash, and a category move that also
+// changes the value hashes to a different id (a same-value category
+// move is a plain touch and never journals). Fresh uuid refs (the touch/
 // resurrect/correction paths) can never pre-exist, so a 409 there is an
 // anomaly — a rewritten body or a middlebox — and must surface, never
 // masquerade as a completed append with a dangling current_ref.
