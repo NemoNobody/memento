@@ -32,6 +32,10 @@ jobs:
           GOOS=windows GOARCH=amd64 go build ./...
       - name: Test
         run: go test ./...
+      - name: Install keyring test deps
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq gnome-keyring
+      - name: Keyring integration (Secret Service)
+        run: make test-keyring
       - name: Lint
         uses: golangci/golangci-lint-action@v9
         with:
@@ -56,3 +60,22 @@ jobs:
         run: go build ./...
       - name: Test platform-neutral packages
         run: go test ./internal/model/ ./internal/config/ ./internal/secretguard/
+
+  # macOS users get the Keychain provider (zalando/go-keyring): the only way to
+  # know it actually works there is to run it. The runner's login keychain is
+  # unlocked, and the test namespaces its entry, so nothing of the runner's is
+  # touched.
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Vet
+        run: go vet ./...
+      - name: Build
+        run: go build ./...
+      - name: Keyring integration (Keychain)
+        run: MEMENTO_KEYRING_TEST=1 go test ./internal/keyring/ -v

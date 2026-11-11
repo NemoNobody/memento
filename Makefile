@@ -26,6 +26,16 @@ build:
 test:
 	go test ./...
 
+# Keyring integration: a disposable session bus + gnome-keyring with a
+# throwaway HOME, so the developer's real wallet is never touched. The tests
+# are opt-in (MEMENTO_KEYRING_TEST=1) because a plain `go test` must not write
+# to a live keychain; CI runs this target on Linux and the equivalent against
+# the macOS Keychain (internal/keyring).
+test-keyring:
+	@command -v dbus-run-session >/dev/null 2>&1 || { echo "test-keyring needs dbus-run-session (dbus) and gnome-keyring-daemon"; exit 1; }
+	@command -v gnome-keyring-daemon >/dev/null 2>&1 || { echo "test-keyring needs gnome-keyring-daemon (package: gnome-keyring)"; exit 1; }
+	dbus-run-session -- bash -c 'h=$$(mktemp -d); export HOME=$$h; eval "$$(echo -n memento-ci | gnome-keyring-daemon --unlock --replace --components=secrets)" >/dev/null 2>&1; MEMENTO_KEYRING_TEST=1 go test ./internal/keyringnative/ -v; rc=$$?; rm -rf "$$h"; exit $$rc'
+
 vet:
 	go vet ./...
 

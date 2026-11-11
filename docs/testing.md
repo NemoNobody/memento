@@ -48,12 +48,31 @@ continue while yellow), node return (back to green, data intact). Automatic
 replica stamping (`index_replicas: -1`) verified: 0 replicas on a lone data
 node, 1 on a multi-node cluster.
 
+## Keyring — real providers (`make test-keyring`)
+
+The secret store is the one dependency a mock cannot vouch for: the wire
+protocol, the default-collection resolution and the "missing entry" sentinel
+are provider behavior. `make test-keyring` starts a disposable session bus
+(`dbus-run-session`) and a `gnome-keyring-daemon` with a throwaway `HOME`, then
+runs `internal/keyringnative` against it — the developer's real wallet is never
+touched. The tests also exist behind `MEMENTO_KEYRING_TEST=1`, which is what CI
+turns on:
+
+- Linux: `make test-keyring` in the `build-test` job (Secret Service over D-Bus).
+- macOS: the `macos` job runs `MEMENTO_KEYRING_TEST=1 go test ./internal/keyring/`
+  against the runner's login Keychain (the zalando provider: `security` CLI).
+- Windows: build + platform-neutral tests only; the Credential Manager path is
+  unverified (no runner coverage yet).
+
+A plain `go test ./...` never writes to a live keychain: the integration tests
+skip unless the flag is set.
+
 ## Not yet covered (known gaps)
 
 - **secure profile** (`make dev-opensearch-secure`, https + demo certs) —
   infrastructure ready, live run pending.
-- **keyringnative on darwin/windows** — cross-compiled binaries are smoke-tested
-  only on linux/amd64; platform keyring paths need real machines.
+- **keyringnative on darwin/windows** — darwin is covered by the `macos` CI job
+  (Keychain); the Windows Credential Manager path is still unverified.
 - The OpenSearch **Dashboards bundle** targets the current OSD line; older OSD
   versions are out of scope by decision: adapting saved objects to every old
   OSD line is a maintenance tax with no paying user.
