@@ -43,6 +43,13 @@ Bundle invariants (OSD 3.x quirks, all learned live):
   long/integer to "number" (gen_fields.py TYPE_MAP encodes this);
 - visualization `attributes` must not contain `optionsJSON` (strict
   saved-object mapping rejects it; options live inside `visState`);
+- the dashboard's `panelsJSON` must be a JSON **array** of panel entries
+  (`{"version","type":"visualization","panelIndex":N,"panelRefName":
+  "panel_N","gridData":{"x","y","w","h","i"},"embeddableConfig":{}}`);
+  the map form `{"p1":{...}}` saves without complaint but the dashboard
+  renders completely empty;
+- `visState` aggs live at the TOP level (`{"title","type","params",
+  "aggs":[...]}`), not under `params`;
 - the dashboard pins `timeRestore` + `now-90d..now`, otherwise the
   default "last 15 minutes" renders it empty.
 
