@@ -331,7 +331,7 @@ func TestMCPServerAddBatchSurfacesPartialSuccess(t *testing.T) {
 		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/memento/_doc/"):
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = io.WriteString(w, `{"error":{"type":"document_missing_exception","reason":"no such document","index":"memento"},"status":404}`)
-		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "-history-"):
+		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "-history-") && strings.Contains(r.URL.Path, "/_doc/"):
 			w.WriteHeader(http.StatusInternalServerError)
 			_, _ = io.WriteString(w, `{"error":{"type":"cluster_block_exception","reason":"journal write blocked"},"status":500}`)
 		default:
@@ -368,6 +368,64 @@ func TestMCPServerAddBatchSurfacesPartialSuccess(t *testing.T) {
 	}
 	if !it.Created {
 		t.Errorf("item.created = false, want true (the fact doc stored; only the journal lagged): %s", raw)
+	}
+}
+
+// TestMCPServerPatchBatchSurfacesPartialSuccess is the patch twin of
+// TestMCPServerAddBatchSurfacesPartialSuccess: an accepted value change
+// whose journal entry lagged must surface changed=true beside the item
+// error — Patch returns the partial PatchResult with that error.
+func TestMCPServerPatchBatchSurfacesPartialSuccess(t *testing.T) {
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodHead && r.URL.Path == "/memento":
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/memento/_doc/"):
+			_, _ = io.WriteString(w, `{"_index":"memento","_id":"k","_version":1,"_seq_no":3,"_primary_term":1,"found":true,"_source":{"key":"k","value":"old","category":"config","project":"p","status":"verified"}}`)
+		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "-history-") && strings.Contains(r.URL.Path, "/_doc/"):
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, `{"error":{"type":"cluster_block_exception","reason":"journal write blocked"},"status":500}`)
+		default:
+			_, _ = io.WriteString(w, `{"_index":"memento","_id":"k","result":"updated"}`)
+		}
+	}))
+	t.Cleanup(fake.Close)
+	session := connectTestServer(t, "OPENSEARCH_URL="+fake.URL)
+
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "memento_patch_batch",
+		Arguments: map[string]any{"items": []any{
+			map[string]any{"key": "k", "value": "new value"},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("CallTool(memento_patch_batch): %v", err)
+	}
+	raw, _ := json.Marshal(res.StructuredContent)
+	var out struct {
+		Changed int `json:"changed"`
+		Items   []struct {
+			Key     string `json:"key"`
+			Changed bool   `json:"changed"`
+			Error   string `json:"error"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("structured content: %v (%s)", err, raw)
+	}
+	if len(out.Items) != 1 {
+		t.Fatalf("items = %d, want 1: %s", len(out.Items), raw)
+	}
+	it := out.Items[0]
+	if it.Error == "" {
+		t.Fatalf("the journal failure must be reported per item: %s", raw)
+	}
+	if !it.Changed {
+		t.Errorf("item.changed = false, want true (the value change landed; only the journal lagged): %s", raw)
+	}
+	if out.Changed != 1 {
+		t.Errorf("batch changed counter = %d, want 1 (the write landed): %s", out.Changed, raw)
 	}
 }
 

@@ -123,10 +123,18 @@ func isAlreadyExists(err error) bool {
 }
 
 // isVersionConflict reports OpenSearch's optimistic-concurrency rejection:
-// op_type=create on an existing document (or an if_seq_no mismatch).
+// op_type=create on an existing document (or an if_seq_no mismatch). Like
+// isNotFound, it answers from either error shape the client can produce —
+// a structured body or a bare 409 (a proxy that rewrites the body must not
+// turn the create race into an abort, or the deterministic-id journal
+// collision into a failed repair).
 func isVersionConflict(err error) bool {
 	var ste *opensearch.StructError
-	return errors.As(err, &ste) && ste.Err.Type == "version_conflict_engine_exception"
+	if errors.As(err, &ste) {
+		return ste.Err.Type == "version_conflict_engine_exception"
+	}
+	var se *opensearch.StringError
+	return errors.As(err, &se) && se.Status == http.StatusConflict
 }
 
 // isClusterBlock reports whether the error is OpenSearch refusing a write
@@ -355,8 +363,10 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 			// repairable: a same-value retry is a touch, not a relink, but
 			// migrate-history re-appends the current entry under the SAME
 			// deterministic id and links it — the collision is success, so
-			// the repair neither duplicates the birth entry nor needs the
-			// old auto id.
+			// the repair needs no old auto id. (The id collision assumes
+			// notes/source unchanged since birth; a touch that moved them
+			// hashes a new id and appends the newer state as its own entry —
+			// a second snapshot, not a duplicate of the birth.)
 			ts := f.ObservedAt
 			if ts.IsZero() {
 				ts = f.UpdatedAt

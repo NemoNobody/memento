@@ -866,16 +866,19 @@ func (s *mcpServer) addBatch(ctx context.Context, req *mcp.CallToolRequest, in a
 			// Label the item, not the single-add tool: an agent reading a
 			// batch answer must not conclude memento_add itself broke.
 			item.Error = "memento_add_batch item " + strconv.Itoa(i) + ": " + strings.TrimPrefix(err.Error(), "memento_add: ")
-		} else {
-			if res.Created {
-				out.Created++
-			}
-			if res.Changed {
-				out.Changed++
-			}
-			if !res.Changed {
-				out.Touched++
-			}
+		}
+		// The counters read what LANDED, not only what completed cleanly: a
+		// partial success stored the fact (item.Error names the lagged
+		// follow-up), and a summary that contradicts the per-item truth is
+		// exactly the audit lie the counters exist to prevent.
+		if res.Created {
+			out.Created++
+		}
+		if res.Changed {
+			out.Changed++
+		}
+		if err == nil && !res.Changed {
+			out.Touched++
 		}
 		out.Items = append(out.Items, item)
 	}
@@ -982,6 +985,13 @@ func (s *mcpServer) patchOne(ctx context.Context, cfg *config.Config, c *client.
 		return patchOutput{}, fmt.Errorf("memento_patch: no fact with key %q: nothing to patch (memento_add creates)", in.Key)
 	}
 	if err != nil {
+		// Partial success (the patch landed, the journal follow-up lagged):
+		// Patch reports what landed in res. memento_patch_batch copies the
+		// flags into its per-item output; do not drop them (see addOne's note —
+		// the single edge cannot show them, the batch edge must).
+		if res.Changed || res.Status != "" {
+			return patchOutput{Key: in.Key, Changed: res.Changed, Status: res.Status}, writeFailure("memento_patch", err)
+		}
 		return patchOutput{}, writeFailure("memento_patch", err)
 	}
 	out := patchOutput{Key: in.Key, Changed: res.Changed, Status: res.Status}
@@ -1044,9 +1054,12 @@ func (s *mcpServer) patchBatch(ctx context.Context, req *mcp.CallToolRequest, in
 			// Batch label, same as memento_add_batch: the item failed, not
 			// the single-patch tool.
 			item.Error = "memento_patch_batch item " + strconv.Itoa(i) + ": " + strings.TrimPrefix(err.Error(), "memento_patch: ")
-		} else if res.Changed {
+		}
+		// Counters read what landed (the add_batch rule): a partial success
+		// did change the fact; the error names its lagged follow-up.
+		if res.Changed {
 			out.Changed++
-		} else {
+		} else if err == nil {
 			out.Touched++
 		}
 		out.Items = append(out.Items, item)
