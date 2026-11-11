@@ -292,7 +292,12 @@ func (c *Client) ensureJournalIndexPipeline(ctx context.Context, index string) e
 		Indices: []string{index},
 		Body:    strings.NewReader(string(body)),
 	})
-	if err != nil && !isNotFound(err) {
+	// A 404 means the index does not exist (its creation applies the template).
+	// A 403 means the role deliberately cannot manage index settings — the
+	// shared-store recipe where a service account owns the infra: skip the pin,
+	// the externally-managed index already carries the pipeline. Only a genuine
+	// transport/server error fails the append.
+	if err != nil && !isNotFound(err) && !statusIs(err, 403) {
 		return wrapWriteError("journal index pipeline", err)
 	}
 	c.journalInfraMu.Lock()

@@ -18,7 +18,7 @@ BASE_URL="${BASE_URL:-https://github.com/$REPO}"
 VERSION=""
 INSTALL_DIR="${MEMENTO_INSTALL_DIR:-$HOME/.local/bin}"
 
-usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0; }
+usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -47,10 +47,19 @@ esac
 
 auth=()
 [ -n "${GITHUB_TOKEN:-}" ] && auth=(-H "Authorization: Bearer $GITHUB_TOKEN")
+# Bounded, retried curl. The auth array is empty on public installs, and an
+# empty "${auth[@]}" trips `set -u` on bash <4.4 (stock macOS 3.2), hence the
+# +expansion guard folded in once here so every call site stays simple.
+curlargs=(-fsSL --retry 3 --retry-delay 1 --max-time 120 ${auth[@]+"${auth[@]}"})
 
 if [ -z "$VERSION" ]; then
   command -v python3 >/dev/null || { echo "need python3 to parse the latest release (or pass --version)" >&2; exit 1; }
-  VERSION=$(curl -fsSL "${auth[@]}" "$API/repos/$REPO/releases/latest" | python3 -c 'import json,sys;print(json.load(sys.stdin)["tag_name"])')
+  if ! latest=$(curl "${curlargs[@]}" "$API/repos/$REPO/releases/latest" 2>/dev/null); then
+    echo "could not read the latest release from $API/repos/$REPO/releases/latest" >&2
+    echo "  a private repo needs GITHUB_TOKEN (fine-grained PAT, contents:read); or pin one: --version v0.7.0" >&2
+    exit 1
+  fi
+  VERSION=$(printf '%s' "$latest" | python3 -c 'import json,sys;print(json.load(sys.stdin)["tag_name"])')
 fi
 
 ASSET="memento-$os-$arch"
@@ -58,8 +67,8 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
 echo "downloading $ASSET $VERSION ..."
-curl -fsSL "${auth[@]}" -o "$tmp/$ASSET"       "$BASE_URL/releases/download/$VERSION/$ASSET"
-curl -fsSL "${auth[@]}" -o "$tmp/checksums.txt" "$BASE_URL/releases/download/$VERSION/checksums.txt"
+curl "${curlargs[@]}" -o "$tmp/$ASSET"        "$BASE_URL/releases/download/$VERSION/$ASSET"
+curl "${curlargs[@]}" -o "$tmp/checksums.txt" "$BASE_URL/releases/download/$VERSION/checksums.txt"
 
 # Verify sha256 against the release checksums. The second field is compared
 # exactly (memento-linux-amd64 must not match memento-linux-arm64's line).

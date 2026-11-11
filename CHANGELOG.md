@@ -347,11 +347,21 @@ Hardening (pre-release review conveyor):
   A single-node install that later grows into a cluster self-heals instead of
   staying unreplicated. In auto mode nothing is written when the health probe
   fails — an unknown topology is never "fixed" toward 0; an explicit
-  `index_replicas` value is now enforced on existing indices too.
+  `index_replicas` value is now enforced on existing indices too. The
+  journal-template reader parses the nested settings shape OpenSearch actually
+  returns (the flat-key form never matched, so the template re-PUT never fired),
+  reconcile now claims one pass per store per process (a long-lived MCP server
+  builds a fresh client per call), a health probe reporting zero data nodes is
+  treated as unknown, and the shared-store DLS recipe is honored end to end: a
+  403 reading the pipeline/template or pinning the journal pipeline is taken as
+  "externally managed infra" instead of failing the write.
 - Verified version matrix: the live CLI smoke (`hack/cli-smoke.sh`, 23 checks)
   passes on OpenSearch 2.19.7, 3.0.0, 3.3.2, 3.8.0 and 3.9.0
   (`hack/version-matrix.sh`); `OPENSEARCH_IMAGE`/`OSD_IMAGE` can pin the dev
-  stack images. What is covered is now written down in `docs/testing.md`.
+  stack images. What is covered is now written down in `docs/testing.md`. The
+  matrix runs under its own compose project (`-p memento-matrix`) and asserts
+  the reported version matches the tag, so it can neither wipe a developer's
+  `memento-os` data volume nor score a PASS against the wrong image.
 - `scripts/install.sh`: release installer (latest or `--version`, os/arch
   detection, sha256 verification against the release `checksums.txt`, installs
   into `~/.local/bin`).

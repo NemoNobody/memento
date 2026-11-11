@@ -393,8 +393,11 @@ boundaries, composable:
    "dls": "{\"term\":{\"project\":\"team-a\"}}",
    "allowed_actions": ["read", "search", "indices:admin/get",
                        "indices:data/write/index",
-                       "indices:data/write/update", "indices:admin/create"]}
-  }
+                       "indices:data/write/update", "indices:admin/create"]},
+  {"index_patterns": ["memento-history-*"],
+   "dls": "{\"term\":{\"project\":\"team-a\"}}",
+   "allowed_actions": ["read", "search", "indices:admin/get",
+                       "indices:data/write/*", "indices:admin/create"]}
   ```
 
   DLS is enforced by the server on every search **and** on get-by-id (a
@@ -405,11 +408,16 @@ boundaries, composable:
 
 Two honest caveats for the shared layout:
 
-- `manage_index_templates`/`manage_ingest_pipelines` are cluster-level: every
-  memento user's client keeps the journal template aligned (see above). For a
-  cooperative shared store this is fine; if tenants must not touch shared
-  infra, run one service account that owns the infra and give humans DLS-only
-  read/write roles (writes work once the infra exists).
+- `manage_index_templates`/`manage_ingest_pipelines` are cluster-level: give
+  them to one service account (or a cooperative single-user install) that owns
+  the journal template and pipeline. A human DLS role above carries **neither**,
+  and that is now supported end to end: the client treats a 403 reading the
+  pipeline or template, or pinning the pipeline on a journal index, as "this
+  infra is externally managed" and proceeds — so humans can read, write facts
+  and append history as long as the service account (or an earlier append) has
+  provisioned the template and the current period's pipeline. Without that
+  provisioning the first append of a new period fails loudly, which is the
+  correct signal that the infra owner has not run yet.
 - The store is still plaintext. Per-project DLS is *access control*, not
   encryption: never put secrets in facts, docs or journal — the secret-guard
   is there to keep even honest mistakes out.
