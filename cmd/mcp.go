@@ -776,6 +776,12 @@ func (s *mcpServer) addOne(ctx context.Context, cfg *config.Config, c *client.Cl
 	f.Summary = in.Summary
 	res, err := c.Add(ctx, f)
 	if err != nil {
+		// Partial success must not vanish from the answer: when the fact doc
+		// landed and only the journal/link follow-up failed, the flags say so
+		// (the error text carries the failure). The batch edge already does this.
+		if res.Created || res.Changed {
+			return addOutput{Key: in.Key, Created: res.Created, Changed: res.Changed, Status: f.Status}, writeFailure("memento_add", err)
+		}
 		return addOutput{}, writeFailure("memento_add", err)
 	}
 	out := addOutput{Key: in.Key, Created: res.Created, Changed: res.Changed,

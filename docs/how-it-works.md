@@ -83,9 +83,11 @@ memento get <key> [--history]
 Returns the fact for a key, plus the freshness signal (`age_days`, `stale`).
 The history chain is **off by default** (it bloats the context of agents that
 read facts on every turn); `--history` prints the legacy in-doc array of
-pre-journal facts, and the newest journal entries (up to 20) for journal-era
-facts. The full journal is one `memento journal <key> --limit <N>` away
-(counts at a glance: `memento history-info`).
+pre-journal facts (a half-migrated fact keeps showing the array until
+`migrate-history` retires it), and for facts without a legacy array the
+newest journal entries (up to 20). The full journal is one
+`memento journal <key> --limit <N>` away (counts at a glance:
+`memento history-info`).
 
 ### search
 

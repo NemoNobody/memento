@@ -339,7 +339,10 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 		// the fact. Later writes move only updated_by.
 		c.resolveAuthor(ctx).stampFact(f)
 		f.UpdatedBy = f.Author
-		created, err := c.createFact(ctx, f)
+		// Distinct names: the create pair belongs to the link only. The outer
+		// seqNo/primaryTerm must keep receiving the create-loser re-read below —
+		// the touch path conditions on those.
+		created, birthSeq, birthTerm, err := c.createFact(ctx, f)
 		if err != nil {
 			return AddResult{}, err
 		}
@@ -360,10 +363,10 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 			}
 			ref := journalEntryID(f.Key, model.OpWrite, f.Value, f.Notes, f.Source, ts)
 			if _, jErr := c.appendJournalID(ctx, c.newJournalEntryFor(ctx, f, f.FactID, ts), ref, ""); jErr != nil {
-				return AddResult{Created: true, Changed: true}, jErr
+				return AddResult{Created: true, Changed: true}, fmt.Errorf("add: the fact doc was stored, the journal entry lagged: %w", jErr)
 			}
-			if lErr := c.linkCurrentRef(ctx, f.Key, ref); lErr != nil {
-				return AddResult{Created: true, Changed: true}, lErr
+			if lErr := c.linkCurrentRef(ctx, f.Key, ref, birthSeq, birthTerm); lErr != nil {
+				return AddResult{Created: true, Changed: true}, fmt.Errorf("add: the fact and its birth journal entry were stored, the link to the journal failed (migrate-history repairs the link): %w", lErr)
 			}
 			return AddResult{Created: true, Changed: true}, nil
 		}
@@ -551,18 +554,18 @@ func (c *Client) newJournalEntryFor(ctx context.Context, f *model.Fact, factID s
 // linkCurrentRef points a fact at its journal entry. Used on the create
 // path (the fact doc is written before the entry id is committed); the
 // correction script sets current_ref inside the same write.
-// The link is a snapshot-derived write like the others: the doc is already
-// visible (wait_for), so a concurrent correction can land between the
-// create and the link — an unconditional link would overwrite the winner's
-// current_ref with the birth ref, leaving current_ref pointing at an entry
-// that does not carry the live value (and a later prune --keep could delete
-// the entry that does). Read the version pair, write conditioned; a lost
-// race is an honest ErrConflict (the winner's link is already correct).
-func (c *Client) linkCurrentRef(ctx context.Context, key, ref string) error {
-	_, seqNo, primaryTerm, err := c.getFactVersion(ctx, key)
-	if err != nil {
-		return fmt.Errorf("link current_ref: %w", err)
-	}
+// The link is a snapshot-derived write: it is conditioned on the version
+// pair the create itself reported — "nothing has touched this doc since I
+// wrote it". A concurrent correction landing after the create bumps the
+// version, the link conflicts honestly, and the winner's current_ref (set
+// by its own script, pointing at the entry that carries the live value)
+// survives. An unconditional link here would overwrite it with the birth
+// ref, leaving current_ref pointing at an entry that does not carry the
+// live value — a later prune --keep could then delete the entry that does.
+// Re-reading the pair at link time would NOT close that window (the
+// correction would be inside the snapshot); the pair must come from the
+// create response.
+func (c *Client) linkCurrentRef(ctx context.Context, key, ref string, seqNo, primaryTerm int) error {
 	body, _ := json.Marshal(map[string]interface{}{
 		"doc": map[string]interface{}{"current_ref": ref},
 	})
@@ -614,24 +617,26 @@ func (c *Client) checkSummaryRequired(f *model.Fact) error {
 // createFact stores a brand-new fact with op_type=create: OpenSearch refuses
 // the write when the document exists, so two concurrent creators of the same
 // key cannot silently overwrite each other (last-write-wins would lose the
-// first value with no history entry). It reports created=true on success and
-// created=false on a version conflict, leaving the caller to re-read the
-// winner and apply the fact as a correction.
-func (c *Client) createFact(ctx context.Context, f *model.Fact) (bool, error) {
+// first value with no history entry). It reports created=true on success
+// (with the document version pair the create itself wrote — the birth link
+// is conditioned on exactly that state) and created=false on a version
+// conflict, leaving the caller to re-read the winner and apply the fact as a
+// correction.
+func (c *Client) createFact(ctx context.Context, f *model.Fact) (bool, int, int, error) {
 	body, _ := json.Marshal(f)
-	_, err := c.api.Index(ctx, opensearchapi.IndexReq{
+	resp, err := c.api.Index(ctx, opensearchapi.IndexReq{
 		Index:      c.cfg.IndexName,
 		DocumentID: f.Key,
 		Body:       bytes.NewReader(body),
 		Params:     opensearchapi.IndexParams{Refresh: "wait_for", OpType: "create"},
 	})
 	if err == nil {
-		return true, nil
+		return true, resp.SeqNo, resp.PrimaryTerm, nil
 	}
 	if isVersionConflict(err) {
-		return false, nil
+		return false, 0, 0, nil
 	}
-	return false, wrapWriteError("add fact", err)
+	return false, 0, 0, wrapWriteError("add fact", err)
 }
 
 // Get gets a fact by key. It uses the realtime document GET API, so it sees

@@ -87,7 +87,6 @@ func TestSanitizeLabel(t *testing.T) {
 
 func TestAddCreateCarriesAuthorLabels(t *testing.T) {
 	var putBody string
-	putDone := false
 	c, fake := newFakeClientCfg(t, func(cfg *config.Config) {
 		cfg.Author = "alice"
 		cfg.Model = "strata"
@@ -101,14 +100,9 @@ func TestAddCreateCarriesAuthorLabels(t *testing.T) {
 		case r.Method == http.MethodGet && r.Path == "/_security/authinfo":
 			return http.StatusNotFound, `{"status":404}`
 		case r.Method == http.MethodGet && r.Path == "/memento/_doc/new":
-			if !putDone {
-				return http.StatusNotFound, `{"status":404,"error":"document_missing_exception"}`
-			}
-			// The create-path link re-reads the doc for its CAS pair.
-			return http.StatusOK, `{"_index":"memento","_id":"new","_seq_no":1,"_primary_term":1,"found":true,"_source":{"key":"new","value":"v","category":"config","project":"p","status":"verified"}}`
+			return http.StatusNotFound, `{"status":404,"error":"document_missing_exception"}`
 		case r.Method == http.MethodPut && r.Path == "/memento/_doc/new":
 			putBody = r.Body
-			putDone = true
 			return http.StatusCreated, `{"_index":"memento","_id":"new","result":"created"}`
 		case r.Method == http.MethodPost && r.Path == "/memento/_update/new":
 			return http.StatusOK, `{"_index":"memento","_id":"new","result":"updated"}`
