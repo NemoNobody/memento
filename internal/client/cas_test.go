@@ -211,6 +211,25 @@ func TestAddCanonicalRaceTypeIsNeverDocConflict(t *testing.T) {
 	}
 }
 
+// TestAddSub409WordingIsNotConflict: the status gates are part of the
+// contract — a 400 whose reason happens to carry collision wording is a
+// validation failure, not a doc CAS collision. Without the gates this
+// body would masquerade as ErrConflict ("re-read and retry") and send
+// the agent on a futile loop against a permanent validation error.
+func TestAddSub409WordingIsNotConflict(t *testing.T) {
+	var got recordedRequest
+	c, _ := newFakeClient(t, casRespond(casSource, http.StatusBadRequest,
+		`{"error":{"type":"mapper_parsing_exception","reason":"document already exists"},"status":400}`, &got))
+
+	_, err := c.Add(context.Background(), model.NewFact("k", "same", "config", "p", "test:cas", "retouched"))
+	if errors.Is(err, ErrConflict) {
+		t.Fatalf("a 400 must not classify as a CAS conflict, got: %v", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "mapper_parsing_exception") {
+		t.Fatalf("the validation failure must surface honestly, got: %v", err)
+	}
+}
+
 func TestPatchValueChangeIsNotConditional(t *testing.T) {
 	var got recordedRequest
 	c, _ := newFakeClient(t, casRespond(casSource, http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`, &got))

@@ -407,6 +407,35 @@ func TestJournalCollisionStringShape(t *testing.T) {
 			t.Errorf("appended = %d, want 0: an unrelated 409 must not fake the append", appended)
 		}
 	})
+	t.Run("sub-409 collision wording never fakes the append", func(t *testing.T) {
+		// Pins the status gate per shape: a 400 whose reason happens to
+		// carry collision wording is a validation failure, not a doc
+		// collision — dropping the status==409 requirement from either
+		// branch would fake the append on these bodies.
+		for _, body := range []string{
+			`{"error":{"type":"mapper_parsing_exception","reason":"document already exists"},"status":400}`,
+			`{"error":"document already exists","status":400}`,
+		} {
+			c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+				if code, b := journalInfraOK(r); code != http.StatusInternalServerError {
+					return code, b
+				}
+				switch {
+				case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-"):
+					return http.StatusBadRequest, body
+				}
+				return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Method + " " + r.Path + `"}`
+			})
+			f := model.NewFact("k", "v", "config", "p", "s", "")
+			appended, err := c.MigrateFact(context.Background(), f, time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC))
+			if err == nil || !strings.Contains(err.Error(), "journal append") {
+				t.Fatalf("collision wording below 409 (%s) must fail the append honestly: %v", body, err)
+			}
+			if appended != 0 {
+				t.Errorf("appended = %d, want 0 for %s: no document was written", appended, body)
+			}
+		}
+	})
 	t.Run("struct shape with collision wording is success", func(t *testing.T) {
 		c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
 			if code, body := journalInfraOK(r); code != http.StatusInternalServerError {
