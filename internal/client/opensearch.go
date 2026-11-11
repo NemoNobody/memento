@@ -140,7 +140,7 @@ func isAlreadyExists(err error) bool {
 //   - no index-creation-race signature anywhere in the body: the race
 //     writes NO document, so reading it as a doc collision would fake a
 //     journal append and dangle current_ref. The race names
-//     race names resource_already_exists_exception (type or reason, at
+//     resource_already_exists_exception (type or reason, at
 //     the top level or in the nested root_cause/caused_by detail) or
 //     carries the "index ["+"already exists"
 //     marker pair; doc-level collisions name the document id, never
