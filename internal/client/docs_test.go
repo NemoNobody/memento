@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -129,6 +130,24 @@ func TestSearchDocsContract(t *testing.T) {
 		if !strings.Contains(reqs[0].Body, want) {
 			t.Errorf("body lacks %s: %s", want, reqs[0].Body)
 		}
+	}
+}
+
+// The docs index is created lazily on the first fetch: searching before any
+// fetch must return an empty result, not an index_not_found error.
+func TestSearchDocsMissingIndexIsEmpty(t *testing.T) {
+	c, _ := newFakeClientCfg(t, docsMutate, func(r recordedRequest) (int, string) {
+		if r.Method == http.MethodPost && r.Path == "/memento-docs/_search" {
+			return http.StatusNotFound, `{"status":404,"error":{"type":"index_not_found_exception","reason":"no such index [memento-docs]"}}`
+		}
+		return http.StatusInternalServerError, "unexpected " + r.Path
+	})
+	docs, meta, err := c.SearchDocs(context.Background(), "q", "proj", 3)
+	if err != nil {
+		t.Fatalf("SearchDocs on missing index: %v", err)
+	}
+	if len(docs) != 0 || meta.Total != 0 {
+		t.Errorf("docs=%d total=%d, want 0/0", len(docs), meta.Total)
 	}
 }
 

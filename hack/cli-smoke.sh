@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# CLI smoke over one live memento store (roadmap 18/33). Exit 0 = all checks
+# passed. Runs against MEMENTO_CONF (or the default config lookup), exercising
+# the paths whose OpenSearch calls changed across versions: index creation,
+# composable templates + ingest pipeline (journal), scripted corrections,
+# optimistic concurrency, search, prune scripts.
+#
+# Usage: MEMENTO_CONF=<conf> [MEMENTO_BIN=<path>] hack/cli-smoke.sh
+# The run writes throwaway facts under a timestamped "smoke:<runid>:" prefix,
+# so it is safe on any store you are willing to pollute a few KB of.
+set -uo pipefail
+BIN=${MEMENTO_BIN:-memento}
+K="smoke:$(date +%s%N)"
+FAILS=0
+PASSES=0
+
+step() { # step <desc> <cmd...> — pass = exit 0
+  local desc=$1; shift
+  if LAST=$("$@" 2>&1); then
+    echo "  PASS  $desc"; PASSES=$((PASSES+1))
+  else
+    echo "  FAIL  $desc (exit $?)"; echo "$LAST" | sed 's/^/        /'; FAILS=$((FAILS+1))
+  fi
+}
+neg() { # neg <desc> <cmd...> — pass = non-zero exit (rejection expected)
+  local desc=$1; shift
+  if LAST=$("$@" 2>&1); then
+    echo "  FAIL  $desc (expected a rejection, got success)"; FAILS=$((FAILS+1))
+  else
+    echo "  PASS  $desc (rejected as expected)"; PASSES=$((PASSES+1))
+  fi
+}
+check() { # check <desc> <pattern> — pattern must appear in the last output
+  local desc=$1 pat=$2
+  if printf '%s' "$LAST" | grep -qi -- "$pat"; then
+    echo "  PASS  $desc"; PASSES=$((PASSES+1))
+  else
+    echo "  FAIL  $desc (no match for: $pat)"; echo "$LAST" | sed 's/^/        /'; FAILS=$((FAILS+1))
+  fi
+}
+
+step "status"                  $BIN status
+step "add (config)"            $BIN add "$K:one" "widget alpha value" config --project smoke --source tool:smoke
+step "add (behavior)"          $BIN add "$K:two" "widget beta value" behavior --project smoke
+step "get"                     $BIN get "$K:one";                    check "get returns the value" "widget alpha value"
+step "correction (re-add)"     $BIN add "$K:one" "widget alpha value updated v2" config --project smoke
+step "journal has writes"      $BIN journal "$K:one";                check "journal op=write" "write"
+step "history-info"            $BIN history-info "$K:one"
+step "list"                    $BIN list smoke;                      check "list shows :two" ":two"
+step "keys"                    $BIN keys "$K:";                      check "keys finds :one" ":one"
+step "search"                  $BIN search "widget";                 check "search hits :one" ":one"
+step "obsolete"                $BIN obsolete "$K:two" "smoke cleanup"
+neg  "secret guard rejects"    $BIN add "$K:sec" 'aws access key AKIA1234567890ABCDEF leaked' config --project smoke
+step "prune dry run"           $BIN prune "$K:one" --keep 1;         check "dry run prints a plan" "plan"
+step "prune --yes"             $BIN prune "$K:one" --keep 1 --yes
+step "journal after prune"     $BIN journal "$K:one"
+step "migrate-history"         $BIN migrate-history
+step "docs search (empty ok)"  $BIN docs "definitely-nosuch-term-xyz"
+
+echo "smoke: $PASSES passed, $FAILS failed (run prefix $K)"
+[ "$FAILS" -eq 0 ]

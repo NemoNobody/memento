@@ -9,7 +9,9 @@ name: memento-os
 
 services:
   opensearch:
-    image: opensearchproject/opensearch:3.8.0
+    # OPENSEARCH_IMAGE/OSD_IMAGE override the tags for version-matrix testing
+    # (hack/version-matrix.sh) or pinning; defaults are the verified pair.
+    image: ${OPENSEARCH_IMAGE:-opensearchproject/opensearch:3.8.0}
     container_name: memento-opensearch
     profiles: ["single"]
     restart: unless-stopped
@@ -39,7 +41,7 @@ services:
   # target pulls it in. Security plugin is off on the dev node, so the UI
   # opens without login; bound to 127.0.0.1 like the API.
   dashboards:
-    image: opensearchproject/opensearch-dashboards:3.8.0
+    image: ${OSD_IMAGE:-opensearchproject/opensearch-dashboards:3.8.0}
     container_name: memento-opensearch-dashboards
     profiles: ["dashboards"]
     restart: unless-stopped
@@ -58,7 +60,7 @@ services:
   # on a real cluster. Security stays off (test posture), all ports loopback.
   #   node1: 127.0.0.1:9400  node2: 127.0.0.1:9401  node3: 127.0.0.1:9402
   opensearch-node1: &cluster-node
-    image: opensearchproject/opensearch:3.8.0
+    image: ${OPENSEARCH_IMAGE:-opensearchproject/opensearch:3.8.0}
     container_name: memento-os-node1
     profiles: ["cluster"]
     restart: unless-stopped
@@ -122,7 +124,7 @@ services:
   # MCP/CLI side: insecure_skip_verify=true in the config for demo certs.
   #   endpoint: https://127.0.0.1:9443
   opensearch-secure:
-    image: opensearchproject/opensearch:3.8.0
+    image: ${OPENSEARCH_IMAGE:-opensearchproject/opensearch:3.8.0}
     container_name: memento-os-secure
     profiles: ["secure"]
     restart: unless-stopped

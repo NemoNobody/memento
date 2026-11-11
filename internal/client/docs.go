@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/NemoNobody/memento/internal/model"
@@ -191,6 +192,12 @@ func (c *Client) SearchDocs(ctx context.Context, query, project string, limit in
 		Body:    bytes.NewReader(data),
 	})
 	if err != nil {
+		if statusIs(err, http.StatusNotFound) && strings.Contains(err.Error(), "index_not_found_exception") {
+			// The docs index is created lazily on the first fetch: a missing
+			// index means "no stored documents yet", not a failure. Same posture
+			// as the journal wildcard reads (ignore_unavailable).
+			return nil, SearchMeta{}, nil
+		}
 		return nil, SearchMeta{}, fmt.Errorf("search docs: %w", err)
 	}
 	meta := SearchMeta{Total: resp.Hits.Total.Value}
