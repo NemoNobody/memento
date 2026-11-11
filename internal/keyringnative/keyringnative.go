@@ -38,6 +38,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"time"
 
 	dbus "github.com/godbus/dbus/v5"
@@ -58,7 +59,7 @@ const (
 	defaultCollection = dbus.ObjectPath("/org/freedesktop/secrets/aliases/default")
 
 	// defaultCollectionName is the fallback collection's Label when the
-	// default alias is unavailable (config key "collection"). On KDE the
+	// default alias is unavailable (MEMENTO_KEYRING_COLLECTION). On KDE the
 	// Secret Service collection label equals the wallet name; GNOME's login
 	// keyring is labelled "Default keyring".
 	defaultCollectionName = "kdewallet"
@@ -118,7 +119,10 @@ func init() {
 // "Default Wallet"; the login wallet itself is preferred whenever its alias
 // is alive.
 func SetCollectionName(name string) {
-	if name != "" {
+	// Trimmed: a stray space would never equal a wallet Label (the match is
+	// exact), and the write path would then create a wallet named with the
+	// space instead of using the existing one.
+	if name = strings.TrimSpace(name); name != "" {
 		collectionName = name
 	}
 }
@@ -386,7 +390,7 @@ func (c *client) createCollection(label string) (dbus.ObjectPath, error) {
 }
 
 // pickCollection resolves where secrets live: the default (login) wallet
-// first, then the collection named by the config key "collection"
+// first, then the collection named by MEMENTO_KEYRING_COLLECTION
 // (default "kdewallet": on KDE a wallet's collection Label is the wallet
 // name, so an explicit name finds the live login wallet even without a
 // registered alias). Reads never create anything — with no usable

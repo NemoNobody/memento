@@ -136,6 +136,16 @@ func TestSetCollectionName(t *testing.T) {
 	if collectionName != "wallet-b" {
 		t.Errorf("empty name must keep the current label, got %q", collectionName)
 	}
+	// The label match is exact: a stray space would address a wallet that
+	// does not exist (and a write would create one named with the space).
+	SetCollectionName("  wallet-c  ")
+	if collectionName != "wallet-c" {
+		t.Errorf("whitespace must be trimmed, got %q", collectionName)
+	}
+	SetCollectionName("   ")
+	if collectionName != "wallet-c" {
+		t.Errorf("whitespace-only must keep the current label, got %q", collectionName)
+	}
 	SetCollectionName(orig)
 	if collectionName != defaultCollectionName {
 		// orig is defaultCollectionName in a fresh process; this guards the
