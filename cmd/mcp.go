@@ -776,12 +776,10 @@ func (s *mcpServer) addOne(ctx context.Context, cfg *config.Config, c *client.Cl
 	f.Summary = in.Summary
 	res, err := c.Add(ctx, f)
 	if err != nil {
-		// Partial success must not vanish from the answer: when the fact doc
-		// landed and only the journal/link follow-up failed, the flags say so
-		// (the error text carries the failure). The batch edge already does this.
-		if res.Created || res.Changed {
-			return addOutput{Key: in.Key, Created: res.Created, Changed: res.Changed, Status: f.Status}, writeFailure("memento_add", err)
-		}
+		// go-sdk drops the typed output when the handler returns an error, so
+		// flags here would be unreachable — the honest landed state travels in
+		// the error text (Add's partial-success failures name what stored, and
+		// memento_add_batch surfaces per-item flags through its own output).
 		return addOutput{}, writeFailure("memento_add", err)
 	}
 	out := addOutput{Key: in.Key, Created: res.Created, Changed: res.Changed,

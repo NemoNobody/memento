@@ -557,11 +557,15 @@ func (c *Client) newJournalEntryFor(ctx context.Context, f *model.Fact, factID s
 // The link is a snapshot-derived write: it is conditioned on the version
 // pair the create itself reported — "nothing has touched this doc since I
 // wrote it". A concurrent correction landing after the create bumps the
-// version, the link conflicts honestly, and the winner's current_ref (set
-// by its own script, pointing at the entry that carries the live value)
-// survives. An unconditional link here would overwrite it with the birth
-// ref, leaving current_ref pointing at an entry that does not carry the
-// live value — a later prune --keep could then delete the entry that does.
+// version, the link conflicts honestly, and the winner's link survives: a
+// correction or resurrect sets its own current_ref (pointing at the entry
+// that carries the live value) inside its script. A plain same-value touch
+// bumps the version without setting a ref — the conflict then leaves the
+// fact created-but-unlinked, which migrate-history genuinely repairs
+// (deterministic-id re-append, collision-as-success). An unconditional
+// link here would instead overwrite the winner's ref with the birth one,
+// leaving current_ref pointing at an entry that does not carry the live
+// value — a later prune --keep could then delete the entry that does.
 // Re-reading the pair at link time would NOT close that window (the
 // correction would be inside the snapshot); the pair must come from the
 // create response.
