@@ -313,6 +313,19 @@ Hardening (pre-release review conveyor):
   kept whole, and when one agent appears in several groups their rules are
   COMBINED per RFC 9309 2.2.1 (first-wins and last-wins both silently
   dropped half of the file's stated policy).
+- The birth link (`current_ref` for a freshly created fact) is CAS-conditioned
+  on the version pair returned by the create itself — no re-read window where
+  a concurrent writer could slip between the read and the link.
+- Batch answers are honest about partial success: per-item flags carry the
+  accepted write beside its lagged-journal error, and the aggregate counters
+  (created/changed/touched) count exactly what landed — a summary can no
+  longer contradict the rows it summarizes.
+- Conflict classification answers from either error shape the client can
+  produce (a middlebox-rewritten 409 included), is gated to real 409s, and
+  refuses the index-creation-race wording; 409-as-success applies only to
+  content-derived deterministic journal ids — a collision over a fresh uuid
+  ref surfaces as a lagged entry, never as a clean success with a dangling
+  `current_ref`.
 
 ## v0.6.0 — 2026-11-08
 
