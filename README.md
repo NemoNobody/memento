@@ -61,6 +61,12 @@ Or install directly (once the module is public and tagged):
 go install github.com/NemoNobody/memento@latest
 ```
 
+Or grab a release binary (sha256-verified into `~/.local/bin`):
+
+```
+scripts/install.sh            # latest release; --version vX.Y.Z to pin
+```
+
 You also need a reachable OpenSearch (a single local node is enough). Quickest:
 `make dev-opensearch` runs one in a container (localhost-only, named volume —
 [docs/setup.md](docs/setup.md) §2). System install per the
