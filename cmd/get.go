@@ -97,7 +97,7 @@ func printFact(w io.Writer, f *model.Fact, now time.Time, history bool, entries 
 		b.WriteString("author: ")
 		b.WriteString(strconv.Quote(f.Author))
 		b.WriteString(" (")
-		b.WriteString(f.AuthorSource)
+		b.WriteString(displaySafe(f.AuthorSource, false))
 		b.WriteString(")\n")
 	}
 	if f.UpdatedBy != "" && f.UpdatedBy != f.Author {
@@ -131,7 +131,7 @@ func printFact(w io.Writer, f *model.Fact, now time.Time, history bool, entries 
 				b.WriteString(" @ ")
 				b.WriteString(displayTime(h.ObservedAt))
 				b.WriteString(" [")
-				b.WriteString(h.Source)
+				b.WriteString(displaySafe(h.Source, false))
 				b.WriteString("]\n")
 			}
 		} else if jErr != nil {

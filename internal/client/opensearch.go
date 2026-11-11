@@ -654,9 +654,11 @@ func (c *Client) getFactVersion(ctx context.Context, key string) (*model.Fact, i
 
 // conflictError names a failed CAS condition as what it is: a valid
 // operation over a stale snapshot. The message orders the remedy (re-read,
-// retry) first because that is the whole answer.
+// retry) first because that is the whole answer; the store's own reason is
+// chained too (two %w keeps errors.Is(err, ErrConflict) true while a
+// non-standard 409 payload still reaches logs instead of being discarded).
 func conflictError(op, key string, err error) error {
-	return fmt.Errorf("%s: fact %q changed under this write (a concurrent writer won the race): re-read and retry: %w", op, key, ErrConflict)
+	return fmt.Errorf("%s: fact %q changed under this write (a concurrent writer won the race): re-read and retry: %w; store: %w", op, key, ErrConflict, err)
 }
 
 // Search performs a keyword search, capped to limit hits. limit <= 0 means

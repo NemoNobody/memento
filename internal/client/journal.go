@@ -634,6 +634,18 @@ func (c *Client) ScanAllFacts(ctx context.Context, project string) ([]model.Fact
 // would silently no-op). "Needs migration" mirrors needsMigration: not
 // linked yet (no current_ref, or a legacy empty one) or still carrying the
 // pre-journal history array.
+//
+// The array arm CANNOT be an exists query: the mapping declares history as
+// {"type":"object","enabled":false} — stored in _source only, never indexed,
+// so exists would match zero documents and the linked-but-array cohort
+// (a post-upgrade edit that journalled a new value but left the old array
+// behind) would never converge. A _source script query is the only
+// semantics that sees the field; migration is a rare admin scan, so the
+// per-document script cost is the right trade (an unsupported script query
+// fails the scan loudly, never silently no-ops). In the query script
+// context the source map is reached via params._source — a bare _source
+// symbol does not compile (verified against the cluster); the map can be
+// null for some docs, so the guard is load-bearing (verified too).
 func buildMigrateScanBody(project string) map[string]interface{} {
 	boolQuery := map[string]interface{}{
 		"must": []map[string]interface{}{{
@@ -643,7 +655,12 @@ func buildMigrateScanBody(project string) map[string]interface{} {
 						"must_not": []interface{}{map[string]interface{}{"exists": map[string]interface{}{"field": "current_ref"}}},
 					}},
 					map[string]interface{}{"term": map[string]interface{}{"current_ref": ""}},
-					map[string]interface{}{"exists": map[string]interface{}{"field": "history"}},
+					map[string]interface{}{"script": map[string]interface{}{
+						"script": map[string]interface{}{
+							"lang":   "painless",
+							"source": `params._source != null && params._source.containsKey("history")`,
+						},
+					}},
 				},
 				"minimum_should_match": 1,
 			}},

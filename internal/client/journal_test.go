@@ -846,10 +846,16 @@ func TestScanAllFactsEmptyProjectScansAll(t *testing.T) {
 	if strings.Contains(reqs[0].Body, `"term":{"project":`) {
 		t.Errorf("empty-project scan must omit the project term filter, body=%s", reqs[0].Body)
 	}
-	for _, want := range []string{"current_ref", "\"history\"", "minimum_should_match"} {
+	for _, want := range []string{"current_ref", "containsKey", "minimum_should_match"} {
 		if !strings.Contains(reqs[0].Body, want) {
 			t.Errorf("empty-project scan must carry the needs-migration filter (%s), body=%s", want, reqs[0].Body)
 		}
+	}
+	// The history arm must NOT be an exists query: history is mapped
+	// enabled:false (never indexed), so exists silently matches zero docs
+	// and the linked-but-array cohort would never converge.
+	if strings.Contains(reqs[0].Body, `{"exists":{"field":"history"}}`) {
+		t.Errorf("exists on an unindexed field is a dead branch, body=%s", reqs[0].Body)
 	}
 	if _, _, err := c.ScanAllFacts(context.Background(), "p1"); err != nil {
 		t.Fatalf("ScanAllFacts scoped: %v", err)

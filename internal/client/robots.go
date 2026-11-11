@@ -152,8 +152,11 @@ func parseRobots(body string) []robotsGroup {
 // rule; on equal length Allow wins over Disallow (RFC 9309 ordering).
 func robotsAllowed(e robotsEntry, agent, path string) bool {
 	// Exact agent match wins; a wildcard group is the fallback (RFC 9309
-	// specificity: the most specific matching group governs).
-	var best *robotsGroup
+	// specificity: the most specific matching group governs). Within one
+	// specificity class the LAST matching group applies (RFC 9309: repeated
+	// groups for the same agent — the later one is the effective policy; a
+	// first-wins read silently drops the additions the file appends).
+	var exactBest, wildcardBest *robotsGroup
 	for i := range e.groups {
 		g := &e.groups[i]
 		exact, wildcard := false, false
@@ -166,12 +169,14 @@ func robotsAllowed(e robotsEntry, agent, path string) bool {
 			}
 		}
 		if exact {
-			best = g
-			break
+			exactBest = g
+		} else if wildcard {
+			wildcardBest = g
 		}
-		if wildcard && best == nil {
-			best = g
-		}
+	}
+	best := exactBest
+	if best == nil {
+		best = wildcardBest
 	}
 	if best == nil {
 		return true

@@ -63,6 +63,41 @@ Disallow: /private
 	}
 }
 
+// TestRobotsLastGroupWins (round 3, RFC 9309 §2.2.1): when the same agent
+// appears in several groups, the LAST matching group governs — robots files
+// commonly append extra groups, and first-wins silently ignores the
+// appended rules.
+func TestRobotsLastGroupWins(t *testing.T) {
+	e := robotsEntry{groups: parseRobots(`
+User-agent: *
+Disallow: /old
+
+User-agent: *
+Disallow: /new
+
+User-agent: memento
+Disallow: /a
+
+User-agent: memento
+Disallow: /b
+`)}
+	if robotsAllowed(e, "anyone", "/new") {
+		t.Error("the last wildcard group's deny must apply")
+	}
+	if !robotsAllowed(e, "anyone", "/old") {
+		t.Error("the superseded wildcard group's deny must not apply")
+	}
+	if robotsAllowed(e, "memento", "/b") {
+		t.Error("the last exact group's deny must apply")
+	}
+	if !robotsAllowed(e, "memento", "/a") {
+		t.Error("the superseded exact group's deny must not apply")
+	}
+	if !robotsAllowed(e, "memento", "/new") {
+		t.Error("an exact group must supersede the wildcard group entirely")
+	}
+}
+
 func TestRobotsAllowed(t *testing.T) {
 	e := robotsEntry{groups: []robotsGroup{
 		{agents: []string{"*"}, disallow: []string{"/private"}},

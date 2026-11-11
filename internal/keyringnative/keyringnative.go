@@ -526,15 +526,38 @@ func Set(service, user, value string) error {
 		// sweep can strand an old duplicate that Get may keep preferring.
 		// Both are worse than an honest instruction, so say what to do.
 		items, serr := c.searchItems(coll, attributes(service, user))
-		if serr == nil && len(items) > 1 {
+		if serr != nil {
+			return fmt.Errorf("stored, but the provider did not identify the new entry and the entries could not be counted (%v): run `memento creds rm` and set again (a stranded duplicate may outrank the new secret)", serr)
+		}
+		if len(items) > 1 {
 			return fmt.Errorf("stored, but the provider did not identify the new entry and %d entries exist for this pair: run `memento creds rm` and set again (a later Get may otherwise read the old secret)", len(items))
 		}
 		return nil
 	}
 	// Sweep the superseded entries. The secret is already stored: a failed
 	// sweep is reported honestly but must not claim the write itself failed.
-	if _, err := c.deleteItemsExcept(coll, attributes(service, user), item); err != nil {
-		return fmt.Errorf("stored, but removing the superseded entries failed (Get stays deterministic; a later Set retries the sweep): %w", err)
+	// The sweep is only safe when the provider-reported path is one of the
+	// search matches: deleteItemsExcept spares exactly that path, so a path
+	// outside the matches would spare nothing and delete the stored secret
+	// — the exact shape this guard exists to prevent.
+	items, serr := c.searchItems(coll, attributes(service, user))
+	if serr != nil {
+		return fmt.Errorf("stored, but the superseded entries could not be enumerated (Get stays deterministic; a later Set retries the sweep): %w", serr)
+	}
+	keepFound := false
+	for _, p := range items {
+		if p == item {
+			keepFound = true
+			break
+		}
+	}
+	if !keepFound {
+		return fmt.Errorf("stored, but the provider reported an entry outside the search results: run `memento creds rm` and set again (sweeping with an unknown keep-path could delete the stored secret)")
+	}
+	if len(items) > 1 {
+		if _, err := c.deleteItemsExcept(coll, attributes(service, user), item); err != nil {
+			return fmt.Errorf("stored, but removing the superseded entries failed (Get stays deterministic; a later Set retries the sweep): %w", err)
+		}
 	}
 	return nil
 }
