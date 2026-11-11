@@ -333,7 +333,11 @@ func TestMCPServerAddBatchSurfacesPartialSuccess(t *testing.T) {
 			_, _ = io.WriteString(w, `{"error":{"type":"document_missing_exception","reason":"no such document","index":"memento"},"status":404}`)
 		case r.Method == http.MethodGet && r.URL.Path == "/memento/_doc/t":
 			_, _ = io.WriteString(w, `{"_index":"memento","_id":"t","_version":1,"_seq_no":3,"_primary_term":1,"found":true,"_source":{"key":"t","value":"v","category":"config","project":"p","status":"verified"}}`)
-		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "-history-") && strings.Contains(r.URL.Path, "/_doc/"):
+		case r.Method == http.MethodGet && r.URL.Path == "/memento/_doc/c":
+			_, _ = io.WriteString(w, `{"_index":"memento","_id":"c","_version":1,"_seq_no":4,"_primary_term":1,"found":true,"_source":{"key":"c","value":"old","category":"config","project":"p","status":"verified"}}`)
+		case strings.Contains(r.URL.Path, "-history-") && strings.Contains(r.URL.Path, "/_doc/"):
+			// every journal append shape: PUT <id> (the birth path) and
+			// POST <id>?op_type=create (the doc-first correction path)
 			w.WriteHeader(http.StatusInternalServerError)
 			_, _ = io.WriteString(w, `{"error":{"type":"cluster_block_exception","reason":"journal write blocked"},"status":500}`)
 		default:
@@ -350,6 +354,10 @@ func TestMCPServerAddBatchSurfacesPartialSuccess(t *testing.T) {
 			// same-value re-declare of an existing fact: a clean touch —
 			// the counter case a one-item partial fixture can never show.
 			map[string]any{"key": "t", "value": "v", "category": "config"},
+			// clean value correction: created=false changed=true, the row
+			// shape that separates the created and changed counters (a birth
+			// always has both, so without it swapped counters pass).
+			map[string]any{"key": "c", "value": "new", "category": "config"},
 		}},
 	})
 	if err != nil {
@@ -363,14 +371,15 @@ func TestMCPServerAddBatchSurfacesPartialSuccess(t *testing.T) {
 		Items   []struct {
 			Key     string `json:"key"`
 			Created bool   `json:"created"`
+			Changed bool   `json:"changed"`
 			Error   string `json:"error"`
 		} `json:"items"`
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
 		t.Fatalf("structured content: %v (%s)", err, raw)
 	}
-	if len(out.Items) != 2 {
-		t.Fatalf("items = %d, want 2: %s", len(out.Items), raw)
+	if len(out.Items) != 3 {
+		t.Fatalf("items = %d, want 3: %s", len(out.Items), raw)
 	}
 	it := out.Items[0]
 	if it.Error == "" {
@@ -379,14 +388,21 @@ func TestMCPServerAddBatchSurfacesPartialSuccess(t *testing.T) {
 	if !it.Created {
 		t.Errorf("item.created = false, want true (the fact doc stored; only the journal lagged): %s", raw)
 	}
-	if out.Items[1].Error != "" || out.Items[1].Created {
+	if out.Items[1].Error != "" || out.Items[1].Created || out.Items[1].Changed {
 		t.Errorf("the same-value item must be a clean non-created touch, got %+v: %s", out.Items[1], raw)
+	}
+	if out.Items[2].Error == "" || out.Items[2].Created || !out.Items[2].Changed {
+		// the journal hook blocks every append, so the correction is a
+		// partial success too: the doc correction landed, its entry lagged
+		t.Errorf("the correction item must be created=false changed=true beside its lag error, got %+v: %s", out.Items[2], raw)
 	}
 	// The aggregate must agree with the rows (the patch twin pins the same):
 	// a summary that contradicts what the items say is the audit lie the
-	// counters exist to prevent. The touch item makes touched discriminative.
-	if out.Created != 1 || out.Changed != 1 || out.Touched != 1 {
-		t.Errorf("counters = created:%d changed:%d touched:%d, want 1/1/1: %s", out.Created, out.Changed, out.Touched, raw)
+	// counters exist to prevent. The touch and correction items make all
+	// three counters discriminative (birth is the only created; changed
+	// counts birth AND correction; touched counts only the same-value row).
+	if out.Created != 1 || out.Changed != 2 || out.Touched != 1 {
+		t.Errorf("counters = created:%d changed:%d touched:%d, want 1/2/1: %s", out.Created, out.Changed, out.Touched, raw)
 	}
 }
 
