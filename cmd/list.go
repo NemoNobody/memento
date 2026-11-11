@@ -93,13 +93,16 @@ func printFacts(w io.Writer, facts []model.Fact, now time.Time) error {
 	var b strings.Builder
 	for _, f := range facts {
 		b.WriteString("  ")
-		b.WriteString(f.Key)
+		// Control/zero-width runes never reach the terminal: a stored key or
+		// value can carry them (add accepts arbitrary text) and a single ESC
+		// sequence would forge everything after it in the listing.
+		b.WriteString(displaySafe(f.Key, false))
 		b.WriteString(": ")
 		if f.Summary != "" {
-			b.WriteString(f.Summary)
+			b.WriteString(displaySafe(f.Summary, false))
 			b.WriteString(" [summary]")
 		} else {
-			b.WriteString(f.Value)
+			b.WriteString(displaySafe(f.Value, false))
 		}
 		b.WriteString(" (status=")
 		b.WriteString(strconv.Quote(f.Status))

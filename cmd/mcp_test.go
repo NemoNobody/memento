@@ -284,6 +284,39 @@ func TestMCPServerAddValidatesShapeOffline(t *testing.T) {
 	}
 }
 
+// TestMCPServerListRequiresProjectOffline pins that memento_list refuses a
+// blank project before store contact. The CLI demands a project for the same
+// reason: a project-less list silently returns nothing on a multi-project
+// store, and an agent reads that silence as "no facts" and re-derives work
+// that is already stored. memento_keys is the cross-project tool.
+func TestMCPServerListRequiresProjectOffline(t *testing.T) {
+	session := connectTestServer(t, "OPENSEARCH_URL=https://127.0.0.1:9")
+	ctx := context.Background()
+
+	for _, project := range []string{"", "   "} {
+		res, err := session.CallTool(ctx, &mcp.CallToolParams{
+			Name:      "memento_list",
+			Arguments: map[string]any{"project": project},
+		})
+		if err != nil {
+			t.Fatalf("CallTool(memento_list): %v", err)
+		}
+		if !res.IsError {
+			t.Fatalf("memento_list accepted blank project %q", project)
+		}
+		text := toolText(res)
+		if !strings.Contains(text, "project is required") {
+			t.Errorf("error must demand a project, got: %s", text)
+		}
+		if !strings.Contains(text, "memento_keys") {
+			t.Errorf("error must point at the cross-project tool, got: %s", text)
+		}
+		if strings.Contains(text, "127.0.0.1:9") {
+			t.Errorf("validation ran after the store was reached: %s", text)
+		}
+	}
+}
+
 // TestMCPServerObsoleteFailsOnBrokenConfig pins that a config load failure
 // cannot silently disable the secret guard: the guard policy lives in the
 // config, so an unloadable policy must fail the write loudly — never proceed

@@ -479,9 +479,11 @@ func storeError(op string, err error) error {
 // writeFailure classifies a failed write at the MCP edge. A local contract
 // rejection (summary bounds, re-retiring) never reached the store: wrapping
 // it in availability advice would send the agent chasing memento_status
-// while the request itself is what needs fixing.
+// while the request itself is what needs fixing. A CAS conflict is neither:
+// the client's message already orders "re-read and retry", and store
+// advice ("do not retry") would contradict it in the other direction.
 func writeFailure(op string, err error) error {
-	if errors.Is(err, client.ErrContract) {
+	if errors.Is(err, client.ErrContract) || errors.Is(err, client.ErrConflict) {
 		return err
 	}
 	return storeError(op, err)
@@ -1044,7 +1046,7 @@ func (s *mcpServer) patchBatch(ctx context.Context, req *mcp.CallToolRequest, in
 }
 
 type listInput struct {
-	Project        string `json:"project" jsonschema:"project name to list facts for"`
+	Project        string `json:"project" jsonschema:"project name to list facts for (required, never blank; memento_keys navigates across projects)"`
 	Prefix         string `json:"prefix,omitempty" jsonschema:"keep only keys starting with this prefix (trailing * allowed), e.g. '<project>:state:'"`
 	Status         string `json:"status,omitempty" jsonschema:"limit results to this status: verified (default), obsolete, or any"`
 	IncludeHistory bool   `json:"include_history,omitempty" jsonschema:"include the full history chain (default: current value only)"`
@@ -1061,6 +1063,12 @@ type listInput struct {
 func (s *mcpServer) list(ctx context.Context, req *mcp.CallToolRequest, in listInput) (*mcp.CallToolResult, factsOutput, error) {
 	// Project labels are stored trimmed; the term filter is whitespace-exact.
 	in.Project = strings.TrimSpace(in.Project)
+	// Shape before store contact: a blank project would run term{"project":""}
+	// — a silent zero dressed up as "no data" (the keys/search edges refuse
+	// malformed shapes the same way).
+	if in.Project == "" {
+		return nil, factsOutput{}, errors.New("memento_list: project is required (memento_keys navigates across projects)")
+	}
 	// The prefix normalizes before any store contact (the keys contract):
 	// a bad prefix is the caller's problem, and its shape error must not come
 	// back wrapped in the availability advice — or never come back at all when

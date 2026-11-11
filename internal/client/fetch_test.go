@@ -687,6 +687,68 @@ func TestFetchPageEmptyContentTypeIsHTML(t *testing.T) {
 	}
 }
 
+func TestLooksLikeJSON(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		want bool
+	}{
+		{`{"a":1}`, true},
+		{"  \n [1,2,3] ", true},
+		// An API error body arriving with no declared type is still JSON:
+		// leniency here would store the error blob as a document.
+		{`{"error":{"type":"index_not_found_exception"},"status":404}`, true},
+		{`<html><body>{"looks":1}</body></html>`, false},
+		{`{`, false}, // truncated: not valid JSON
+		{`plain prose`, false},
+		{`{invalid`, false},
+		{`}`, false}, // closes without opening
+		{`[]`, true},
+		{``, false},
+	} {
+		if got := looksLikeJSON([]byte(tc.body)); got != tc.want {
+			t.Errorf("looksLikeJSON(%q) = %v, want %v", tc.body, got, tc.want)
+		}
+	}
+}
+
+// TestFetchPageUndeclaredJSONIsRefused pins the guard the empty-CT leniency
+// must not swallow: an API endpoint answering with JSON and no Content-Type
+// is a contract mismatch, not a malformed page. Parsing it as HTML would
+// store an error blob (or raw API payload) as a document snapshot.
+func TestFetchPageUndeclaredJSONIsRefused(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		br := bufio.NewReader(conn)
+		for {
+			line, err := br.ReadString('\n')
+			if err != nil || line == "\r\n" {
+				break
+			}
+		}
+		body := `{"error":{"type":"index_not_found_exception","reason":"no such index"},"status":404}`
+		_, _ = fmt.Fprintf(conn, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(body), body)
+	}()
+
+	cfg := config.DefaultConfig()
+	cfg.FetchAllowPrivate = true
+	_, err = FetchPage(context.Background(), cfg, "http://"+ln.Addr().String()+"/api", nil)
+	if err == nil {
+		t.Fatal("undeclared JSON body must be refused, not doc-parsed")
+	}
+	if !strings.Contains(err.Error(), "JSON") {
+		t.Errorf("refusal = %v, want it to name the JSON body", err)
+	}
+}
+
 // TestFetchPageOversize pins the cap's failure mode: the page is an input,
 // not a target; over the cap the fetch refuses with an actionable message.
 func TestFetchPageOversize(t *testing.T) {

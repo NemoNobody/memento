@@ -22,7 +22,7 @@ import (
 const robotsTTL = 24 * time.Hour
 
 type robotsGroup struct {
-	agent    string
+	agents   []string
 	disallow []string
 	allow    []string
 }
@@ -101,13 +101,16 @@ func sweepRobotsCacheLocked() {
 	}
 }
 
-// parseRobots groups directives into (user-agent, rules) blocks per RFC 9309.
-// A "user-agent" line after any rule starts a new group.
+// parseRobots groups directives into (user-agents, rules) blocks per
+// RFC 9309. A "user-agent" line after any rule starts a new group; a
+// second "user-agent" line before any rule adds that agent to the CURRENT
+// group (one rule set can serve several agents — dropping all but the last
+// name left the earlier agents unrestricted while the file clearly bound them).
 func parseRobots(body string) []robotsGroup {
 	var groups []robotsGroup
 	var rules int
 	add := func(agent string) {
-		groups = append(groups, robotsGroup{agent: agent})
+		groups = append(groups, robotsGroup{agents: []string{agent}})
 		rules = 0
 	}
 	for _, line := range strings.Split(body, "\n") {
@@ -128,7 +131,7 @@ func parseRobots(body string) []robotsGroup {
 			if len(groups) == 0 || rules > 0 {
 				add(strings.ToLower(v))
 			} else {
-				groups[len(groups)-1].agent = strings.ToLower(v)
+				groups[len(groups)-1].agents = append(groups[len(groups)-1].agents, strings.ToLower(v))
 			}
 		case "disallow":
 			if len(groups) > 0 {
@@ -148,14 +151,25 @@ func parseRobots(body string) []robotsGroup {
 // robotsAllowed applies the most specific group, then the longest matching
 // rule; on equal length Allow wins over Disallow (RFC 9309 ordering).
 func robotsAllowed(e robotsEntry, agent, path string) bool {
+	// Exact agent match wins; a wildcard group is the fallback (RFC 9309
+	// specificity: the most specific matching group governs).
 	var best *robotsGroup
 	for i := range e.groups {
 		g := &e.groups[i]
-		if g.agent == agent {
+		exact, wildcard := false, false
+		for _, a := range g.agents {
+			if a == agent {
+				exact = true
+			}
+			if a == "*" {
+				wildcard = true
+			}
+		}
+		if exact {
 			best = g
 			break
 		}
-		if g.agent == "*" && best == nil {
+		if wildcard && best == nil {
 			best = g
 		}
 	}

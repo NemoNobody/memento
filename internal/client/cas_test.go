@@ -1,0 +1,151 @@
+package client
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"strings"
+	"testing"
+
+	"github.com/NemoNobody/memento/internal/model"
+)
+
+// CAS contract under test: snapshot-derived writes (the touch, the
+// resurrect, the retirement, the status flip) carry the document version
+// pair read with the fact into the update (if_seq_no/if_primary_term), so a
+// concurrent write that landed in between fails as ErrConflict instead of
+// silently clobbering it. Value-change writes stay unconditional by design
+// (both writers journal; the final current_ref stays consistent) — the
+// negative test below pins that boundary so a future "fix" cannot quietly
+// flip the contract.
+
+const casSource = `{"key":"k","value":"same","category":"config","project":"p","status":"verified"}`
+
+const casConflictBody = `{"error":{"root_cause":[{"type":"version_conflict_engine_exception",` +
+	`"reason":"[k]: version conflict, required seq_no [5], primary_term [2], but was [6] [2]",` +
+	`"index":"memento","shard":"0","document_id":"k"}],` +
+	`"type":"version_conflict_engine_exception",` +
+	`"reason":"[k]: version conflict, required seq_no [5], primary_term [2], but was [6] [2]"},` +
+	`"status":409}`
+
+// casRespond serves the fact GET with an envelope that carries the version
+// pair, and the main-doc _update with a caller-chosen outcome. The update
+// request (query params included) is captured in *got.
+func casRespond(source string, updateStatus int, updateBody string, got *recordedRequest) func(recordedRequest) (int, string) {
+	return func(r recordedRequest) (int, string) {
+		if code, body := journalRoutesOK(r); code != http.StatusInternalServerError {
+			return code, body
+		}
+		switch {
+		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
+			return http.StatusOK, `{"_index":"memento","_id":"k","_version":3,"_seq_no":5,"_primary_term":2,"found":true,"_source":` + source + `}`
+		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+			*got = r
+			return updateStatus, updateBody
+		}
+		return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Method + " " + r.Path + `"}`
+	}
+}
+
+func assertCasParams(t *testing.T, got recordedRequest) {
+	t.Helper()
+	if q := got.Query.Get("if_seq_no"); q != "5" {
+		t.Errorf("if_seq_no = %q, want 5 (the version pair from the snapshot read)", q)
+	}
+	if q := got.Query.Get("if_primary_term"); q != "2" {
+		t.Errorf("if_primary_term = %q, want 2", q)
+	}
+}
+
+func TestAddSameValueTouchIsConditional(t *testing.T) {
+	var got recordedRequest
+	c, _ := newFakeClient(t, casRespond(casSource, http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`, &got))
+
+	if _, err := c.Add(context.Background(), model.NewFact("k", "same", "config", "p", "test:cas", "retouched")); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	assertCasParams(t, got)
+}
+
+func TestAddTouchConflictIsErrConflict(t *testing.T) {
+	var got recordedRequest
+	c, _ := newFakeClient(t, casRespond(casSource, http.StatusConflict, casConflictBody, &got))
+
+	_, err := c.Add(context.Background(), model.NewFact("k", "same", "config", "p", "test:cas", "retouched"))
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("error = %v, want ErrConflict", err)
+	}
+	if !strings.Contains(err.Error(), "re-read and retry") {
+		t.Errorf("the conflict must state the remedy, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "changed under this write") {
+		t.Errorf("the conflict must name what happened, got: %v", err)
+	}
+}
+
+func TestAddResurrectIsConditional(t *testing.T) {
+	var got recordedRequest
+	c, _ := newFakeClient(t, casRespond(
+		`{"key":"k","value":"same","category":"config","project":"p","status":"obsolete"}`,
+		http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`, &got))
+
+	res, err := c.Add(context.Background(), model.NewFact("k", "same", "config", "p", "test:cas", ""))
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if !res.Resurrected {
+		t.Fatal("resurrected = false, want true")
+	}
+	assertCasParams(t, got)
+}
+
+func TestObsoleteTransitionIsConditional(t *testing.T) {
+	var got recordedRequest
+	c, _ := newFakeClient(t, casRespond(casSource, http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`, &got))
+
+	if err := c.Obsolete(context.Background(), "k", "file deleted"); err != nil {
+		t.Fatalf("Obsolete: %v", err)
+	}
+	assertCasParams(t, got)
+}
+
+func TestPatchStatusFlipIsConditional(t *testing.T) {
+	var got recordedRequest
+	c, _ := newFakeClient(t, casRespond(casSource, http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`, &got))
+
+	if _, err := c.Patch(context.Background(), "k", PatchFields{Status: "obsolete", Reason: "file deleted"}); err != nil {
+		t.Fatalf("Patch: %v", err)
+	}
+	assertCasParams(t, got)
+}
+
+func TestPatchStatusFlipConflictIsErrConflict(t *testing.T) {
+	var got recordedRequest
+	c, _ := newFakeClient(t, casRespond(casSource, http.StatusConflict, casConflictBody, &got))
+
+	_, err := c.Patch(context.Background(), "k", PatchFields{Status: "obsolete", Reason: "file deleted"})
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("error = %v, want ErrConflict", err)
+	}
+	if !strings.Contains(err.Error(), "re-read and retry") {
+		t.Errorf("the conflict must state the remedy, got: %v", err)
+	}
+}
+
+func TestPatchValueChangeIsNotConditional(t *testing.T) {
+	var got recordedRequest
+	c, _ := newFakeClient(t, casRespond(casSource, http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`, &got))
+
+	if _, err := c.Patch(context.Background(), "k", PatchFields{Value: "corrected", Summary: "the corrected value"}); err != nil {
+		t.Fatalf("Patch: %v", err)
+	}
+	// Deliberate design: a correction journals its own snapshot and wins
+	// last; conditioning it would refuse legitimate corrections to a doc a
+	// touch just moved. The boundary must stay where it is.
+	if q := got.Query.Get("if_seq_no"); q != "" {
+		t.Errorf("a value correction must not be CAS-conditioned (last-write-wins by design), got if_seq_no=%q", q)
+	}
+	if q := got.Query.Get("if_primary_term"); q != "" {
+		t.Errorf("a value correction must not be CAS-conditioned, got if_primary_term=%q", q)
+	}
+}

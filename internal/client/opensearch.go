@@ -33,6 +33,13 @@ var ErrNotFound = errors.New("fact not found")
 // message itself, never wrap it in availability advice.
 var ErrContract = errors.New("rejected before store contact")
 
+// ErrConflict reports that a concurrent writer changed the fact between
+// this call's read and its conditional write (if_seq_no/if_primary_term
+// CAS). The operation was valid; the snapshot it was computed from is
+// stale. The agent's contract is to re-read and retry — NOT to stop (as
+// store-availability advice would say).
+var ErrConflict = errors.New("concurrent write conflict")
+
 type contractError struct{ err error }
 
 func (e *contractError) Error() string { return e.err.Error() }
@@ -320,7 +327,7 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 	if err := c.checkSummaryCap(f); err != nil {
 		return AddResult{}, err
 	}
-	existing, err := c.Get(ctx, f.Key)
+	existing, seqNo, primaryTerm, err := c.getFactVersion(ctx, f.Key)
 	if errors.Is(err, ErrNotFound) {
 		// Summary bounds are enforced on accepted values only (create and
 		// correction): a same-value notes touch must not fail over a summary
@@ -363,7 +370,7 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 		// op_type=create lost the race to a concurrent Add of the same key
 		// (a plain index would last-write-win and drop the winner's value
 		// with no journal entry): re-read and apply as a correction below.
-		existing, err = c.Get(ctx, f.Key)
+		existing, seqNo, primaryTerm, err = c.getFactVersion(ctx, f.Key)
 		if err != nil {
 			return AddResult{}, fmt.Errorf("add fact: %w", err)
 		}
@@ -423,13 +430,25 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 		body, _ := json.Marshal(map[string]interface{}{
 			"doc": doc,
 		})
+		// CAS: the touch moves status/updated_by/updated_at (and on a
+		// resurrect current_ref/observed_at) from the snapshot read above.
+		// A concurrent correction or retirement that landed since that read
+		// makes this write wrong: the conflict is honest ("re-read and
+		// retry") instead of silently clobbering the other writer's state.
 		_, err = c.api.Update(ctx, opensearchapi.UpdateReq{
 			Index:      c.cfg.IndexName,
 			DocumentID: f.Key,
 			Body:       strings.NewReader(string(body)),
-			Params:     opensearchapi.UpdateParams{Refresh: "wait_for"},
+			Params: opensearchapi.UpdateParams{
+				Refresh:       "wait_for",
+				IfSeqNo:       &seqNo,
+				IfPrimaryTerm: &primaryTerm,
+			},
 		})
 		if err != nil {
+			if isVersionConflict(err) {
+				return AddResult{}, conflictError("add fact", f.Key, err)
+			}
 			return AddResult{}, wrapWriteError("add fact", err)
 		}
 		if entry != nil {
@@ -600,24 +619,44 @@ func (c *Client) createFact(ctx context.Context, f *model.Fact) (bool, error) {
 // Get gets a fact by key. It uses the realtime document GET API, so it sees
 // the fact immediately after Add (unlike a search, which waits for a refresh).
 func (c *Client) Get(ctx context.Context, key string) (*model.Fact, error) {
+	f, _, _, err := c.getFactVersion(ctx, key)
+	return f, err
+}
+
+// getFactVersion reads a fact together with OpenSearch's document version
+// pair (seq_no/primary_term). Snapshot-derived writes — touches,
+// resurrects, retirements, status transitions — carry it into the update
+// as if_seq_no/if_primary_term: without the condition, a concurrent write
+// landing between our read and the update lets current_ref be rewritten to
+// a journal entry carrying the OLD value, breaking the invariant that
+// current_ref journals the doc's current value (and lets a plain touch
+// silently un-verify a fact another writer just retired).
+func (c *Client) getFactVersion(ctx context.Context, key string) (*model.Fact, int, int, error) {
 	resp, err := c.api.Document.Get(ctx, opensearchapi.DocumentGetReq{
 		Index:      c.cfg.IndexName,
 		DocumentID: key,
 	})
 	if err != nil {
 		if isNotFound(err) {
-			return nil, fmt.Errorf("%w: %q", ErrNotFound, key)
+			return nil, 0, 0, fmt.Errorf("%w: %q", ErrNotFound, key)
 		}
-		return nil, fmt.Errorf("get fact: %w", err)
+		return nil, 0, 0, fmt.Errorf("get fact: %w", err)
 	}
 	if !resp.Found {
-		return nil, fmt.Errorf("%w: %q", ErrNotFound, key)
+		return nil, 0, 0, fmt.Errorf("%w: %q", ErrNotFound, key)
 	}
 	var f model.Fact
 	if err := json.Unmarshal(resp.Source, &f); err != nil {
-		return nil, fmt.Errorf("get fact: decode %q: %w", key, err)
+		return nil, 0, 0, fmt.Errorf("get fact: decode %q: %w", key, err)
 	}
-	return &f, nil
+	return &f, resp.SeqNo, resp.PrimaryTerm, nil
+}
+
+// conflictError names a failed CAS condition as what it is: a valid
+// operation over a stale snapshot. The message orders the remedy (re-read,
+// retry) first because that is the whole answer.
+func conflictError(op, key string, err error) error {
+	return fmt.Errorf("%s: fact %q changed under this write (a concurrent writer won the race): re-read and retry: %w", op, key, ErrConflict)
 }
 
 // Search performs a keyword search, capped to limit hits. limit <= 0 means
@@ -712,7 +751,7 @@ ctx._source.updated_by = params.updated_by;
 `
 
 func (c *Client) Obsolete(ctx context.Context, key, reason string) error {
-	existing, err := c.Get(ctx, key)
+	existing, seqNo, primaryTerm, err := c.getFactVersion(ctx, key)
 	if err != nil {
 		return fmt.Errorf("obsolete fact: %w", err)
 	}
@@ -770,12 +809,15 @@ func (c *Client) Obsolete(ctx context.Context, key, reason string) error {
 	_, err = c.api.Update(ctx, opensearchapi.UpdateReq{
 		Index:      c.cfg.IndexName,
 		DocumentID: key,
-		Body:       bytes.NewReader(body),
-		Params:     opensearchapi.UpdateParams{Refresh: "wait_for"},
+		Body:       strings.NewReader(string(body)),
+		Params:     obsoleteUpdateParams(entry, seqNo, primaryTerm),
 	})
 	if err != nil {
 		if isNotFound(err) {
 			return fmt.Errorf("obsolete %w: %q", ErrNotFound, key)
+		}
+		if isVersionConflict(err) {
+			return conflictError("obsolete fact", key, err)
 		}
 		return wrapWriteError("obsolete fact", err)
 	}
@@ -785,6 +827,19 @@ func (c *Client) Obsolete(ctx context.Context, key, reason string) error {
 		}
 	}
 	return nil
+}
+
+// obsoleteUpdateParams makes a retirement that journals a snapshot
+// (entry != nil) a CAS write: if a concurrent correction or retirement
+// landed after the read, the entry being journaled states a value the doc
+// no longer holds and current_ref would point the doc at it. A
+// re-retirement that journals nothing stays unconditional.
+func obsoleteUpdateParams(entry *model.JournalEntry, seqNo, primaryTerm int) opensearchapi.UpdateParams {
+	p := opensearchapi.UpdateParams{Refresh: "wait_for"}
+	if entry != nil {
+		p.IfSeqNo, p.IfPrimaryTerm = &seqNo, &primaryTerm
+	}
+	return p
 }
 
 // PatchFields is the partial-update payload: an empty string means "not
@@ -872,7 +927,7 @@ func (c *Client) Patch(ctx context.Context, key string, p PatchFields) (PatchRes
 		return PatchResult{}, err
 	}
 
-	existing, err := c.Get(ctx, key)
+	existing, seqNo, primaryTerm, err := c.getFactVersion(ctx, key)
 	if errors.Is(err, ErrNotFound) {
 		// The chain must survive: edges classify this as "no such fact"
 		// (a clean answer), not as a store failure (Obsolete does the same).
@@ -1018,11 +1073,14 @@ func (c *Client) Patch(ctx context.Context, key string, p PatchFields) (PatchRes
 		Index:      c.cfg.IndexName,
 		DocumentID: key,
 		Body:       strings.NewReader(string(body)),
-		Params:     opensearchapi.UpdateParams{Refresh: "wait_for"},
+		Params:     patchUpdateParams(entry, valueChanged, seqNo, primaryTerm),
 	})
 	if err != nil {
 		if isNotFound(err) {
 			return PatchResult{}, fmt.Errorf("patch %w: %q", ErrNotFound, key)
+		}
+		if isVersionConflict(err) {
+			return PatchResult{}, conflictError("patch fact", key, err)
 		}
 		return PatchResult{}, wrapWriteError("patch fact", err)
 	}
@@ -1032,6 +1090,21 @@ func (c *Client) Patch(ctx context.Context, key string, p PatchFields) (PatchRes
 		}
 	}
 	return PatchResult{Changed: valueChanged || statusChanged, Status: newStatus}, nil
+}
+
+// patchUpdateParams conditions a patch on the document version pair when it
+// journals a STATUS transition computed from the snapshot read: a
+// concurrent value change that landed after the read would leave current_ref
+// pointing at an entry stating the value the doc no longer holds. A patch
+// that also changes the value computes current_ref from the new value, so
+// the invariant holds under any write order and the update stays
+// unconditional (last-write-wins, matching add's correction).
+func patchUpdateParams(entry *model.JournalEntry, valueChanged bool, seqNo, primaryTerm int) opensearchapi.UpdateParams {
+	p := opensearchapi.UpdateParams{Refresh: "wait_for"}
+	if entry != nil && !valueChanged {
+		p.IfSeqNo, p.IfPrimaryTerm = &seqNo, &primaryTerm
+	}
+	return p
 }
 
 // pruneHistoryScript keeps only the newest params.keep history entries in

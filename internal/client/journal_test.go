@@ -822,7 +822,8 @@ func TestAppendJournalPinsPipelineOnExistingIndex(t *testing.T) {
 // must scan every project. A term{"project":""} filter matches no document
 // (writers always store a non-empty project), so an empty project omits the
 // scope filter instead of emptying it — otherwise the one-time migration
-// silently no-ops and reports "scanned: 0".
+// silently no-ops and reports "scanned: 0". The scan also filters
+// needs-migration SERVER-side so reruns converge past the page cap.
 func TestScanAllFactsEmptyProjectScansAll(t *testing.T) {
 	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
 		if r.Method == http.MethodPost && r.Path == "/memento/_search" {
@@ -842,11 +843,13 @@ func TestScanAllFactsEmptyProjectScansAll(t *testing.T) {
 	if len(reqs) != 1 {
 		t.Fatalf("searches = %d, want 1", len(reqs))
 	}
-	if strings.Contains(reqs[0].Body, `"project"`) {
+	if strings.Contains(reqs[0].Body, `"term":{"project":`) {
 		t.Errorf("empty-project scan must omit the project term filter, body=%s", reqs[0].Body)
 	}
-	if !strings.Contains(reqs[0].Body, "match_all") {
-		t.Errorf("empty-project scan must match all documents, body=%s", reqs[0].Body)
+	for _, want := range []string{"current_ref", "\"history\"", "minimum_should_match"} {
+		if !strings.Contains(reqs[0].Body, want) {
+			t.Errorf("empty-project scan must carry the needs-migration filter (%s), body=%s", want, reqs[0].Body)
+		}
 	}
 	if _, _, err := c.ScanAllFacts(context.Background(), "p1"); err != nil {
 		t.Fatalf("ScanAllFacts scoped: %v", err)

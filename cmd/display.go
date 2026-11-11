@@ -4,6 +4,8 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
+	"unicode"
 
 	"github.com/NemoNobody/memento/internal/client"
 )
@@ -37,4 +39,25 @@ func fatalIfNotFound(err error) {
 		fatalNotFound(err)
 	}
 	fatalErr(err)
+}
+
+// displaySafe renders agent- or server-supplied text on a human terminal
+// without letting invisible runes forge the output (the fetched-page path
+// strips the same classes at extract time; stored fact text can carry
+// them because `add` accepts arbitrary values). ESC/C0/C1 and zero-width
+// or bidi runes are dropped; newlines and tabs survive when keepNewline,
+// because a multi-line value is deliberate layout.
+func displaySafe(s string, keepNewline bool) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r == '\n' || r == '\t':
+			if keepNewline {
+				return r
+			}
+			return -1
+		case unicode.Is(unicode.Cc, r) || unicode.Is(unicode.Cf, r):
+			return -1
+		}
+		return r
+	}, s)
 }

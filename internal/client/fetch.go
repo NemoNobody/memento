@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -235,6 +236,18 @@ func guardedDialContext(allowAddr func(address string) bool) func(ctx context.Co
 // (the authoritative check is guardedDialContext on the resolved address);
 // with it the operator opted in to self-hosted targets, and the name check
 // must not defeat that documented opt-in.
+// looksLikeJSON sniffs a body whose server declared no media type: a body
+// that parses as a JSON object/array is an API payload, not a page, and
+// must not be stored as HTML (that would route its credential-shaped
+// strings through the documentation leniency instead of the API refusal).
+func looksLikeJSON(body []byte) bool {
+	s := strings.TrimSpace(string(body))
+	if len(s) < 2 || (s[0] != '{' && s[0] != '[') {
+		return false
+	}
+	return json.Valid([]byte(s))
+}
+
 func NormalizeURL(raw string, allowPrivate bool) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -606,6 +619,13 @@ func FetchPage(ctx context.Context, cfg *config.Config, normalizedURL string,
 	var truncated bool
 	switch media {
 	case "text/html", "application/xhtml+xml", "":
+		if media == "" && looksLikeJSON(body) {
+			// No declared type + a JSON body is an API payload wearing no
+			// badge: the documented media types are the gate, and storing it
+			// as HTML would hand the API route's medium-finding strictness to
+			// the documentation leniency.
+			return nil, fmt.Errorf("fetch: no content type declared and the body is JSON: only text/html, text/plain, text/markdown are stored")
+		}
 		sections, images, truncated = ExtractSections(string(body))
 	case "text/plain", "text/markdown", "text/x-markdown":
 		sections, truncated = ExtractPlainText(string(body))

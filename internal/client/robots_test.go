@@ -40,20 +40,34 @@ Disallow: /private
 		t.Fatalf("groups = %d, want 2: %+v", len(groups), groups)
 	}
 	g := groups[0]
-	if g.agent != "memento" || len(g.disallow) != 1 || g.disallow[0] != "/secret" ||
+	if len(g.agents) != 1 || g.agents[0] != "memento" || len(g.disallow) != 1 || g.disallow[0] != "/secret" ||
 		len(g.allow) != 1 || g.allow[0] != "/secret/public" {
 		t.Errorf("group[0] = %+v", g)
 	}
-	if groups[1].agent != "*" || len(groups[1].disallow) != 1 || groups[1].disallow[0] != "/private" {
+	if len(groups[1].agents) != 1 || groups[1].agents[0] != "*" || len(groups[1].disallow) != 1 || groups[1].disallow[0] != "/private" {
 		t.Errorf("group[1] = %+v", groups[1])
+	}
+	// RFC 9309: consecutive User-agent lines before any rule bind ALL of
+	// them to the one rule set (keeping only the last left the earlier
+	// agents unrestricted while the file clearly bound them).
+	multi := parseRobots("User-agent: memento\nUser-agent: other\nDisallow: /x\n")
+	if len(multi) != 1 || len(multi[0].agents) != 2 {
+		t.Fatalf("multi-agent group parsed as %+v, want one group with two agents", multi)
+	}
+	eMulti := robotsEntry{groups: multi}
+	if robotsAllowed(eMulti, "memento", "/x") {
+		t.Error("the first listed agent must be bound by the group's rules")
+	}
+	if !robotsAllowed(eMulti, "memento", "/y") {
+		t.Error("paths outside the rule stay allowed")
 	}
 }
 
 func TestRobotsAllowed(t *testing.T) {
 	e := robotsEntry{groups: []robotsGroup{
-		{agent: "*", disallow: []string{"/private"}},
-		{agent: "memento", disallow: []string{"/secret", "/"}, allow: []string{"/secret/public"}},
-		{agent: "friendly", disallow: []string{}},
+		{agents: []string{"*"}, disallow: []string{"/private"}},
+		{agents: []string{"memento"}, disallow: []string{"/secret", "/"}, allow: []string{"/secret/public"}},
+		{agents: []string{"friendly"}, disallow: []string{}},
 	}}
 	cases := []struct {
 		agent, path string

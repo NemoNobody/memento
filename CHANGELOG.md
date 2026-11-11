@@ -292,6 +292,26 @@ Hardening (pre-release review conveyor):
   them silently.
 - Docs: clock synchronization is stated as the operational prerequisite of
   period-based journal pruning (entry routing follows the writer clock).
+- `memento migrate-history` converges on stores past the navigation cap:
+  the scan filter (needs-migration) moved server-side, so capped pages no
+  longer walk past already-migrated facts and re-report the same head.
+- Concurrent-write honesty: snapshot-derived writes (the same-value touch,
+  the resurrect, the retirement, the status flip) are conditioned on the
+  document version pair (`if_seq_no`/`if_primary_term`); a concurrent write
+  that landed since the read fails as a named conflict — "re-read and
+  retry" — instead of silently clobbering it. Value corrections stay
+  last-write-wins (both writers journal; the audit stays truthful).
+- Keyring upsert no longer sweeps the just-saved secret away when the kept
+  item carries a bogus resource path (multiple matches now say so).
+- A JSON body served with no declared Content-Type is refused, not parsed
+  as a page (an API error blob would have been stored as a document).
+- `memento_list` requires a project (cross-project navigation is
+  `memento_keys`); stored text can no longer forge terminal layout —
+  control and invisible format characters are stripped when CLI output
+  prints fact values, summaries and notes.
+- `robots.txt` groups with several consecutive `User-agent:` lines are
+  kept whole (exact match wins, wildcard group as fallback) instead of
+  only the last agent.
 
 ## v0.6.0 — 2026-11-08
 

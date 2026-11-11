@@ -519,6 +519,18 @@ func Set(service, user, value string) error {
 			return errors.New("the keyring dialog was cancelled (store)")
 		}
 	}
+	if item == "" || item == "/" {
+		// The provider stored the item but did not identify its path (the
+		// ksecretd-shaped prompt indirection). Sweeping with a bogus keep
+		// path would delete the secret that was just stored; refusing the
+		// sweep can strand an old duplicate that Get may keep preferring.
+		// Both are worse than an honest instruction, so say what to do.
+		items, serr := c.searchItems(coll, attributes(service, user))
+		if serr == nil && len(items) > 1 {
+			return fmt.Errorf("stored, but the provider did not identify the new entry and %d entries exist for this pair: run `memento creds rm` and set again (a later Get may otherwise read the old secret)", len(items))
+		}
+		return nil
+	}
 	// Sweep the superseded entries. The secret is already stored: a failed
 	// sweep is reported honestly but must not claim the write itself failed.
 	if _, err := c.deleteItemsExcept(coll, attributes(service, user), item); err != nil {

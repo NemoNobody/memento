@@ -615,23 +615,47 @@ func (c *Client) MigrateFact(ctx context.Context, f *model.Fact, now time.Time) 
 	return appended, nil
 }
 
-// ScanAllFacts returns every fact (size cap NavSizeCap) for migration
-// planning and execution; project == "" scans all projects.
+// ScanAllFacts returns the facts that still NEED journal migration (size
+// cap NavSizeCap), scoped to project or to every project when empty. The
+// needs-migration filter runs SERVER-side on purpose: MigrateFact does not
+// change keys, so a client-side filter over a key-asc capped scan would
+// re-serve the same first page on every rerun — with more than
+// NavSizeCap facts the rerun loop could never reach the rest while the
+// plan cheerfully reported "0 to migrate". Filtering on the query makes
+// reruns converge: migrated facts drop out of the result set and the next
+// page surfaces.
 func (c *Client) ScanAllFacts(ctx context.Context, project string) ([]model.Fact, SearchMeta, error) {
-	if project == "" {
-		return c.search(ctx, buildScanAllBody())
-	}
-	return c.search(ctx, buildProjectBody(project, "", "key"))
+	return c.search(ctx, buildMigrateScanBody(project))
 }
 
-// buildScanAllBody is the migration scan over EVERY project. Writers always
-// store a non-empty project, so a term{"project":""} filter would match no
-// document and the default migrate-history run would silently no-op: the
-// scope filter is omitted, not emptied.
-func buildScanAllBody() map[string]interface{} {
+// buildMigrateScanBody builds the migration scan. Writers always store a
+// non-empty project, so an empty scope OMITS the filter (a
+// term{"project":""} matches nothing and the default migrate-history run
+// would silently no-op). "Needs migration" mirrors needsMigration: not
+// linked yet (no current_ref, or a legacy empty one) or still carrying the
+// pre-journal history array.
+func buildMigrateScanBody(project string) map[string]interface{} {
+	boolQuery := map[string]interface{}{
+		"must": []map[string]interface{}{{
+			"bool": map[string]interface{}{
+				"should": []interface{}{
+					map[string]interface{}{"bool": map[string]interface{}{
+						"must_not": []interface{}{map[string]interface{}{"exists": map[string]interface{}{"field": "current_ref"}}},
+					}},
+					map[string]interface{}{"term": map[string]interface{}{"current_ref": ""}},
+					map[string]interface{}{"exists": map[string]interface{}{"field": "history"}},
+				},
+				"minimum_should_match": 1,
+			}},
+		},
+	}
+	if project != "" {
+		boolQuery["filter"] = []interface{}{map[string]interface{}{"term": map[string]interface{}{"project": project}}}
+	}
 	return map[string]interface{}{
-		"query": map[string]interface{}{"match_all": map[string]interface{}{}},
-		"sort":  []map[string]interface{}{{"key": map[string]interface{}{"order": "asc"}}},
-		"size":  NavSizeCap,
+		"query":            map[string]interface{}{"bool": boolQuery},
+		"sort":             []map[string]interface{}{{"key": map[string]interface{}{"order": "asc"}}},
+		"size":             NavSizeCap,
+		"track_total_hits": true,
 	}
 }

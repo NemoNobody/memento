@@ -70,13 +70,13 @@ func printFact(w io.Writer, f *model.Fact, now time.Time, history bool, entries 
 	b.WriteString(strconv.Quote(f.Key))
 	b.WriteString("\n")
 	b.WriteString("value: ")
-	b.WriteString(f.Value)
+	b.WriteString(displaySafe(f.Value, true))
 	b.WriteString("\n")
 	// The summary is the table of contents of a long value: show it next to
 	// the value (stored facts predate the field, so it is often empty).
 	if f.Summary != "" {
 		b.WriteString("summary: ")
-		b.WriteString(f.Summary)
+		b.WriteString(displaySafe(f.Summary, false))
 		b.WriteString("\n")
 	}
 	b.WriteString("category: ")
@@ -107,7 +107,7 @@ func printFact(w io.Writer, f *model.Fact, now time.Time, history bool, entries 
 	}
 	if f.Notes != "" {
 		b.WriteString("notes: ")
-		b.WriteString(f.Notes)
+		b.WriteString(displaySafe(f.Notes, false))
 		b.WriteString("\n")
 	}
 	b.WriteString("observed_at: ")
