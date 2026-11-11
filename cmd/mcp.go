@@ -918,15 +918,16 @@ func (s *mcpServer) addBatch(ctx context.Context, req *mcp.CallToolRequest, in a
 }
 
 type patchInput struct {
-	Key         string `json:"key" jsonschema:"exact fact key of an EXISTING fact (patch never creates: use memento_add)"`
-	Value       string `json:"value,omitempty" jsonschema:"new value: journaled, observed_at moves; the summary resets with it (pass a new summary for a long value)"`
-	Summary     string `json:"summary,omitempty" jsonschema:"new table of contents (with a value change: omitting it CLEARS the old summary — an old summary for a new value is a lie)"`
-	Notes       string `json:"notes,omitempty" jsonschema:"replaces notes (non-empty = provided, add's convention)"`
-	NotesAppend string `json:"notes_append,omitempty" jsonschema:"append a dated line 'YYYY-MM-DD: text' to notes (atomic server-side; the cheap qualifier update — no need to resend the value)"`
-	Source      string `json:"source,omitempty" jsonschema:"replaces source when non-empty"`
-	Status      string `json:"status,omitempty" jsonschema:"verified | obsolete: a transition is journaled; obsolete→verified sets observed_at=now (re-declaring alive is a fresh verification)"`
-	Reason      string `json:"reason,omitempty" jsonschema:"why it became obsolete (only with status=obsolete; folded into notes)"`
-	TTLDays     int    `json:"ttl_days,omitempty" jsonschema:"retune the staleness window in days (bounded by the category cap: config/endpoint 14, location/behavior 30, recipe 180, rule 90; context_map uncapped); omitted = untouched; a qualifier touch, not journaled"`
+	Key         string   `json:"key" jsonschema:"exact fact key of an EXISTING fact (patch never creates: use memento_add)"`
+	Value       string   `json:"value,omitempty" jsonschema:"new value: journaled, observed_at moves; the summary resets with it (pass a new summary for a long value)"`
+	Summary     string   `json:"summary,omitempty" jsonschema:"new table of contents (with a value change: omitting it CLEARS the old summary — an old summary for a new value is a lie)"`
+	Notes       string   `json:"notes,omitempty" jsonschema:"replaces notes (non-empty = provided, add's convention)"`
+	NotesAppend string   `json:"notes_append,omitempty" jsonschema:"append a dated line 'YYYY-MM-DD: text' to notes (atomic server-side; the cheap qualifier update — no need to resend the value)"`
+	Source      string   `json:"source,omitempty" jsonschema:"replaces source when non-empty"`
+	Status      string   `json:"status,omitempty" jsonschema:"verified | obsolete: a transition is journaled; obsolete→verified sets observed_at=now (re-declaring alive is a fresh verification)"`
+	Reason      string   `json:"reason,omitempty" jsonschema:"why it became obsolete (only with status=obsolete; folded into notes)"`
+	TTLDays     int      `json:"ttl_days,omitempty" jsonschema:"retune the staleness window in days (bounded by the category cap: config/endpoint 14, location/behavior 30, recipe 180, rule 90; context_map uncapped); omitted = untouched; a qualifier touch, not journaled"`
+	Keywords    []string `json:"keywords,omitempty" jsonschema:"replaces the tag set when non-empty (same normalization as add: lowercase single tokens, max 10); a qualifier touch, not journaled — the tags appear in the history with the next accepted value"`
 
 	// ConfirmSecret bypasses a guard hit at secret_guard=ask (see addInput).
 	ConfirmSecret bool `json:"confirm_secret,omitempty" jsonschema:"confirm a guard hit is a false positive (secret_guard=ask only); set only after the user approved the exact finding"`
@@ -971,6 +972,7 @@ func patchFields(in patchInput) client.PatchFields {
 		Status:      in.Status,
 		Reason:      in.Reason,
 		TTLDays:     in.TTLDays,
+		Keywords:    in.Keywords,
 	}
 }
 
@@ -998,6 +1000,7 @@ func (s *mcpServer) patchOne(ctx context.Context, cfg *config.Config, c *client.
 		guardField{Name: "notes", Text: in.Notes},
 		guardField{Name: "notes_append", Text: in.NotesAppend},
 		guardField{Name: "source", Text: in.Source},
+		guardField{Name: "keywords", Text: strings.Join(in.Keywords, " ")},
 		guardField{Name: "reason", Text: in.Reason}); err != nil {
 		return patchOutput{}, err
 	}
@@ -1369,6 +1372,8 @@ func (s *mcpServer) prune(ctx context.Context, req *mcp.CallToolRequest, in prun
 type journalInput struct {
 	Key   string `json:"key" jsonschema:"exact fact key"`
 	Limit int    `json:"limit,omitempty" jsonschema:"newest entries to return (default 20, cap 1000)"`
+	Since string `json:"since,omitempty" jsonschema:"only entries at or after this RFC3339 timestamp (UTC), e.g. 2026-11-10T00:00:00Z — answers \"what changed since last session\""`
+	Until string `json:"until,omitempty" jsonschema:"only entries at or before this RFC3339 timestamp (UTC)"`
 }
 
 type journalEntryView struct {
@@ -1424,7 +1429,20 @@ func (s *mcpServer) journal(ctx context.Context, req *mcp.CallToolRequest, in jo
 	if limit <= 0 {
 		limit = 20
 	}
-	entries, meta, err := c.JournalEntries(ctx, in.Key, limit)
+	since, serr := parseJournalBound("since", in.Since)
+	if serr != nil {
+		return nil, journalOutput{}, serr
+	}
+	until, uerr := parseJournalBound("until", in.Until)
+	if uerr != nil {
+		return nil, journalOutput{}, uerr
+	}
+	if !since.IsZero() && !until.IsZero() && since.After(until) {
+		return nil, journalOutput{}, errors.New("memento_journal: since is after until")
+	}
+	entries, meta, err := c.JournalEntries(ctx, client.JournalQuery{
+		Key: in.Key, Limit: limit, Since: since, Until: until,
+	})
 	if err != nil {
 		return nil, journalOutput{}, storeError("memento_journal", err)
 	}

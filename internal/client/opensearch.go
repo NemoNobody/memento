@@ -1064,14 +1064,15 @@ func obsoleteUpdateParams(entry *model.JournalEntry, seqNo, primaryTerm int) ope
 // Erasing a field to empty is not a patch operation — corrections carry
 // content, not deletions.
 type PatchFields struct {
-	Value       string // new value: journaled, observed_at moves, summary resets with it
-	Summary     string // new table of contents; with a value change, "" clears the old one
-	Notes       string // replaces notes when non-empty (add's rule)
-	NotesAppend string // dated "YYYY-MM-DD: text" line appended atomically (painless)
-	Source      string // replaces source when non-empty
-	Status      string // verified | obsolete — a transition is journaled (audit symmetry)
-	Reason      string // why it became obsolete (folded into notes; guard-checked)
-	TTLDays     int    // retunes the staleness window (bounded by the category cap); 0 = untouched
+	Value       string   // new value: journaled, observed_at moves, summary resets with it
+	Summary     string   // new table of contents; with a value change, "" clears the old one
+	Notes       string   // replaces notes when non-empty (add's rule)
+	NotesAppend string   // dated "YYYY-MM-DD: text" line appended atomically (painless)
+	Source      string   // replaces source when non-empty
+	Status      string   // verified | obsolete — a transition is journaled (audit symmetry)
+	Reason      string   // why it became obsolete (folded into notes; guard-checked)
+	TTLDays     int      // retunes the staleness window (bounded by the category cap); 0 = untouched
+	Keywords    []string // replaces the tag set when non-empty (tags are journaled with each accepted value)
 }
 
 // PatchResult reports what the patch did.
@@ -1100,6 +1101,7 @@ if (params.reason_append != null) {
 }
 if (params.source != null) { ctx._source.source = params.source; }
 if (params.ttl_days != null) { ctx._source.ttl_days = params.ttl_days; }
+if (params.keywords != null) { ctx._source.keywords = params.keywords; }
 if (params.status != null) { ctx._source.status = params.status; }
 if (params.observed_at != null) { ctx._source.observed_at = params.observed_at; }
 if (params.current_ref != null) { ctx._source.current_ref = params.current_ref; }
@@ -1114,11 +1116,20 @@ ctx._source.updated_by = params.updated_by;
 // error would drown in the "do not retry" advice).
 func ValidatePatchFields(p PatchFields) error {
 	if p.Value == "" && p.Summary == "" && p.Notes == "" && p.NotesAppend == "" &&
-		p.Source == "" && p.Status == "" && p.Reason == "" && p.TTLDays == 0 {
-		return fmt.Errorf("patch: nothing to change (provide value, summary, notes, notes_append, source, status, reason, or ttl_days)")
+		p.Source == "" && p.Status == "" && p.Reason == "" && p.TTLDays == 0 && len(p.Keywords) == 0 {
+		return fmt.Errorf("patch: nothing to change (provide value, summary, notes, notes_append, source, status, reason, ttl_days, or keywords)")
 	}
 	if p.TTLDays < 0 {
 		return fmt.Errorf("patch: ttl_days must be positive, got %d", p.TTLDays)
+	}
+	if len(p.Keywords) > 0 {
+		// Shape only: the length/count bounds are the shared normalizer's job
+		// (the client runs it before the write, like add).
+		for _, k := range p.Keywords {
+			if strings.TrimSpace(k) == "" {
+				return fmt.Errorf("patch: keywords must not contain blank entries")
+			}
+		}
 	}
 	if p.Reason != "" && p.Status != "obsolete" {
 		return fmt.Errorf("patch: reason is only accepted with status=obsolete")
@@ -1165,6 +1176,13 @@ func (c *Client) Patch(ctx context.Context, key string, p PatchFields) (PatchRes
 		if err := model.ValidTTLOverride(existing.Category, p.TTLDays); err != nil {
 			return PatchResult{}, contractErrorf("patch: %v", err)
 		}
+	}
+	if len(p.Keywords) > 0 {
+		kw, err := model.NormalizeKeywords(p.Keywords)
+		if err != nil {
+			return PatchResult{}, contractErrorf("patch: %v", err)
+		}
+		p.Keywords = kw
 	}
 
 	valueChanged := p.Value != "" && p.Value != existing.Value
@@ -1230,6 +1248,10 @@ func (c *Client) Patch(ctx context.Context, key string, p PatchFields) (PatchRes
 		if p.Source != "" {
 			stated.Source = p.Source
 		}
+		if len(p.Keywords) > 0 {
+			// The snapshot states the tag set the doc will hold.
+			stated.Keywords = p.Keywords
+		}
 		// Doc-first: the entry is built and its id preallocated here, the
 		// entry itself is indexed only after the update is accepted.
 		entry = c.newJournalEntryFor(ctx, &stated, existing.FactID, now)
@@ -1255,6 +1277,7 @@ func (c *Client) Patch(ctx context.Context, key string, p PatchFields) (PatchRes
 		"reason_append": nil,
 		"source":        nil,
 		"ttl_days":      nil,
+		"keywords":      nil,
 		"status":        nil,
 		"observed_at":   nil,
 		"current_ref":   nil,
@@ -1297,6 +1320,9 @@ func (c *Client) Patch(ctx context.Context, key string, p PatchFields) (PatchRes
 	}
 	if p.TTLDays > 0 {
 		params["ttl_days"] = p.TTLDays
+	}
+	if len(p.Keywords) > 0 {
+		params["keywords"] = p.Keywords
 	}
 	if p.Status != "" {
 		params["status"] = p.Status
@@ -1363,7 +1389,7 @@ ctx._source.updated_at = params.updated_at;
 // prune planning path shows the journal, not the legacy array, once a key
 // has entries there).
 func (c *Client) JournalCount(ctx context.Context, key string) (int, error) {
-	_, meta, err := c.JournalEntries(ctx, key, 1)
+	_, meta, err := c.JournalEntries(ctx, JournalQuery{Key: key, Limit: 1})
 	return meta.Total, err
 }
 

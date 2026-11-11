@@ -369,3 +369,28 @@ func TestPatchRetireReasonFolded(t *testing.T) {
 		t.Errorf("reason_append = %v, want the folded single line", params["reason_append"])
 	}
 }
+
+// TestPatchKeywordsReplacesTags pins that a patch can re-tag a fact without
+// resending its value: the tag set is normalized like add, written in the same
+// scripted update, and a tag-only patch stays a qualifier touch (not journaled).
+func TestPatchKeywordsReplacesTags(t *testing.T) {
+	var body string
+	c, fake := newFakeClient(t, patchRespond(
+		`{"key":"k","value":"v","category":"config","project":"p","status":"verified"}`, &body))
+
+	res, err := c.Patch(context.Background(), "k", PatchFields{Keywords: []string{" Perf ", "go", "perf"}})
+	if err != nil {
+		t.Fatalf("Patch: %v", err)
+	}
+	if res.Changed {
+		t.Error("a tag-only patch is a qualifier touch, Changed must stay false")
+	}
+	params := patchParams(t, body)
+	kw, ok := params["keywords"].([]interface{})
+	if !ok || len(kw) != 2 || kw[0] != "perf" || kw[1] != "go" {
+		t.Errorf("keywords param = %v, want normalized [perf go]", params["keywords"])
+	}
+	if appends := journalAppends(fake); len(appends) != 0 {
+		t.Errorf("a tag-only patch must not journal: %d appends", len(appends))
+	}
+}

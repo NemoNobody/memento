@@ -46,7 +46,7 @@ func GetCmd() *cobra.Command {
 			var jErr error
 			if getFlags.history && len(f.History) == 0 {
 				var jMeta client.JournalMeta
-				entries, jMeta, jErr = c.JournalEntries(ctx, key, 20)
+				entries, jMeta, jErr = c.JournalEntries(ctx, client.JournalQuery{Key: key, Limit: 20})
 				jTotal = jMeta.Total
 				jSkipped = jMeta.Skipped
 			}

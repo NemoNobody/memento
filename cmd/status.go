@@ -94,8 +94,26 @@ type statusReport struct {
 	OpenSearchVersion  string               `json:"opensearch_version,omitempty" jsonschema:"OpenSearch version, when reachable"`
 	Storage            *client.StorageState `json:"storage,omitempty" jsonschema:"cluster health, disk usage and read-only state; absent when the store is unreachable"`
 	StorageNote        string               `json:"storage_note,omitempty" jsonschema:"what the health status means for this index, in words"`
+	Fetch              *fetchReport         `json:"fetch,omitempty" jsonschema:"document-fetch configuration: TTL, renderer, proxy presence (never the URL), allowlist size — the \"why does fetch fail\" answer"`
 	Error              string               `json:"error,omitempty" jsonschema:"why the store is not usable"`
 	Hint               string               `json:"hint,omitempty" jsonschema:"what the user should do about it"`
+}
+
+// fetchReport is the effective document-fetch configuration. The proxy URL is
+// reported as a boolean on purpose: it may carry credentials in userinfo, and
+// status output is agent-visible.
+type fetchReport struct {
+	DocsIndex       string `json:"docs_index" jsonschema:"index holding fetched page snapshots"`
+	DocsTTLDays     int    `json:"docs_ttl_days" jsonschema:"snapshot TTL in days; 0 = never expires"`
+	Render          string `json:"render,omitempty" jsonschema:"JS renderer for walled pages (empty = plain fetch only; obscura = opt-in renderer)"`
+	ProxyConfigured bool   `json:"proxy_configured" jsonschema:"true when a fetch proxy is configured (the URL is never shown)"`
+	ProxyFallback   bool   `json:"proxy_fallback" jsonschema:"true when a refused direct fetch retries through the proxy"`
+	AllowPrivate    bool   `json:"allow_private" jsonschema:"true when the SSRF guard is relaxed for self-hosted targets"`
+	RespectRobots   bool   `json:"respect_robots" jsonschema:"true when robots.txt is honored"`
+	AllowHosts      int    `json:"allow_hosts" jsonschema:"number of hosts in the privacy allowlist (0 = no allowlist)"`
+	TimeoutSeconds  int    `json:"timeout_seconds" jsonschema:"per-fetch timeout"`
+	MaxBytes        int    `json:"max_bytes" jsonschema:"body size cap per fetch"`
+	UserAgent       string `json:"user_agent,omitempty" jsonschema:"User-Agent sent on fetches (not a secret: every target sees it)"`
 }
 
 // resolvedConfigPath returns the config file that would be used, given an
@@ -168,6 +186,19 @@ func collectStatus(ctx context.Context, confPath string, noCWD bool) statusRepor
 	rep.HistoryIndexPeriod = cfg.HistoryIndexPeriod
 	rep.HistoryLimit = cfg.HistoryLimit
 	rep.SecretGuard = cfg.SecretGuard
+	rep.Fetch = &fetchReport{
+		DocsIndex:       cfg.DocsIndexName,
+		DocsTTLDays:     cfg.DocsTTLDays,
+		Render:          cfg.FetchRender,
+		ProxyConfigured: cfg.FetchProxyURL != "",
+		ProxyFallback:   cfg.FetchProxyFallback,
+		AllowPrivate:    cfg.FetchAllowPrivate,
+		RespectRobots:   cfg.FetchRespectRobots,
+		AllowHosts:      len(cfg.FetchAllowHosts),
+		TimeoutSeconds:  cfg.FetchTimeoutSeconds,
+		MaxBytes:        cfg.FetchMaxBytes,
+		UserAgent:       cfg.FetchUserAgent,
+	}
 	rep.PasswordFrom = cfg.PasswordSource
 	rep.KeyringError = cfg.KeyringError
 	rep.PermWarning = permWarning(cfg, rep.ConfigFile)
@@ -328,6 +359,44 @@ func printStatus(w io.Writer, rep statusReport) error {
 	b.WriteString(rep.HistoryIndexPeriod)
 	b.WriteString("\nhistory_limit: ")
 	b.WriteString(strconv.Itoa(rep.HistoryLimit))
+	if f := rep.Fetch; f != nil {
+		b.WriteString("\ndocs: index=")
+		b.WriteString(f.DocsIndex)
+		b.WriteString(" ttl=")
+		if f.DocsTTLDays <= 0 {
+			b.WriteString("never")
+		} else {
+			b.WriteString(strconv.Itoa(f.DocsTTLDays))
+			b.WriteString("d")
+		}
+		b.WriteString(" render=")
+		if f.Render == "" {
+			b.WriteString("off")
+		} else {
+			b.WriteString(f.Render)
+		}
+		b.WriteString(" proxy=")
+		if f.ProxyConfigured {
+			b.WriteString("configured")
+			if f.ProxyFallback {
+				b.WriteString("(fallback)")
+			}
+		} else {
+			b.WriteString("off")
+		}
+		b.WriteString(" allow_hosts=")
+		b.WriteString(strconv.Itoa(f.AllowHosts))
+		if f.AllowPrivate {
+			b.WriteString(" allow_private=on")
+		}
+		if f.RespectRobots {
+			b.WriteString(" robots=on")
+		}
+		b.WriteString(" timeout=")
+		b.WriteString(strconv.Itoa(f.TimeoutSeconds))
+		b.WriteString("s max=")
+		b.WriteString(humanBytes(int64(f.MaxBytes)))
+	}
 	b.WriteString("\nsecret_guard: ")
 	b.WriteString(rep.SecretGuard)
 	if rep.Author != "" {

@@ -16,6 +16,8 @@ import (
 
 var journalFlags struct {
 	limit int
+	since string
+	until string
 }
 
 func JournalCmd() *cobra.Command {
@@ -39,6 +41,17 @@ journal indices are lower bounds — the surviving journal, not the lifetime.`,
 				// as a small page; demand an explicit positive bound.
 				fatalErr(fmt.Errorf("journal: --limit must be >= 1, got %d", journalFlags.limit))
 			}
+			since, serr := parseJournalBound("--since", journalFlags.since)
+			if serr != nil {
+				fatalErr(serr)
+			}
+			until, uerr := parseJournalBound("--until", journalFlags.until)
+			if uerr != nil {
+				fatalErr(uerr)
+			}
+			if !since.IsZero() && !until.IsZero() && since.After(until) {
+				fatalErr(errors.New("journal: --since is after --until"))
+			}
 			ctx := context.Background()
 			c, err := newClient()
 			if err != nil {
@@ -52,7 +65,9 @@ journal indices are lower bounds — the surviving journal, not the lifetime.`,
 					fatalErr(err)
 				}
 			}
-			entries, meta, err := c.JournalEntries(ctx, key, journalFlags.limit)
+			entries, meta, err := c.JournalEntries(ctx, client.JournalQuery{
+				Key: key, Limit: journalFlags.limit, Since: since, Until: until,
+			})
 			if err != nil {
 				fatalErr(err)
 			}
@@ -111,7 +126,25 @@ journal indices are lower bounds — the surviving journal, not the lifetime.`,
 	}
 	cmd.Flags().IntVar(&journalFlags.limit, "limit", 20,
 		"newest entries to show (the journal is a log: bound the read, do not flood the context)")
+	cmd.Flags().StringVar(&journalFlags.since, "since", "",
+		"only entries at or after this RFC3339 timestamp (e.g. 2026-11-10T00:00:00Z)")
+	cmd.Flags().StringVar(&journalFlags.until, "until", "",
+		"only entries at or before this RFC3339 timestamp")
 	return cmd
+}
+
+// parseJournalBound parses an optional RFC3339 bound for a journal window.
+// A date-only value is refused on purpose: "2026-11-10" silently means local
+// midnight, and the journal is stored in UTC.
+func parseJournalBound(flag, raw string) (time.Time, error) {
+	if strings.TrimSpace(raw) == "" {
+		return time.Time{}, nil
+	}
+	t, err := time.Parse(time.RFC3339, strings.TrimSpace(raw))
+	if err != nil {
+		return time.Time{}, fmt.Errorf("journal: %s must be RFC3339 (e.g. 2026-11-10T00:00:00Z), got %q", flag, raw)
+	}
+	return t, nil
 }
 
 func HistoryInfoCmd() *cobra.Command {

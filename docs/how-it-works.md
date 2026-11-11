@@ -120,12 +120,15 @@ All facts for a project, optionally narrowed to a key prefix (navigation cap
 ### journal / history-info
 
 ```
-memento journal <key> [--limit N]
+memento journal <key> [--limit N] [--since RFC3339] [--until RFC3339]
 memento history-info <key>
 ```
 
 `journal` reads the journal for a key: every accepted value, newest first
-(`--limit` caps the page). `history-info` is the cheap overview: writes,
+(`--limit` caps the page; `--since`/`--until` bound `created_at`, so "what
+changed since my last session" is a query, not a scan — dates are RFC3339 in
+UTC on purpose: `2026-11-10` would silently mean local midnight).
+`history-info` is the cheap overview: writes,
 rediscoveries, first/last timestamps, `current_ref` — no entry bodies. Use it
 to answer "did this fact change, how often, when last" before pulling the
 full journal.

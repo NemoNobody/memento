@@ -325,14 +325,29 @@ func journalEntryID(factKey, op, value, notes, source string, ts time.Time) stri
 // first (writer clocks skew on a shared store — that is why the pipeline
 // exists), the entry's own created_at as fallback for entries stored
 // without the pipeline.
-func buildJournalEntriesBody(key string, limit int) map[string]interface{} {
-	size := limit
+func buildJournalEntriesBody(q JournalQuery) map[string]interface{} {
+	size := q.Limit
 	if size <= 0 || size > NavSizeCap {
 		size = NavSizeCap
 	}
+	must := []map[string]interface{}{
+		{"term": map[string]interface{}{"fact_key": q.Key}},
+	}
+	if !q.Since.IsZero() || !q.Until.IsZero() {
+		window := map[string]interface{}{}
+		if !q.Since.IsZero() {
+			window["gte"] = q.Since.UTC().Format(time.RFC3339)
+		}
+		if !q.Until.IsZero() {
+			window["lte"] = q.Until.UTC().Format(time.RFC3339)
+		}
+		must = append(must, map[string]interface{}{
+			"range": map[string]interface{}{"created_at": window},
+		})
+	}
 	return map[string]interface{}{
 		"query": map[string]interface{}{
-			"term": map[string]interface{}{"fact_key": key},
+			"bool": map[string]interface{}{"must": must},
 		},
 		"sort": []map[string]interface{}{
 			{"ingest_at": map[string]interface{}{"order": "desc"}},
@@ -380,8 +395,18 @@ type JournalMeta struct {
 	Skipped   int
 }
 
-func (c *Client) JournalEntries(ctx context.Context, key string, limit int) ([]model.JournalEntry, JournalMeta, error) {
-	resp, err := c.journalSearch(ctx, buildJournalEntriesBody(key, limit))
+// JournalQuery is one journal read: the fact key, the page size, and an
+// optional created_at window (zero bounds are open). The window answers "what
+// changed since my last session" as a query instead of a full scan.
+type JournalQuery struct {
+	Key   string
+	Limit int
+	Since time.Time
+	Until time.Time
+}
+
+func (c *Client) JournalEntries(ctx context.Context, q JournalQuery) ([]model.JournalEntry, JournalMeta, error) {
+	resp, err := c.journalSearch(ctx, buildJournalEntriesBody(q))
 	if err != nil {
 		return nil, JournalMeta{}, err
 	}
@@ -491,7 +516,7 @@ func (c *Client) PruneJournal(ctx context.Context, key string, keep int) (int, e
 	if keep < 0 {
 		return 0, fmt.Errorf("prune: keep must be >= 0, got %d", keep)
 	}
-	resp, err := c.journalSearch(ctx, buildJournalEntriesBody(key, NavSizeCap))
+	resp, err := c.journalSearch(ctx, buildJournalEntriesBody(JournalQuery{Key: key, Limit: NavSizeCap}))
 	if err != nil {
 		return 0, err
 	}

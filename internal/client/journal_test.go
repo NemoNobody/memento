@@ -146,7 +146,7 @@ func TestJournalReadsCarryUnavailableFlags(t *testing.T) {
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Path + `"}`
 	})
 
-	entries, meta, err := c.JournalEntries(context.Background(), "k", 5)
+	entries, meta, err := c.JournalEntries(context.Background(), JournalQuery{Key: "k", Limit: 5})
 	if err != nil {
 		t.Fatalf("JournalEntries: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestJournalMissingIndexReadsAsEmpty(t *testing.T) {
 		return http.StatusNotFound, `{"status":404,"error":{"type":"index_not_found_exception"}}`
 	})
 
-	entries, meta, err := c.JournalEntries(context.Background(), "k", 5)
+	entries, meta, err := c.JournalEntries(context.Background(), JournalQuery{Key: "k", Limit: 5})
 	if err != nil {
 		t.Fatalf("a store without a journal index must read as empty, got %v", err)
 	}
@@ -197,7 +197,7 @@ func TestJournalEntriesCountUndecodable(t *testing.T) {
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Path + `"}`
 	})
 
-	entries, meta, err := c.JournalEntries(context.Background(), "k", 5)
+	entries, meta, err := c.JournalEntries(context.Background(), JournalQuery{Key: "k", Limit: 5})
 	if err != nil {
 		t.Fatalf("JournalEntries: %v", err)
 	}
@@ -1093,7 +1093,7 @@ func TestAddCorrectionJournalsDocFactID(t *testing.T) {
 // with the store clock so ordering survives writer clock skew; reads must
 // honor that clock, not the clients'.
 func TestJournalEntriesSortedByStoreClockFirst(t *testing.T) {
-	body := buildJournalEntriesBody("k", 5)
+	body := buildJournalEntriesBody(JournalQuery{Key: "k", Limit: 5})
 	sortKeys, ok := body["sort"].([]map[string]interface{})
 	if !ok || len(sortKeys) != 2 {
 		t.Fatalf("sort = %v, want two keys", body["sort"])
@@ -1353,5 +1353,42 @@ func TestAddJournalsKeywords(t *testing.T) {
 	}
 	if !strings.Contains(appends[0].Body, `"keywords":["perf","go"]`) {
 		t.Errorf("journal entry must carry the tag set: %s", appends[0].Body)
+	}
+}
+
+// TestBuildJournalEntriesWindow pins the time window: a one- or two-sided
+// created_at range turns "what changed since my last session" into a query,
+// not a full scan. Bounds are RFC3339 in UTC.
+func TestBuildJournalEntriesWindow(t *testing.T) {
+	since := time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC)
+	until := time.Date(2026, 11, 11, 0, 0, 0, 0, time.UTC)
+
+	mustOf := func(q JournalQuery) []map[string]interface{} {
+		body := buildJournalEntriesBody(q)
+		return body["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"].([]map[string]interface{})
+	}
+
+	must := mustOf(JournalQuery{Key: "k", Since: since, Until: until})
+	if len(must) != 2 {
+		t.Fatalf("must clauses = %d, want 2 (key term + range)", len(must))
+	}
+	rng := must[1]["range"].(map[string]interface{})["created_at"].(map[string]interface{})
+	if rng["gte"] != "2026-11-10T00:00:00Z" || rng["lte"] != "2026-11-11T00:00:00Z" {
+		t.Errorf("range = %v, want the RFC3339 window", rng)
+	}
+
+	// A one-sided window carries only the side that was asked for.
+	must = mustOf(JournalQuery{Key: "k", Since: since})
+	rng = must[1]["range"].(map[string]interface{})["created_at"].(map[string]interface{})
+	if _, has := rng["lte"]; has {
+		t.Errorf("one-sided window must not invent an upper bound: %v", rng)
+	}
+	if _, has := rng["gte"]; !has {
+		t.Errorf("window lost its lower bound: %v", rng)
+	}
+
+	// No window: the plain key term only.
+	if must := mustOf(JournalQuery{Key: "k"}); len(must) != 1 {
+		t.Errorf("must clauses = %d, want 1 without a window", len(must))
 	}
 }
