@@ -232,3 +232,38 @@ func TestRenderCredsStatus(t *testing.T) {
 		}
 	}
 }
+
+// creds get pipes the resolved password to stdout (scripted curl, dashboard
+// push). Env resolves first; --url reads only the keyring entry for that host.
+func TestCredsGetPicksEnvAndKeyring(t *testing.T) {
+	credsTestEnv(t)
+	stored := fakeKeyringCmd(t)
+	stored["memento/os.test:9200"] = "wallet pw"
+
+	t.Setenv("OPENSEARCH_PASSWORD", "env pw")
+	cmd := CredsCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"get"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("creds get (env): %v", err)
+	}
+	if out.String() != "env pw\n" {
+		t.Errorf("get stdout = %q, want the env value plus newline", out.String())
+	}
+
+	// --url bypasses the effective config's password (different endpoint)
+	// and serves the keyring entry for the named host; env must not leak here.
+	out.Reset()
+	cmd = CredsCmd()
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"get", "--url", "https://os.test:9200"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("creds get (--url): %v", err)
+	}
+	if out.String() != "wallet pw\n" {
+		t.Errorf("get --url stdout = %q, want the keyring value", out.String())
+	}
+}

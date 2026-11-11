@@ -3,6 +3,7 @@ package cmd
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"io"
 	"net/url"
 	"os"
@@ -30,11 +31,13 @@ func CredsCmd() *cobra.Command {
 		Long: `The credential resolves in this order: OPENSEARCH_PASSWORD env, the OS
 keyring (service "memento", account host[:port]), then the plaintext config
 file — only when allow_plaintext is on. These commands write and inspect the
-keyring entry; the stored value is never printed.`,
+keyring entry; status never prints the value. The exception is 'creds get',
+which prints the resolved password to stdout for scripted use (curl recipes,
+push-dashboards.sh): treat its stdout as a secret.`,
 	}
 	cmd.PersistentFlags().StringVar(&credsFlags.url, "url", "",
 		"target OpenSearch URL (default: the effective opensearch_url)")
-	cmd.AddCommand(credsSetCmd(), credsStatusCmd(), credsRmCmd())
+	cmd.AddCommand(credsSetCmd(), credsGetCmd(), credsStatusCmd(), credsRmCmd())
 	return cmd
 }
 
@@ -104,6 +107,58 @@ is never an argument: arguments persist in shell history.`,
 				fatalErr(err)
 			}
 			if err := writeLine(out, "stored: service="+config.KeyringService+" account="+host); err != nil {
+				fatalErr(err)
+			}
+		},
+	}
+}
+
+// credsGetCmd prints the resolved password to stdout so scripts can pipe it
+// (curl --config, env assignment) without the secret ever living in argv or
+// shell history — the same discipline as "set" on the write side. With no
+// --url it mirrors the client's own chain (env, keyring, plaintext config);
+// with --url it reads only the keyring entry for that host (the effective
+// config's password belongs to the configured endpoint, not to --url).
+func credsGetCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "get",
+		Short: "Print the resolved password to stdout (for piping in scripts)",
+		Long: `Prints the password resolved by the client's own chain. With --url, prints
+the keyring entry for that host instead. stdout is the secret: never redirect
+it to a file or a log; consume it in a pipe or a shell assignment.`,
+		Args: cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			out := cmd.OutOrStdout()
+			if credsFlags.url != "" {
+				target, err := credsTarget()
+				if err != nil {
+					fatalErr(err)
+				}
+				host := accountFor(target)
+				pw, err := keyring.Get(config.KeyringService, host)
+				if err != nil {
+					if errors.Is(err, keyring.ErrNotFound) {
+						fatalErr(fmt.Errorf("no keyring entry for service=%s account=%s: store one with 'memento creds set --url %s'", config.KeyringService, host, target))
+					}
+					fatalErr(err)
+				}
+				if pw == "" {
+					fatalErr(fmt.Errorf("keyring entry for account=%s is empty", host))
+				}
+				if _, err := io.WriteString(out, pw+"\n"); err != nil {
+					fatalErr(err)
+				}
+				return
+			}
+			cfg, err := config.LoadConfig()
+			if err != nil {
+				fatalErr(err)
+			}
+			if cfg.OpenSearchPassword == "" {
+				// fatalErr writes to stderr: stdout must carry only the secret.
+				fatalErr(errors.New("no password resolves: store one with 'memento creds set' or export OPENSEARCH_PASSWORD (see 'memento creds status')"))
+			}
+			if _, err := io.WriteString(out, cfg.OpenSearchPassword+"\n"); err != nil {
 				fatalErr(err)
 			}
 		},

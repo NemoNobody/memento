@@ -89,8 +89,11 @@ scripts/push-dashboards.sh
 
 Re-runnable: objects carry stable `memento-store-*` ids and the import
 overwrites them in place. Against a secured cluster (security plugin on) the
-script needs credentials: `DASHBOARDS_USER`/`DASHBOARDS_PASSWORD` env, or a
-`~/.config/memento/dashboards.env` file (mode 600):
+script resolves the password wallet-first: `memento creds get` — the same
+keyring entry the MCP server uses (point at a config outside the cwd with
+`MEMENTO_CONF=...`). Overrides: `DASHBOARDS_USER`/`DASHBOARDS_PASSWORD` env;
+headless fallback (no session bus): a `~/.config/memento/dashboards.env`
+file (mode 600):
 
 ```sh
 DASHBOARDS_USER=admin

@@ -29,8 +29,11 @@ journal of dated indices (`<index>-history-<period-date>`, monthly by default;
 - Optional UI: `make dev-opensearch-dashboards` adds OpenSearch Dashboards to
   the dev compose (profile-gated); `scripts/push-dashboards.sh` imports a
   ready-made bundle (index patterns for facts/journal/docs, visualizations,
-  an overview dashboard) — idempotent, works against secured clusters via
-  `DASHBOARDS_USER`/`DASHBOARDS_PASSWORD` or `~/.config/memento/dashboards.env`.
+  an overview dashboard) — idempotent. Credentials resolve wallet-first via
+  the new `memento creds get` (prints the resolved password to stdout for
+  scripted use; never argv), overridable by `DASHBOARDS_USER`/
+  `DASHBOARDS_PASSWORD`, with `~/.config/memento/dashboards.env` as the
+  headless fallback.
 
 Authorship and summary:
 - Every write is stamped with self-reported audit labels: `author` (resolved

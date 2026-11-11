@@ -8,8 +8,12 @@
 #
 # Credential resolution (first hit wins):
 #   1. DASHBOARDS_USER / DASHBOARDS_PASSWORD environment variables
-#   2. ~/.config/memento/dashboards.env (keep it mode 600; never committed)
-#   3. no auth — the dev compose recipe runs with the security plugin off
+#   2. `memento creds get` — the wallet/keyring entry of the configured
+#      cluster (same entry the MCP server itself uses; point at a config
+#      outside the cwd with MEMENTO_CONF=/path/to/memento.conf)
+#   3. ~/.config/memento/dashboards.env — fallback for headless boxes with
+#      no session bus (no wallet reachable)
+#   4. no auth — the dev compose recipe runs with the security plugin off
 #
 # Usage:
 #   scripts/push-dashboards.sh                       # localhost:5601
@@ -21,6 +25,17 @@ USER="${DASHBOARDS_USER:-}"
 PASS="${DASHBOARDS_PASSWORD:-}"
 ENVF="${MEMENTO_DASHBOARDS_ENV:-$HOME/.config/memento/dashboards.env}"
 
+if [ -z "$PASS" ]; then
+  MEM=$(command -v memento || true)
+  [ -z "$MEM" ] && [ -x "$HOME/.local/bin/memento" ] && MEM="$HOME/.local/bin/memento"
+  if [ -n "$MEM" ]; then
+    # exit status matters: an old memento without `creds get` prints usage
+    # to stdout, and that text must never pass as a password
+    if TRY=$([ -n "$MEM" ] && "$MEM" creds get 2>/dev/null); then
+      PASS=$TRY
+    fi
+  fi
+fi
 if [ -z "$PASS" ] && [ -f "$ENVF" ]; then
   set -a
   # shellcheck disable=SC1090
@@ -43,7 +58,7 @@ AUTH=()
 code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$URL/api/status" "${AUTH[@]}" || echo 000)
 if [ "$code" = "401" ] && [ -z "$PASS" ]; then
   echo "dashboards requires authentication ($URL answered 401)." >&2
-  echo "set DASHBOARDS_USER/DASHBOARDS_PASSWORD or fill in $ENVF" >&2
+  echo "give the wallet an entry ('memento creds set'), set DASHBOARDS_USER/DASHBOARDS_PASSWORD, or fill in $ENVF" >&2
   exit 3
 fi
 if [ "$code" = "000" ]; then
@@ -51,7 +66,7 @@ if [ "$code" = "000" ]; then
   exit 1
 fi
 
-resp=$(curl -s --max-time 30 -X POST "$URL/api/saved_objects/_import?overwrite=true" "${AUTH[@]}" -F "file=@$OBJ")
+resp=$(curl -s --max-time 30 -X POST "$URL/api/saved_objects/_import?overwrite=true" -H "osd-xsrf: true" "${AUTH[@]}" -F "file=@$OBJ")
 if printf '%s' "$resp" | grep -q '"success":true'; then
   echo "imported to $URL: dashboard \"Memento — store overview\", index patterns memento / memento-history-* / memento-docs"
 else
