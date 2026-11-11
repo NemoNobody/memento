@@ -136,6 +136,10 @@ func isAlreadyExists(err error) bool {
 // dated history index), where no document was written — reading it as a
 // doc collision would fake a journal append that never happened. The
 // canonical collision type needs no fallback (it matches on type above).
+// In string shape the type field is gone, so the race is recognised by
+// its wording: the engine's index-race reason carries the "index ["
+// marker (and a rewritten body may still name the exception type), while
+// doc-level collisions name the document id, never "index [".
 func isVersionConflict(err error) bool {
 	var ste *opensearch.StructError
 	if errors.As(err, &ste) {
@@ -147,6 +151,8 @@ func isVersionConflict(err error) bool {
 	}
 	var se *opensearch.StringError
 	return errors.As(err, &se) && se.Status == http.StatusConflict &&
+		!strings.Contains(se.Err, "resource_already_exists") &&
+		(!strings.Contains(se.Err, "index [") || !strings.Contains(se.Err, "already exists")) &&
 		(strings.Contains(se.Err, "version_conflict") || strings.Contains(se.Err, "version conflict") || strings.Contains(se.Err, "already exists"))
 }
 

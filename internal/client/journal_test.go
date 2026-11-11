@@ -449,6 +449,56 @@ func TestJournalCollisionStringShape(t *testing.T) {
 			t.Errorf("appended = %d, want 0: no document was written", appended)
 		}
 	})
+	t.Run("string-shaped index race is not a doc collision", func(t *testing.T) {
+		c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+			if code, body := journalInfraOK(r); code != http.StatusInternalServerError {
+				return code, body
+			}
+			switch {
+			case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-"):
+				return http.StatusConflict, `{"error":"resource_already_exists_exception: index [memento-history-2026-11/uuid] already exists","status":409}`
+			}
+			return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Method + " " + r.Path + `"}`
+		})
+		f := model.NewFact("k", "v", "config", "p", "s", "")
+		appended, err := c.MigrateFact(context.Background(), f, time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC))
+		if err == nil || !strings.Contains(err.Error(), "journal append") {
+			t.Fatalf("a string-shaped index-creation race must fail the append honestly: %v", err)
+		}
+		if appended != 0 {
+			t.Errorf("appended = %d, want 0: no document was written", appended)
+		}
+	})
+	t.Run("rewritten body saying version conflict is success in both shapes", func(t *testing.T) {
+		// Pins the "version conflict" disjunct on its own (no "already
+		// exists" in the reason): without this, corrupting that disjunct
+		// stays green while CAS-path classification silently dies.
+		for _, body := range []string{
+			`{"error":{"type":"search_phase_execution_exception","reason":"[k]: version conflict, required seq_no [5], primary_term [2], but was [6] [2]"},"status":409}`,
+			`{"error":"[k]: version conflict, required seq_no [5], primary_term [2], but was [6] [2]","status":409}`,
+		} {
+			c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+				if code, b := journalInfraOK(r); code != http.StatusInternalServerError {
+					return code, b
+				}
+				switch {
+				case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-"):
+					return http.StatusConflict, body
+				case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+					return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+				}
+				return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Method + " " + r.Path + `"}`
+			})
+			f := model.NewFact("k", "v", "config", "p", "s", "")
+			appended, err := c.MigrateFact(context.Background(), f, time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC))
+			if err != nil {
+				t.Fatalf("MigrateFact over collision body %s: %v", body, err)
+			}
+			if appended != 1 {
+				t.Errorf("appended = %d, want 1 (version-conflict wording in %s)", appended, body)
+			}
+		}
+	})
 }
 
 func TestMigrateFactMovesArrayToJournal(t *testing.T) {
