@@ -320,10 +320,11 @@ Hardening (pre-release review conveyor):
   accepted write beside its lagged-journal error, and the aggregate counters
   (created/changed/touched) count exactly what landed — a summary can no
   longer contradict the rows it summarizes.
-- Conflict classification answers from either error shape the client can
-  produce (a middlebox-rewritten 409 included), is gated to real 409s, and
-  refuses the index-creation-race wording; 409-as-success applies only to
-  content-derived deterministic journal ids — a collision over a fresh uuid
+- Conflict classification answers from either error shape the client can produce
+  (a middlebox-rewritten 409 included), is gated to real 409s, and refuses the
+  index-creation-race signature wherever the engine leaves it — top level,
+  root_cause, or a caused_by chain; success-by-collision is limited to
+  content-derived deterministic journal ids, so a collision over a fresh uuid
   ref surfaces as a lagged entry, never as a clean success with a dangling
   `current_ref`.
 
