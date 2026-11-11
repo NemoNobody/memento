@@ -4,10 +4,26 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/opensearch-project/opensearch-go/v4/opensearchapi"
 )
+
+// IndexStat is one index's size and shard layout as reported by _cat/indices.
+type IndexStat struct {
+	Index     string `json:"index" jsonschema:"index name"`
+	Health    string `json:"health" jsonschema:"green | yellow | red"`
+	Documents int    `json:"documents" jsonschema:"stored documents"`
+	SizeBytes int64  `json:"size_bytes" jsonschema:"store size of all shard copies, bytes"`
+	Primaries int    `json:"primaries" jsonschema:"primary shards"`
+	Replicas  int    `json:"replicas" jsonschema:"configured replicas per primary"`
+}
+
+// indexStatCap bounds the reported index page: a store with a long journal
+// history has many period indices, and status must stay one cheap call.
+const indexStatCap = 50
 
 // StorageState describes the health of the cluster that holds the facts.
 //
@@ -32,6 +48,19 @@ type StorageState struct {
 	// a watermark (and the read-only flood stage) first.
 	WorstNode            string  `json:"worst_node,omitempty" jsonschema:"data node with the highest disk usage"`
 	WorstNodeUsedPercent float64 `json:"worst_node_used_percent,omitempty" jsonschema:"disk usage of that node, in percent"`
+
+	// Indices lists the memento indices (facts, docs, journal periods) with
+	// their size and shard layout: the "is the store growing, and how" signal.
+	// Sorted by name; capped so a store with many history periods stays cheap.
+	Indices          []IndexStat `json:"indices,omitempty" jsonschema:"memento indices with documents, size and shard layout (sorted by name)"`
+	IndicesTruncated bool        `json:"indices_truncated,omitempty" jsonschema:"true when more indices exist than the reported page"`
+
+	// Replica drift for the facts index: the configured replica count versus
+	// what the current topology asks for. A drift means the reconcile did not
+	// take (or could not: a single node cannot host a replica).
+	DesiredReplicas *int `json:"desired_replicas,omitempty" jsonschema:"replicas the current topology asks for (config index_replicas, or the auto rule)"`
+	ActualReplicas  *int `json:"actual_replicas,omitempty" jsonschema:"replicas configured on the facts index"`
+	ReplicaDrift    bool `json:"replica_drift,omitempty" jsonschema:"true when actual differs from desired: the replica reconcile did not converge"`
 
 	// Unavailable names what could not be collected and why. This is diagnostics:
 	// a partial answer is still useful and must not fail status.
@@ -91,6 +120,56 @@ func (c *Client) StorageState(ctx context.Context) *StorageState {
 			problems = append(problems, "index settings: "+err.Error())
 		} else {
 			st.ReadOnlyIndex = readOnlyFromSettings(get)
+		}
+	}
+
+	// _cat/indices covers the facts index, the docs index and every journal
+	// period in one call: sizes are what says whether the store is growing
+	// and where. bytes=b keeps store.size an exact integer, not "1.2gb".
+	if cat, err := c.api.Cat.Indices(ctx, &opensearchapi.CatIndicesReq{
+		Indices: []string{c.cfg.IndexName + "*"},
+		Params:  opensearchapi.CatIndicesParams{Bytes: "b"},
+	}); err != nil {
+		problems = append(problems, "index sizes: "+err.Error())
+	} else {
+		for _, idx := range cat.Indices {
+			si := IndexStat{Index: idx.Index, Health: idx.Health}
+			if idx.DocsCount != nil {
+				si.Documents = *idx.DocsCount
+			}
+			if idx.Primary != nil {
+				si.Primaries = *idx.Primary
+			}
+			if idx.Replica != nil {
+				si.Replicas = *idx.Replica
+			}
+			if idx.StoreSize != nil {
+				// A malformed size drops the number, not the row: the index is
+				// still useful to see.
+				if n, perr := strconv.ParseInt(*idx.StoreSize, 10, 64); perr == nil {
+					si.SizeBytes = n
+				}
+			}
+			st.Indices = append(st.Indices, si)
+			if idx.Index == c.cfg.IndexName && idx.Replica != nil {
+				rep := *idx.Replica
+				st.ActualReplicas = &rep
+			}
+		}
+		sort.Slice(st.Indices, func(i, j int) bool { return st.Indices[i].Index < st.Indices[j].Index })
+		if len(st.Indices) > indexStatCap {
+			st.Indices = st.Indices[:indexStatCap]
+			st.IndicesTruncated = true
+		}
+	}
+
+	if st.ActualReplicas != nil {
+		desired := c.indexReplicas(ctx)
+		// A failed auto probe returns 0 and must not be read as "desired 0":
+		// that would report a drift the operator cannot act on.
+		if c.cfg.IndexReplicas >= 0 || c.replicasProbeOK {
+			st.DesiredReplicas = &desired
+			st.ReplicaDrift = desired != *st.ActualReplicas
 		}
 	}
 

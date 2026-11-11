@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/NemoNobody/memento/internal/config"
 	"github.com/opensearch-project/opensearch-go/v4"
 	"github.com/opensearch-project/opensearch-go/v4/opensearchapi"
 )
@@ -171,6 +172,8 @@ func TestStorageState_IndexAbsent(t *testing.T) {
 			return http.StatusNotFound, ""
 		case r.Method == http.MethodGet && r.Path == "/_nodes/stats/fs":
 			return http.StatusOK, `{"cluster_name":"test","nodes":{"n1":{"name":"node-a","roles":["data"],"fs":{"total":{"total_in_bytes":100,"available_in_bytes":30}}}}}`
+		case r.Method == http.MethodGet && r.Path == "/_cat/indices/memento*":
+			return http.StatusOK, `[]`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected request: ` + r.Method + ` ` + r.Path + `"}`
 	})
@@ -216,6 +219,8 @@ func TestStorageState_IndexPresent(t *testing.T) {
 			return http.StatusOK, `{"cluster_name":"test","nodes":{}}`
 		case r.Method == http.MethodGet && r.Path == "/memento":
 			return http.StatusOK, `{"memento":{"settings":{"index":{"number_of_shards":"1"}}}}`
+		case r.Method == http.MethodGet && r.Path == "/_cat/indices/memento*":
+			return http.StatusOK, `[{"health":"green","status":"open","index":"memento","pri":"1","rep":"0","docs.count":"7","store.size":"2048"},{"health":"green","status":"open","index":"memento-docs","pri":"1","rep":"0","docs.count":"2","store.size":"4096"}]`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected request: ` + r.Method + ` ` + r.Path + `"}`
 	})
@@ -231,6 +236,60 @@ func TestStorageState_IndexPresent(t *testing.T) {
 	if st.Unavailable != "" {
 		t.Errorf("Unavailable = %q, want empty", st.Unavailable)
 	}
+	// Index sizes come from one _cat/indices call: facts, docs and journal
+	// periods are reported together, sorted, with exact bytes (bytes=b).
+	if len(st.Indices) != 2 {
+		t.Fatalf("Indices = %d, want 2", len(st.Indices))
+	}
+	if st.Indices[0].Index != "memento" || st.Indices[1].Index != "memento-docs" {
+		t.Errorf("indices order = %s,%s; want sorted", st.Indices[0].Index, st.Indices[1].Index)
+	}
+	if st.Indices[0].SizeBytes != 2048 || st.Indices[0].Documents != 7 {
+		t.Errorf("facts stat = %+v, want 7 docs / 2048 bytes", st.Indices[0])
+	}
+	if st.ActualReplicas == nil || *st.ActualReplicas != 0 {
+		t.Errorf("ActualReplicas = %v, want 0", st.ActualReplicas)
+	}
+	if st.DesiredReplicas == nil || *st.DesiredReplicas != 0 {
+		t.Errorf("DesiredReplicas = %v, want 0 (lone data node)", st.DesiredReplicas)
+	}
+	if st.ReplicaDrift {
+		t.Error("ReplicaDrift = true, want false when actual matches the topology")
+	}
+}
+
+// TestStorageState_ReplicaDrift pins the R38-8 observability: the status must
+// name a reconcile that did not converge instead of leaving the operator to
+// compare two numbers by hand.
+func TestStorageState_ReplicaDrift(t *testing.T) {
+	c, _ := newFakeClientCfg(t, func(cfg *config.Config) { cfg.IndexReplicas = 1 }, func(r recordedRequest) (int, string) {
+		switch {
+		case r.Method == http.MethodGet && r.Path == "/_cluster/health":
+			return http.StatusOK, `{"cluster_name":"test","status":"yellow","number_of_data_nodes":2,"unassigned_shards":1}`
+		case r.Method == http.MethodHead && r.Path == "/memento":
+			return http.StatusOK, ""
+		case r.Method == http.MethodGet && r.Path == "/_cluster/health/memento":
+			return http.StatusOK, `{"cluster_name":"test","status":"yellow","number_of_data_nodes":2,"unassigned_shards":1}`
+		case r.Method == http.MethodGet && r.Path == "/_nodes/stats/fs":
+			return http.StatusOK, `{"cluster_name":"test","nodes":{}}`
+		case r.Method == http.MethodGet && r.Path == "/memento":
+			return http.StatusOK, `{"memento":{"settings":{"index":{"number_of_shards":"1"}}}}`
+		case r.Method == http.MethodGet && r.Path == "/_cat/indices/memento*":
+			return http.StatusOK, `[{"health":"yellow","status":"open","index":"memento","pri":"1","rep":"0","docs.count":"3","store.size":"10"}]`
+		}
+		return http.StatusInternalServerError, `{"status":500,"error":"unexpected request: ` + r.Method + ` ` + r.Path + `"}`
+	})
+
+	st := c.StorageState(context.Background())
+	if st.DesiredReplicas == nil || *st.DesiredReplicas != 1 {
+		t.Fatalf("DesiredReplicas = %v, want 1 (explicit config)", st.DesiredReplicas)
+	}
+	if st.ActualReplicas == nil || *st.ActualReplicas != 0 {
+		t.Fatalf("ActualReplicas = %v, want 0 from _cat/indices", st.ActualReplicas)
+	}
+	if !st.ReplicaDrift {
+		t.Error("ReplicaDrift = false, want true when the index carries fewer replicas than the topology asks")
+	}
 }
 
 func TestStorageState_ExistsProbeFails(t *testing.T) {
@@ -242,6 +301,8 @@ func TestStorageState_ExistsProbeFails(t *testing.T) {
 			return http.StatusUnauthorized, `{"status":401,"error":"unauthorized"}`
 		case r.Method == http.MethodGet && r.Path == "/_nodes/stats/fs":
 			return http.StatusOK, `{"cluster_name":"test","nodes":{}}`
+		case r.Method == http.MethodGet && r.Path == "/_cat/indices/memento*":
+			return http.StatusOK, `[]`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected request: ` + r.Method + ` ` + r.Path + `"}`
 	})

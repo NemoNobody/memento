@@ -407,6 +407,37 @@ func printStorage(w io.Writer, rep statusReport) error {
 		b.WriteString(strconv.FormatFloat(st.WorstNodeUsedPercent, 'f', 0, 64))
 		b.WriteString("% used\n")
 	}
+	if st.DesiredReplicas != nil && st.ActualReplicas != nil {
+		b.WriteString("replicas: facts index has ")
+		b.WriteString(strconv.Itoa(*st.ActualReplicas))
+		b.WriteString(", topology asks for ")
+		b.WriteString(strconv.Itoa(*st.DesiredReplicas))
+		if st.ReplicaDrift {
+			b.WriteString(" (drift: the replica reconcile did not converge)")
+		}
+		b.WriteString("\n")
+	}
+	if len(st.Indices) > 0 {
+		b.WriteString("indices:\n")
+		for _, idx := range st.Indices {
+			b.WriteString("  ")
+			b.WriteString(idx.Index)
+			b.WriteString("  ")
+			b.WriteString(idx.Health)
+			b.WriteString("  docs=")
+			b.WriteString(strconv.Itoa(idx.Documents))
+			b.WriteString("  size=")
+			b.WriteString(humanBytes(idx.SizeBytes))
+			b.WriteString("  shards=")
+			b.WriteString(strconv.Itoa(idx.Primaries))
+			b.WriteString("/")
+			b.WriteString(strconv.Itoa(idx.Replicas))
+			b.WriteString("\n")
+		}
+		if st.IndicesTruncated {
+			b.WriteString("  (more indices exist than the reported page)\n")
+		}
+	}
 	if st.ReadOnlyIndex {
 		b.WriteString("warning: the index has a read-only block — writes are rejected until it is cleared\n")
 	}
@@ -417,4 +448,21 @@ func printStorage(w io.Writer, rep statusReport) error {
 	}
 	_, err := io.WriteString(w, b.String())
 	return err
+}
+
+// humanBytes renders a byte count with one decimal in binary units. Storage
+// sizes are read by humans deciding whether to act, not by machines.
+func humanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return strconv.FormatInt(n, 10) + "B"
+	}
+	d := float64(n)
+	for _, suffix := range []string{"KiB", "MiB", "GiB", "TiB"} {
+		d /= unit
+		if d < unit {
+			return strconv.FormatFloat(d, 'f', 1, 64) + suffix
+		}
+	}
+	return strconv.FormatFloat(d, 'f', 1, 64) + "PiB"
 }
