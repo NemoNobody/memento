@@ -5,7 +5,11 @@ dashboard: 3 index patterns, 8 visualizations, the dashboard itself.
 Stable `memento-store-*` ids make the push idempotent (update in place).
 
 Push with `scripts/push-dashboards.sh` (wallet-first credentials, see its
-header). Do NOT use the OSD `_import` endpoint: OSD 3.x strips the
+header). The push targets the **global** tenant explicitly
+(`security_tenant: global`, override `DASH_TENANT=...`): a secured OSD with
+multitenancy routes header-less REST writes into the user's DEFAULT tenant —
+if that default is `private` (as on the dev box), the bundle silently lands
+in the personal namespace and never appears in the global UI. Do NOT use the OSD `_import` endpoint: OSD 3.x strips the
 visualization's index reference during import and the panels then fail
 with "Trying to initialize aggs without index pattern".
 
