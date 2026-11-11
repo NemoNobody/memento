@@ -64,11 +64,11 @@ turns on:
   gated to tags and `workflow_dispatch`: a macOS runner bills 10x minutes on a
   private repo, so a release check is the right cadence (`gh workflow run ci.yml`
   forces it).
-- Windows: the `windows` job runs `vet`, `build` and the platform-neutral
-  packages' tests on every push — it caught a HOME-vs-USERPROFILE assumption in
-  a config test the Linux suite could never see.
-- Windows: build + platform-neutral tests only; the Credential Manager path is
-  unverified (no runner coverage yet).
+- Windows: the `windows` job runs `vet`, `build`, the platform-neutral packages'
+  tests and `MEMENTO_KEYRING_TEST=1 go test ./internal/keyring/` on every push —
+  the Credential Manager is exercised for real (zalando -> wincred), not just
+  compiled. The job already earned its keep: it caught a HOME-vs-USERPROFILE
+  assumption in a config test the Linux suite could never see.
 
 A plain `go test ./...` never writes to a live keychain: the integration tests
 skip unless the flag is set.
@@ -77,8 +77,8 @@ skip unless the flag is set.
 
 - **secure profile** (`make dev-opensearch-secure`, https + demo certs) —
   infrastructure ready, live run pending.
-- **keyringnative on darwin/windows** — darwin is covered by the `macos` CI job
-  (Keychain); the Windows Credential Manager path is still unverified.
+- **Windows Credential Manager** — now run by the `windows` CI job; the policy
+  around it (locked store, dismissed prompt) is still platform-unexplored.
 - The OpenSearch **Dashboards bundle** targets the current OSD line; older OSD
   versions are out of scope by decision: adapting saved objects to every old
   OSD line is a maintenance tax with no paying user.

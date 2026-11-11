@@ -46,8 +46,9 @@ jobs:
   # Windows users build from source, so the tree must build AND its
   # platform-neutral packages must pass their tests on Windows — a
   # cross-compile job alone cannot see a runtime difference (paths, line
-  # endings, env). The full suite stays on Linux: the keyring and D-Bus
-  # paths are linux-only by design and would test the platform, not memento.
+  # endings, env). The keyring provider is the Windows Credential Manager
+  # (zalando/go-keyring -> wincred); it is exercised for real here, not just
+  # compiled: a name we call "supported" has to run.
   windows:
     runs-on: windows-latest
     steps:
@@ -62,6 +63,10 @@ jobs:
         run: go build ./...
       - name: Test platform-neutral packages
         run: go test ./internal/model/ ./internal/config/ ./internal/secretguard/
+      - name: Keyring integration (Credential Manager)
+        run: go test ./internal/keyring/ -v
+        env:
+          MEMENTO_KEYRING_TEST: "1"
 
   # macOS users get the Keychain provider (zalando/go-keyring): the only way to
   # know it actually works there is to run it. The runner's login keychain is
