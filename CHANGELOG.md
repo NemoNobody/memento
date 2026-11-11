@@ -255,9 +255,43 @@ Fixed:
 - Negative `MEMENTO_SUMMARY_MIN_LEN`/`MEMENTO_SUMMARY_MAX_LEN` are
   rejected (they silently disabled the corresponding check); blank
   author labels are a loud config error, not a silent OS-user fallback.
-- `list`/`search` lines show the summary (the table-of-contents
+- `list`/`search` lines show the summary (the table of contents
   contract); `get` shows a summary line; author labels are quoted in
   `get`/`journal`/`status` and stripped of non-printable characters.
+
+Hardening (pre-release review conveyor):
+- SSRF: IPv4-compatible `::/96` addresses (`::127.0.0.1`, `::169.254.169.254`)
+  are decoded by hand and blocked (`To4()` only understands `::ffff/96`); a
+  policy refusal (allowlist / public-address rule) is FINAL — the proxy
+  fallback never re-tries a refused URL through `fetch_proxy_url`;
+  stored docs drop image references aimed at internal hosts (self-hosted
+  docs keep them under `fetch_allow_private`); `robots.txt` rules honor
+  RFC 9309 `*` and `$`; the obscura child environment drops every
+  `MEMENTO_*`/`OPENSEARCH_*` variable and sandboxes HOME.
+- Config refuses silent erosion: `MEMENTO_FETCH_HOSTS` set but naming zero
+  hosts, `docs_ttl_days < 0`, and an `opensearch_url` without a host are
+  load errors.
+- Keyring (native Linux provider): upsert is create-then-delete — a
+  cancelled prompt or dropped RPC can no longer destroy the stored
+  credential; duplicate entries are picked deterministically and healed by
+  the next write.
+- Author labels are stripped of invisible Unicode (C1 controls, zero-width
+  spaces, bidi overrides), not just C0/DEL.
+- `memento get --history` fetches the newest journal entries for
+  journal-era facts (the flag used to print nothing); `memento search
+  --limit` clamps to the navigation cap with a note; every rendered
+  timestamp says UTC (`Z`), unset times say `unknown`; a same-value touch
+  says the passed summary was ignored.
+- Exit codes: missing key is 3 (`get`/`obsolete`/`prune`), general errors
+  stay 1 — scripts can tell "no such fact" from "store down".
+- MCP write failures classify honestly: local contract rejections
+  (summary bounds, re-retiring with a reason) and a missing key answer as
+  themselves, no fake availability advice over a healthy store; search and
+  navigation answers carry exact match counts (`track_total_hits`);
+  journal reads count undecodable entries (`skipped`) instead of dropping
+  them silently.
+- Docs: clock synchronization is stated as the operational prerequisite of
+  period-based journal pruning (entry routing follows the writer clock).
 
 ## v0.6.0 — 2026-11-08
 
