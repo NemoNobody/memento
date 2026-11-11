@@ -189,10 +189,31 @@ func TestAddTouchConflictStringShapedBody(t *testing.T) {
 	}
 }
 
+// TestAddCanonicalRaceTypeIsNeverDocConflict: the struct type guard
+// (type != resource_already_exists_exception) excludes the INDEX-level
+// race from the reason fallback everywhere, not just at the append
+// success site — even wording that reads like a CAS collision must not
+// classify as ErrConflict when the engine names the index race. This
+// pins the guard at a CAS site: deleting it turns this body into a
+// fake "re-read and retry" conflict on every fixture that only checks
+// "some error", so only this test distinguishes the two contracts.
+func TestAddCanonicalRaceTypeIsNeverDocConflict(t *testing.T) {
+	var got recordedRequest
+	c, _ := newFakeClient(t, casRespond(casSource, http.StatusConflict,
+		`{"error":{"type":"resource_already_exists_exception","reason":"[k]: version conflict, required seq_no [5], primary_term [2], but was [6] [2]"},"status":409}`, &got))
+
+	_, err := c.Add(context.Background(), model.NewFact("k", "same", "config", "p", "test:cas", "retouched"))
+	if errors.Is(err, ErrConflict) {
+		t.Fatalf("an index-level race must not masquerade as a doc CAS conflict, got: %v", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "resource_already_exists_exception") {
+		t.Fatalf("the race must surface honestly as the cluster error it is, got: %v", err)
+	}
+}
+
 func TestPatchValueChangeIsNotConditional(t *testing.T) {
 	var got recordedRequest
 	c, _ := newFakeClient(t, casRespond(casSource, http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`, &got))
-
 	if _, err := c.Patch(context.Background(), "k", PatchFields{Value: "corrected", Summary: "the corrected value"}); err != nil {
 		t.Fatalf("Patch: %v", err)
 	}

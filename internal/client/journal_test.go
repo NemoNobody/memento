@@ -430,23 +430,33 @@ func TestJournalCollisionStringShape(t *testing.T) {
 		}
 	})
 	t.Run("index-level already-exists is not a doc collision", func(t *testing.T) {
-		c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
-			if code, body := journalInfraOK(r); code != http.StatusInternalServerError {
-				return code, body
+		// One body per string-shape guard, each lacking the marker the
+		// other guard reads: deleting either guard individually must
+		// fail one of these bodies.
+		for _, body := range []string{
+			// names the exception type, no "index [" marker
+			`{"error":"resource_already_exists_exception: [k2] already exists","status":409}`,
+			// carries the "index [" marker, no exception-type wording
+			`{"error":"index [memento-history-2026-11/uuid] already exists","status":409}`,
+		} {
+			c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+				if code, b := journalInfraOK(r); code != http.StatusInternalServerError {
+					return code, b
+				}
+				switch {
+				case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-"):
+					return http.StatusConflict, body
+				}
+				return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Method + " " + r.Path + `"}`
+			})
+			f := model.NewFact("k", "v", "config", "p", "s", "")
+			appended, err := c.MigrateFact(context.Background(), f, time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC))
+			if err == nil || !strings.Contains(err.Error(), "journal append") {
+				t.Fatalf("index-race body %s must fail the append honestly: %v", body, err)
 			}
-			switch {
-			case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-"):
-				return http.StatusConflict, `{"error":{"type":"resource_already_exists_exception","reason":"index [memento-history-2026-11/uuid] already exists"},"status":409}`
+			if appended != 0 {
+				t.Errorf("appended = %d, want 0 for %s: no document was written", appended, body)
 			}
-			return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Method + " " + r.Path + `"}`
-		})
-		f := model.NewFact("k", "v", "config", "p", "s", "")
-		appended, err := c.MigrateFact(context.Background(), f, time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC))
-		if err == nil || !strings.Contains(err.Error(), "journal append") {
-			t.Fatalf("the index-creation race must fail the append honestly: %v", err)
-		}
-		if appended != 0 {
-			t.Errorf("appended = %d, want 0: no document was written", appended)
 		}
 	})
 	t.Run("string-shaped index race is not a doc collision", func(t *testing.T) {
@@ -496,6 +506,12 @@ func TestJournalCollisionStringShape(t *testing.T) {
 		for _, body := range []string{
 			`{"error":{"type":"search_phase_execution_exception","reason":"[k]: version conflict, required seq_no [5], primary_term [2], but was [6] [2]"},"status":409}`,
 			`{"error":"[k]: version conflict, required seq_no [5], primary_term [2], but was [6] [2]","status":409}`,
+			// string-only disjunct pins: "already exists" alone, and the
+			// underscore token "version_conflict" naming no phrase with a
+			// space — each is the only match in its body, so deleting that
+			// one disjunct from the string branch fails here.
+			`{"error":"document already exists","status":409}`,
+			`{"error":"version_conflict for document [k]","status":409}`,
 		} {
 			c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
 				if code, b := journalInfraOK(r); code != http.StatusInternalServerError {
