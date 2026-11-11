@@ -7,8 +7,8 @@
   documentation (see [section 1](#1-opensearch)).
 - **Go 1.26.8+** — only if you build `memento` from source (`go build -o memento .`).
 
-`memento` talks to OpenSearch over HTTPS with basic auth; any reachable 2.x/3.x
-works.
+`memento` talks to OpenSearch over HTTPS with basic auth; the tested version
+matrix is 2.19.7, 3.0.0, 3.3.2, 3.8.0 and 3.9.0 (see [section 1](#1-opensearch)).
 
 ## 1. OpenSearch
 
@@ -24,7 +24,7 @@ What `memento` expects:
 
 | What | Value |
 |---|---|
-| Version | OpenSearch 3.8.0 (any reachable 2.x/3.x works) |
+| Version | OpenSearch 3.8.0; verified matrix 2.19.7 / 3.0.0 / 3.3.2 / 3.8.0 / 3.9.0 (rerun locally: `hack/version-matrix.sh`) |
 | REST API | `https://127.0.0.1:9200` — HTTPS with the bundled demo certificate is fine (`insecure_skip_verify: true`) |
 | Auth | basic auth, user `admin` |
 
