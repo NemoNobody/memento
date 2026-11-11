@@ -1,15 +1,22 @@
 # Dashboards bundle
 
 `objects.ndjson` — saved objects for the "Memento — store overview"
-dashboard: 3 index patterns, 8 visualizations, the dashboard itself.
+dashboard: 3 index patterns, 13 visualizations, the dashboard itself.
 Stable `memento-store-*` ids make the push idempotent (update in place).
 
 Push with `scripts/push-dashboards.sh` (wallet-first credentials, see its
-header). The push targets the **global** tenant explicitly
-(`security_tenant: global`, override `DASH_TENANT=...`): a secured OSD with
-multitenancy routes header-less REST writes into the user's DEFAULT tenant —
-if that default is `private` (as on the dev box), the bundle silently lands
-in the personal namespace and never appears in the global UI. Do NOT use the OSD `_import` endpoint: OSD 3.x strips the
+header). The script talks to the CLUSTER, not the Dashboards port: it indexes
+the objects directly into the `.kibana` alias backing index, which IS the
+global tenant's storage. The saved-objects REST API is not used on purpose —
+the `security_tenant: global` header is ignored for basic-auth requests
+(verified on OSD 3.8): REST writes always land in the authenticated user's
+personal tenant index (`.kibana_<hash>_<user>_1`) and never appear in the
+global UI. Direct indexing writes the canonical OSD 3.x typed shape: doc id
+`<type>:<id>`, attributes nested under a `"<type>"` field, pinned
+`migrationVersion` (index-pattern 7.6.0, visualization 7.10.0,
+dashboard 7.9.3). After a push, switch the UI to the Global tenant and hard
+reload (the SPA caches the index-pattern list per session).
+Do NOT use the OSD `_import` endpoint: OSD 3.x strips the
 visualization's index reference during import and the panels then fail
 with "Trying to initialize aggs without index pattern".
 
