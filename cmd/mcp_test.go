@@ -335,6 +335,8 @@ func TestMCPServerAddBatchSurfacesPartialSuccess(t *testing.T) {
 			_, _ = io.WriteString(w, `{"_index":"memento","_id":"t","_version":1,"_seq_no":3,"_primary_term":1,"found":true,"_source":{"key":"t","value":"v","category":"config","project":"p","status":"verified"}}`)
 		case r.Method == http.MethodGet && r.URL.Path == "/memento/_doc/t2":
 			_, _ = io.WriteString(w, `{"_index":"memento","_id":"t2","_version":1,"_seq_no":3,"_primary_term":1,"found":true,"_source":{"key":"t2","value":"v","category":"config","project":"p","status":"verified"}}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/memento/_doc/t3":
+			_, _ = io.WriteString(w, `{"_index":"memento","_id":"t3","_version":1,"_seq_no":3,"_primary_term":1,"found":true,"_source":{"key":"t3","value":"v","category":"config","project":"p","status":"verified"}}`)
 		case r.Method == http.MethodGet && r.URL.Path == "/memento/_doc/c":
 			_, _ = io.WriteString(w, `{"_index":"memento","_id":"c","_version":1,"_seq_no":4,"_primary_term":1,"found":true,"_source":{"key":"c","value":"old","category":"config","project":"p","status":"verified"}}`)
 		case strings.Contains(r.URL.Path, "-history-") && strings.Contains(r.URL.Path, "/_doc/"):
@@ -360,9 +362,11 @@ func TestMCPServerAddBatchSurfacesPartialSuccess(t *testing.T) {
 			// shape that separates the created and changed counters (a birth
 			// always has both, so without it swapped counters pass).
 			map[string]any{"key": "c", "value": "new", "category": "config"},
-			// second touch: created != touched (1 vs 2), so swapping the
-			// created and touched increments cannot stay green either.
+			// second touch: created != touched, and with a third touch all
+			// three counters are pairwise distinct (1/2/3), so swapping ANY
+			// pair of increments flips an assertion.
 			map[string]any{"key": "t2", "value": "v", "category": "config"},
+			map[string]any{"key": "t3", "value": "v", "category": "config"},
 		}},
 	})
 	if err != nil {
@@ -383,8 +387,8 @@ func TestMCPServerAddBatchSurfacesPartialSuccess(t *testing.T) {
 	if err := json.Unmarshal(raw, &out); err != nil {
 		t.Fatalf("structured content: %v (%s)", err, raw)
 	}
-	if len(out.Items) != 4 {
-		t.Fatalf("items = %d, want 4: %s", len(out.Items), raw)
+	if len(out.Items) != 5 {
+		t.Fatalf("items = %d, want 5: %s", len(out.Items), raw)
 	}
 	it := out.Items[0]
 	if it.Error == "" {
@@ -404,13 +408,16 @@ func TestMCPServerAddBatchSurfacesPartialSuccess(t *testing.T) {
 	if out.Items[3].Error != "" || out.Items[3].Created || out.Items[3].Changed {
 		t.Errorf("the second same-value item must be a clean non-created touch, got %+v: %s", out.Items[3], raw)
 	}
+	if out.Items[4].Error != "" || out.Items[4].Created || out.Items[4].Changed {
+		t.Errorf("the third same-value item must be a clean non-created touch, got %+v: %s", out.Items[4], raw)
+	}
 	// The aggregate must agree with the rows (the patch twin pins the same):
-	// a summary that contradicts what the items say is the audit lie the
-	// counters exist to prevent. Birth/correction/touch rows give all three
-	// counters distinct populations (created=1, changed=2, touched=2), so
-	// any swap of increments flips an assertion.
-	if out.Created != 1 || out.Changed != 2 || out.Touched != 2 {
-		t.Errorf("counters = created:%d changed:%d touched:%d, want 1/2/2: %s", out.Created, out.Changed, out.Touched, raw)
+	// a summary that contradicts what the items says is the audit lie the
+	// counters exist to prevent. Birth/correction/touch rows give pairwise
+	// distinct populations (created=1, changed=2, touched=3), so swapping
+	// any pair of increments flips an assertion.
+	if out.Created != 1 || out.Changed != 2 || out.Touched != 3 {
+		t.Errorf("counters = created:%d changed:%d touched:%d, want 1/2/3: %s", out.Created, out.Changed, out.Touched, raw)
 	}
 }
 

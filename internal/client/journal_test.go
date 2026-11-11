@@ -583,7 +583,7 @@ func TestJournalCollisionStringShape(t *testing.T) {
 // the lagged entry, never return a clean success whose current_ref
 // points at an entry that was never written.
 func TestUUIDAppendCollisionIsNotSuccess(t *testing.T) {
-	c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
 		if code, body := journalInfraOK(r); code != http.StatusInternalServerError {
 			return code, body
 		}
@@ -600,8 +600,50 @@ func TestUUIDAppendCollisionIsNotSuccess(t *testing.T) {
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Method + " " + r.Path + `"}`
 	})
 	_, err := c.Add(context.Background(), model.NewFact("k", "new", "config", "p", "s", ""))
-	if err == nil || !strings.Contains(err.Error(), "journal entry lagged") {
+	if err == nil || !strings.Contains(err.Error(), "journal entry lagged") || !strings.Contains(err.Error(), "journal append") {
 		t.Fatalf("a 409 over a fresh uuid ref must report the lagged entry, got: %v", err)
+	}
+	// The 409 branch must have actually run: an append request was sent
+	// and rejected (not a fall-through to the 500 sentinel).
+	fake.mu.Lock()
+	var sawAppend bool
+	for _, r := range fake.requests {
+		if r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-") {
+			sawAppend = true
+		}
+	}
+	fake.mu.Unlock()
+	if !sawAppend {
+		t.Fatal("the journal append never reached the fake — the 409 path is not being exercised")
+	}
+}
+
+// TestResurrectAppendCollisionIsNotSuccess pins the resurrect site's
+// idempotent=false flag and its error wording: the fresh uuid ref of a
+// resurrection cannot pre-exist, so the 409 must surface as a lagged
+// entry beside Changed=true (the resurrect itself landed) — and the
+// message must name the resurrection, not a correction.
+func TestResurrectAppendCollisionIsNotSuccess(t *testing.T) {
+	c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+		if code, body := journalInfraOK(r); code != http.StatusInternalServerError {
+			return code, body
+		}
+		switch {
+		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
+			return http.StatusOK, `{"_index":"memento","_id":"k","_version":1,"_seq_no":1,"_primary_term":1,"found":true,"_source":{"key":"k","value":"v","category":"config","project":"p","status":"obsolete"}}`
+		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+		case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-"):
+			return http.StatusConflict, `{"error":"version conflict, document already exists","status":409}`
+		}
+		return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Method + " " + r.Path + `"}`
+	})
+	res, err := c.Add(context.Background(), model.NewFact("k", "v", "config", "p", "s", ""))
+	if err == nil || !strings.Contains(err.Error(), "resurrection accepted") || !strings.Contains(err.Error(), "journal append") {
+		t.Fatalf("resurrect over a 409 uuid append must report the lagged entry, got: %v", err)
+	}
+	if !res.Changed {
+		t.Errorf("res.Changed = false, want true (the resurrect itself landed): %v", err)
 	}
 }
 

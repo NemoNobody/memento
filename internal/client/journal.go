@@ -188,12 +188,16 @@ func (c *Client) AppendJournal(ctx context.Context, e *model.JournalEntry) (stri
 // migration path uses this to survive partial-failure reruns. indexName
 // overrides the target index: the migration derives it from the entry's
 // stored observation time (stable), not the display timestamp (the
+// rerun's clock), so a rerun crossing a period boundary lands on the SAME
 // doc id in the SAME index and the collision holds. idempotent marks ids
-// derived from the fact's content (journalEntryID hashes): only those can
-// legitimately collide on a rerun. Fresh uuid refs (the touch/resurrect/
-// correction paths) can never pre-exist, so a 409 there is an anomaly — a
-// rewritten body or a middlebox — and must surface, never masquerade as a
-// completed append with a dangling current_ref.
+// derived from the fact's content (journalEntryID hashes key/op/value/
+// notes/source/observation time): only those can legitimately collide on
+// a rerun, and that tuple identifies the logical write — project is
+// write-once and never enters the hash, and a category move is a new
+// version carrying a different value. Fresh uuid refs (the touch/
+// resurrect/correction paths) can never pre-exist, so a 409 there is an
+// anomaly — a rewritten body or a middlebox — and must surface, never
+// masquerade as a completed append with a dangling current_ref.
 func (c *Client) appendJournalID(ctx context.Context, e *model.JournalEntry, id string, indexName string, idempotent bool) (string, error) {
 	if !model.ValidOp(e.Op) {
 		return "", fmt.Errorf("journal: unknown op %q", e.Op)
