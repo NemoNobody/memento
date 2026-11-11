@@ -324,3 +324,50 @@ func TestFetchDocRevalidatesWithETag(t *testing.T) {
 		t.Errorf("If-None-Match = %q, want the second request conditional", ft.inm)
 	}
 }
+
+// TestFetchDocRevalidationClearsExpiryWhenTTLDisabled pins config-change
+// coherence: with docs_ttl_days=0 a fresh snapshot stores no expiry, so a
+// revalidated copy must lose its old one too — otherwise the store keeps
+// calling the doc stale while the caller is told it never expires.
+func TestFetchDocRevalidationClearsExpiryWhenTTLDisabled(t *testing.T) {
+	ft := newFetchTarget(t)
+	var (
+		updateBody string
+		puts       int
+	)
+	stored := `{"url":"` + ft.srv.URL + `/etag","title":"t",` +
+		`"fetched_at":"2020-01-01T00:00:00Z","expires_at":"2021-01-01T00:00:00Z","etag":"\"v1\""}`
+	respond := func(r recordedRequest) (int, string) {
+		switch {
+		case r.Path == "/memento-docs" && r.Method == "HEAD":
+			return 200, ""
+		case r.Method == "GET" && strings.HasPrefix(r.Path, "/memento-docs/_doc/"):
+			return 200, `{"found":true,"_source":` + stored + `}`
+		case r.Method == "POST" && strings.Contains(r.Path, "/memento-docs/_update/"):
+			updateBody = r.Body
+			return 200, `{"result":"updated"}`
+		case r.Method == "PUT" && strings.HasPrefix(r.Path, "/memento-docs/_doc/"):
+			puts++
+			return 200, `{"result":"created"}`
+		}
+		return 404, "{}"
+	}
+	c, _ := newFakeClientCfg(t, docsMutate, respond)
+
+	doc, cached, revalidated, err := c.FetchDoc(context.Background(), ft.srv.URL+"/etag", "", true, nil)
+	if err != nil {
+		t.Fatalf("FetchDoc: %v", err)
+	}
+	if !cached || !revalidated {
+		t.Fatalf("(cached=%v revalidated=%v), want both true", cached, revalidated)
+	}
+	if !strings.Contains(updateBody, `"expires_at":null`) {
+		t.Errorf("metadata update must clear the stale expiry when the TTL is off: %s", updateBody)
+	}
+	if !doc.ExpiresAt.IsZero() {
+		t.Errorf("returned ExpiresAt = %v, want zero (never expires)", doc.ExpiresAt)
+	}
+	if puts != 0 {
+		t.Errorf("doc puts = %d, want 0 (a 304 must not rewrite the snapshot)", puts)
+	}
+}

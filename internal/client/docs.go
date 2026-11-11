@@ -224,7 +224,14 @@ func (c *Client) revalidateDoc(ctx context.Context, hash string, fetchedAt, expi
 	fields := map[string]interface{}{
 		"fetched_at": fetchedAt.Format(time.RFC3339Nano),
 	}
-	if !expiresAt.IsZero() {
+	if expiresAt.IsZero() {
+		// TTL disabled (or never configured): a fresh fetch under this config
+		// stores no expiry, so a revalidated copy must lose the old one too —
+		// otherwise the store keeps calling it stale while the caller says it
+		// never expires, and every read revalidates again. A null in a partial
+		// update removes the field.
+		fields["expires_at"] = nil
+	} else {
 		fields["expires_at"] = expiresAt.Format(time.RFC3339Nano)
 	}
 	if project != "" {
