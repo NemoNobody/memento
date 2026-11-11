@@ -336,6 +336,19 @@ Hardening (pre-release review conveyor):
   ref surfaces as a lagged entry, never as a clean success with a dangling
   `current_ref`.
 
+- `memento docs` / `memento_search_docs` on a store without any fetched page
+  returned an `index_not_found` error; the docs index is created lazily on the
+  first fetch, so an absent index now reads as an empty result (same posture as
+  journal wildcard reads).
+- Verified version matrix: the live CLI smoke (`hack/cli-smoke.sh`, 23 checks)
+  passes on OpenSearch 2.19.7, 3.0.0, 3.3.2, 3.8.0 and 3.9.0
+  (`hack/version-matrix.sh`); `OPENSEARCH_IMAGE`/`OSD_IMAGE` can pin the dev
+  stack images. What is covered is now written down in `docs/testing.md`.
+- `scripts/install.sh`: release installer (latest or `--version`, os/arch
+  detection, sha256 verification against the release `checksums.txt`, installs
+  into `~/.local/bin`).
+- Community files: `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, issue templates.
+
 ## v0.6.0 — 2026-11-08
 
 Internal pre-release. A six-round review cascade (Strata, DeepSeek Flash,
