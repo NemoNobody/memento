@@ -52,7 +52,7 @@ func TestPrintFactHistoryShapes(t *testing.T) {
 	if !strings.Contains(out, "history (journal, newest first): 5 entries") || !strings.Contains(out, "showing the newest 2") {
 		t.Errorf("journal history not rendered with honest counts: %s", out)
 	}
-	if !strings.Contains(out, "[write] value=\"older\"") {
+	if !strings.Contains(out, "[\"write\"] value=\"older\"") {
 		t.Errorf("journal entry values missing: %s", out)
 	}
 

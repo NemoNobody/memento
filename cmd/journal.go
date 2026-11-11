@@ -85,7 +85,10 @@ journal indices are lower bounds — the surviving journal, not the lifetime.`,
 				b.WriteString("  - ")
 				b.WriteString(displayTime(e.CreatedAt))
 				b.WriteString(" [")
-				b.WriteString(displaySafe(e.Op, false))
+				// Quoted: even a sanitized label like read] value="..." can
+				// forge the bracket layout, and op is self-reportable through
+				// out-of-band journal writes.
+				b.WriteString(strconv.Quote(displaySafe(e.Op, false)))
 				b.WriteString("]")
 				if e.Source != "" {
 					b.WriteString(" source=")

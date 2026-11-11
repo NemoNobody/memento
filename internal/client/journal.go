@@ -650,9 +650,13 @@ func (c *Client) ScanAllFacts(ctx context.Context, project string) ([]model.Fact
 // MigrateFact's eyes, and selecting it forever would leave a plan that
 // reports matches but migrates nothing (the non-convergence F1 killed).
 // A history that is neither absent nor a list (foreign writer, corruption)
-// gets its own arm: dropping it from the scan would hide the doc entirely,
-// while scanning it surfaces it through the decode-skipped count — the
-// plan stays honest about what it could not examine.
+// gets its own arm — but only for LINKED docs (an unlinked doc is already
+// selected by the current_ref arms regardless). null is excluded: it
+// decodes cleanly as "no array", so a null-history doc would re-match the
+// scan forever while migration can never change it — the non-convergence
+// F1 killed. A genuine non-list stays selected: the Go decode fails and
+// the plan reports it as decode-skipped, i.e. corruption that stays
+// visible forever is better than a "converged" lie.
 func buildMigrateScanBody(project string) map[string]interface{} {
 	boolQuery := map[string]interface{}{
 		"must": []map[string]interface{}{{
@@ -671,7 +675,7 @@ func buildMigrateScanBody(project string) map[string]interface{} {
 					map[string]interface{}{"script": map[string]interface{}{
 						"script": map[string]interface{}{
 							"lang":   "painless",
-							"source": `params._source != null && params._source.containsKey("history") && !(params._source.history instanceof List)`,
+							"source": `params._source != null && params._source.history != null && !(params._source.history instanceof List) && params._source.current_ref != null && params._source.current_ref != ""`,
 						},
 					}},
 				},

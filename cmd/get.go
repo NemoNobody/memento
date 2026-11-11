@@ -157,7 +157,7 @@ func printFact(w io.Writer, f *model.Fact, now time.Time, history bool, entries 
 				b.WriteString("  - ")
 				b.WriteString(displayTime(e.CreatedAt))
 				b.WriteString(" [")
-				b.WriteString(displaySafe(e.Op, false))
+				b.WriteString(strconv.Quote(displaySafe(e.Op, false)))
 				b.WriteString("] value=")
 				b.WriteString(strconv.Quote(e.Value))
 				b.WriteString("\n")
