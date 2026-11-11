@@ -201,11 +201,16 @@ the fact doc:
   entries with the **server clock** — writer clocks skew on a shared store;
   index template `<index>-journal` with explicit mappings) is created
   automatically on the first accepted write.
-- Write order: the journal append happens **before** the main-doc update.
-  The journal is the accepted log, the fact doc is the projection. A failed
-  main write leaves an orphan entry (truth: the value was accepted, the
-  projection is fixed by the next write); the reverse order could lose
-  values from the log.
+- Write order is **doc-first**: the journal entry id is preallocated into
+  `current_ref`, the fact doc is updated, then the entry is indexed. A lost
+  entry append leaves `current_ref` dangling (repairable: `migrate-history`
+  re-appends the current state under the same deterministic id); the reverse
+  order could journal a value that never reached the doc.
+  Value corrections are last-writer-wins, not CAS: two concurrent
+  corrections both land in the journal and the doc keeps the later one, so
+  the journal is the log of *accepted writes*, not a sequence guaranteed to
+  match "what was current at each instant". An entry that was immediately
+  overwritten is history, not a lie.
 - The journal is never pruned automatically (write-forever): history shows
   how old it is. `history_limit` is only the default `--keep` for the manual
   `memento prune`.
@@ -249,7 +254,7 @@ the MCP tools) carries `age_days` and `stale`:
 | `location`, `behavior` | 30 | files and code behavior move slower |
 | `rule` | 90 | cross-project constraints outlive a sprint, but not a year of drift |
 | `recipe` | 180 | reusable procedures survive small refactors; tooling and hardware do not |
-| `context_map`, unknown categories | never | decisions and design notes do not rot by age |
+| `context_map` | never | decisions and design notes do not rot by age |
 
 The category TTL is also a **cap**: a writer may set a shorter per-fact window
 (`ttl_days` on `memento_add`/`memento_patch`, `--ttl-days` on the CLI) when it

@@ -6,9 +6,11 @@ Persistent, provenance-carrying memory for AI agents (and humans).
 
 ## What it is
 
-`memento` stores **verified facts** about your projects — file locations,
-endpoint and config values, behavior — in an OpenSearch index, so the same thing
-is not re-verified over and over, by you or by an agent.
+`memento` stores **facts you or an agent have verified** about your projects —
+file locations, endpoint and config values, behavior — in an OpenSearch index,
+so the same thing is not re-verified over and over. The store records the
+evidence, who wrote it and when; it cannot verify anything itself. It is an
+advisory memory with an audit trail, not an oracle.
 
 Each fact carries evidence, not verdicts:
 
@@ -39,7 +41,7 @@ Each fact carries evidence, not verdicts:
   `allow` opts out;
 - **staleness**: reads compute `age_days` and `stale` from `observed_at` and a
   per-category TTL (`config`/`endpoint` 14 days, `location`/`behavior` 30 days,
-  `rule` 90, `recipe` 180, `context_map` and unknown categories never). A writer
+  `rule` 90, `recipe` 180, `context_map` never). A writer
   may shorten the window per fact (`ttl_days`), never lengthen it past the
   category cap. `stale: true` is an instruction to re-verify against the source,
   not to discard the fact.

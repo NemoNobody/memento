@@ -436,6 +436,10 @@ Two honest caveats for the shared layout:
 - The store is still plaintext. Per-project DLS is *access control*, not
   encryption: never put secrets in facts, docs or journal — the secret-guard
   is there to keep even honest mistakes out.
+- DLS is **read** isolation, not write ownership: a client with the app role
+  can write any `project`/`author` label (they are self-reported). Cooperative
+  stores rely on the agents behaving; a store where users must not overwrite
+  each other's keyspace needs per-project roles or per-project indices.
 
 Per-user authorship then comes for free: each user's writes carry their
 server-authenticated name (`author: "..." (security)`), and the journal shows

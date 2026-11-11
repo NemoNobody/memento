@@ -1,9 +1,31 @@
 # Changelog
 
-Notable changes per release tag. v0.6.0 is the pre-publication hardening
-release; v0.1.0 was the first internal build.
+Notable changes per release tag. v0.8.0 is the first public release: it folds
+the pre-publication hardening into one baseline (earlier private tags are gone).
 
-## Unreleased
+## v0.8.0 — 2026-11-11
+
+First public baseline. Everything below the fold landed in the same cycle:
+append-only journal history, facts/docs split, dashboard bundle, keyring
+providers, Windows/macOS CI. Headlines of the cycle that ended here:
+
+- **categories** `recipe` (TTL 180d) and `rule` (90d); the category TTL is
+  also the cap for a writer-chosen per-fact `ttl_days`;
+- **keywords** on facts (normalized tags, exact-term filter) and an additive
+  mapping reconcile that upgrades existing indices on first use;
+- **re-verification**: `confirmed_by` (who verified the *current* value,
+  user+host per entry) plus `memento_patch reverify` → `observed_at` moves and
+  the journal gains `op=rediscovery`, so a stale fact can become fresh again;
+- **`op=retire`** marks the verified→obsolete transition in the journal;
+- **journal time windows** (`since`/`until`), `keywords` on patch;
+- **conditional GET** for the docs cache (ETag/Last-Modified → 304 keeps the
+  snapshot and moves only the timestamps);
+- **status** reports per-index sizes, replica drift and the effective fetch
+  configuration;
+- **dashboard**: docs-by-via/host/project donuts and a TTL KPI on `expires_at`;
+- **CI**: real keyring tests (Secret Service, Keychain, Credential Manager),
+  Windows job on every push, macOS job on tags/dispatch;
+- docs: advisory contract and precedence, "Not yet covered" test inventory.
 
 History journal: the in-doc `history` array is replaced by an append-only
 journal of dated indices (`<index>-history-<period-date>`, monthly by default;
