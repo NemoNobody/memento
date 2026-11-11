@@ -30,8 +30,11 @@ func (c *Client) DocsIndexName() string { return c.cfg.DocsIndexName }
 // html is stored (re-extraction source, shared cache) and deliberately NOT
 // indexed: BM25 runs over extracted sections, never over markup, and no read
 // path serves html (see htmlExclude) — raw pages are curl's job, not context.
-func buildDocsIndexBody() map[string]interface{} {
+func buildDocsIndexBody(replicas int) map[string]interface{} {
 	return map[string]interface{}{
+		"settings": map[string]interface{}{
+			"index.number_of_replicas": replicas,
+		},
 		"mappings": map[string]interface{}{
 			"properties": map[string]interface{}{
 				"url":                  map[string]interface{}{"type": "keyword"},
@@ -87,7 +90,7 @@ func (c *Client) EnsureDocsIndex(ctx context.Context) error {
 		return fmt.Errorf("check index %s: %w", c.cfg.DocsIndexName, err)
 	}
 
-	body, _ := json.Marshal(buildDocsIndexBody())
+	body, _ := json.Marshal(buildDocsIndexBody(c.indexReplicas(ctx)))
 	if _, err := c.api.Indices.Create(ctx, opensearchapi.IndicesCreateReq{
 		Index: c.cfg.DocsIndexName,
 		Body:  bytes.NewReader(body),

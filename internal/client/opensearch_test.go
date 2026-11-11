@@ -204,7 +204,7 @@ func TestBuildKeysBody(t *testing.T) {
 }
 
 func TestBuildIndexBody_Mappings(t *testing.T) {
-	got := buildIndexBody()
+	got := buildIndexBody(0)
 	props := got["mappings"].(map[string]interface{})["properties"].(map[string]interface{})
 
 	expectedTypes := map[string]string{
@@ -259,7 +259,7 @@ func TestBuildIndexBody_Mappings(t *testing.T) {
 }
 
 func TestBuildIndexBody_ValidJSON(t *testing.T) {
-	got := buildIndexBody()
+	got := buildIndexBody(0)
 	data, err := json.Marshal(got)
 	if err != nil {
 		t.Fatalf("marshal index body: %v", err)

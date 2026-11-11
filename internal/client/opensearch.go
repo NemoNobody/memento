@@ -62,6 +62,11 @@ type Client struct {
 	journalInfraMu sync.Mutex
 	journalInfraOK bool
 
+	// replicasOnce/replicasVal cache the auto replica-count probe (see
+	// indexReplicas): the topology does not change within one process run.
+	replicasOnce sync.Once
+	replicasVal  int
+
 	// journalIdxPipeline tracks journal indices whose default_pipeline has
 	// been pinned in this process (see ensureJournalIndexPipeline).
 	journalIdxPipeline map[string]bool
@@ -246,9 +251,31 @@ func (c *Client) URL() string { return c.cfg.OpenSearchURL }
 // IndexName returns the configured index name.
 func (c *Client) IndexName() string { return c.cfg.IndexName }
 
+// indexReplicas is the replica count stamped on newly created memento
+// indices. With the auto default (config -1) the cluster is asked once per
+// process: a single data node can never assign a copy (the index would sit
+// yellow forever), so it gets 0; a real cluster gets 1 so losing a node
+// loses neither facts nor history. A health probe failure must not fail a
+// write — it falls back to 0.
+func (c *Client) indexReplicas(ctx context.Context) int {
+	if c.cfg.IndexReplicas >= 0 {
+		return c.cfg.IndexReplicas
+	}
+	c.replicasOnce.Do(func() {
+		c.replicasVal = 0
+		if h, err := c.api.Cluster.Health(ctx, nil); err == nil && h.NumberOfDataNodes > 1 {
+			c.replicasVal = 1
+		}
+	})
+	return c.replicasVal
+}
+
 // buildIndexBody returns the index creation body (mappings) used by EnsureIndex.
-func buildIndexBody() map[string]interface{} {
+func buildIndexBody(replicas int) map[string]interface{} {
 	return map[string]interface{}{
+		"settings": map[string]interface{}{
+			"index.number_of_replicas": replicas,
+		},
 		"mappings": map[string]interface{}{
 			"properties": map[string]interface{}{
 				"fact_id":     map[string]interface{}{"type": "keyword"},
@@ -304,7 +331,7 @@ func (c *Client) EnsureIndex(ctx context.Context) error {
 		return fmt.Errorf("check index %s: %w", c.cfg.IndexName, err)
 	}
 
-	body, _ := json.Marshal(buildIndexBody())
+	body, _ := json.Marshal(buildIndexBody(c.indexReplicas(ctx)))
 	if _, err := c.api.Indices.Create(ctx, opensearchapi.IndicesCreateReq{
 		Index: c.cfg.IndexName,
 		Body:  bytes.NewReader(body),

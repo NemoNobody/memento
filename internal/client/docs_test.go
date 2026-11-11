@@ -16,7 +16,7 @@ func docsMutate(cfg *config.Config) {
 }
 
 func TestBuildDocsIndexBodyHTMLNotIndexed(t *testing.T) {
-	props := buildDocsIndexBody()["mappings"].(map[string]interface{})["properties"].(map[string]interface{})
+	props := buildDocsIndexBody(0)["mappings"].(map[string]interface{})["properties"].(map[string]interface{})
 	htmlProp, ok := props["html"].(map[string]interface{})
 	if !ok || htmlProp["index"] != false {
 		t.Errorf("html mapping = %+v, want type text with index:false", props["html"])

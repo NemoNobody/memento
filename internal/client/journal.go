@@ -76,14 +76,17 @@ func journalPipelineName(prefix string) string { return prefix + "-journal-ts" }
 // mappings (keyword for grouping fields, text for searched values, date for
 // timestamps) and the ts pipeline. replicas 0: single-node personal installs
 // are the primary shape, and a journal replica would sit unassigned forever.
-func buildJournalTemplateBody(prefix string) map[string]interface{} {
+func buildJournalTemplateBody(prefix string, replicas int) map[string]interface{} {
 	return map[string]interface{}{
 		"index_patterns": []string{prefix + "-history-*"},
 		"priority":       10,
 		"template": map[string]interface{}{
 			"settings": map[string]interface{}{
-				"index.default_pipeline":   journalPipelineName(prefix),
-				"index.number_of_replicas": 0,
+				"index.default_pipeline": journalPipelineName(prefix),
+				// replicas follows the cluster topology (see indexReplicas):
+				// 0 on a lone node (nothing to replicate to), 1+ on a real
+				// cluster — history must survive a node the same way facts do.
+				"index.number_of_replicas": replicas,
 			},
 			"mappings": map[string]interface{}{
 				"properties": map[string]interface{}{
@@ -150,7 +153,7 @@ func (c *Client) ensureJournalInfra(ctx context.Context) error {
 	tpl := journalTemplateName(c.cfg.IndexName)
 	_, exErr := c.api.IndexTemplate.Exists(ctx, opensearchapi.IndexTemplateExistsReq{IndexTemplate: tpl})
 	if exErr != nil {
-		body, _ := json.Marshal(buildJournalTemplateBody(c.cfg.IndexName))
+		body, _ := json.Marshal(buildJournalTemplateBody(c.cfg.IndexName, c.indexReplicas(ctx)))
 		if _, mkErr := c.api.IndexTemplate.Create(ctx, opensearchapi.IndexTemplateCreateReq{
 			IndexTemplate: tpl,
 			Body:          strings.NewReader(string(body)),

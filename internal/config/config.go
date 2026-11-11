@@ -82,6 +82,13 @@ type Config struct {
 	// a small trusted set that searches cheaply.
 	DocsIndexName string `json:"docs_index_name"`
 
+	// IndexReplicas is the replica count stamped on every memento index the
+	// client creates (facts, docs, journal template). -1 (default) = auto:
+	// a lone data node gets 0 (a replica there could never assign: permanent
+	// yellow), a real cluster gets 1 so one node going down loses neither
+	// facts nor history. 0..N forces an explicit count.
+	IndexReplicas int `json:"index_replicas"`
+
 	// FetchTimeoutSeconds bounds one document download (connect+body).
 	FetchTimeoutSeconds int `json:"fetch_timeout_seconds"`
 
@@ -218,6 +225,7 @@ func DefaultConfig() *Config {
 		HistoryIndexPeriod:  PeriodMonth,
 		SecretGuard:         GuardReject,
 		DocsIndexName:       "memento-docs",
+		IndexReplicas:       -1,
 		FetchTimeoutSeconds: 30,
 		FetchMaxBytes:       2_000_000,
 		DocsTTLDays:         90,
@@ -621,6 +629,7 @@ type fileConfig struct {
 	HistoryIndexPeriod  *string  `json:"history_index_period"`
 	SecretGuard         *string  `json:"secret_guard"`
 	DocsIndexName       string   `json:"docs_index_name"`
+	IndexReplicas       *int     `json:"index_replicas"`
 	FetchTimeoutSeconds *int     `json:"fetch_timeout_seconds"`
 	FetchMaxBytes       *int     `json:"fetch_max_bytes"`
 	DocsTTLDays         *int     `json:"docs_ttl_days"`
@@ -700,6 +709,12 @@ func loadFile(cfg *Config, path string) error {
 	}
 	if c.HistoryLimit != nil {
 		cfg.HistoryLimit = *c.HistoryLimit
+	}
+	if c.IndexReplicas != nil {
+		if *c.IndexReplicas < -1 {
+			return fmt.Errorf("config %s: index_replicas: must be -1 (auto) or >= 0, got %d", path, *c.IndexReplicas)
+		}
+		cfg.IndexReplicas = *c.IndexReplicas
 	}
 	if c.HistoryIndexPeriod != nil {
 		p, err := normalizePeriod(*c.HistoryIndexPeriod)
