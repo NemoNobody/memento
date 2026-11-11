@@ -44,7 +44,7 @@ install:
 	mkdir -p $(HOME)/.local/bin
 	go build -trimpath -ldflags "$(LDFLAGS)" -o $(HOME)/.local/bin/$(BIN) .
 
-# Dev/single-machine OpenSearch (roadmap 11): single node, localhost-only,
+# Dev/single-machine OpenSearch: single node, localhost-only,
 # security plugin off (the dev rule), named data volume, snapshots on the host.
 dev-opensearch:
 	$(CONTAINER) -f $(OSFILE) --profile single up -d

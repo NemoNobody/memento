@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# OpenSearch version matrix (roadmap 18). Brings the compose single-node dev
+# OpenSearch version matrix. Brings the compose single-node dev
 # stack up once per image tag, runs hack/cli-smoke.sh against it, then tears
 # the whole thing down (-v: each version gets a clean infra-creation path,
 # which is exactly what we want to verify). Sequential on purpose — the

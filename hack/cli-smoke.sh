@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CLI smoke over one live memento store (roadmap 18/33). Exit 0 = all checks
+# CLI smoke over one live memento store. Exit 0 = all checks
 # passed. Runs against MEMENTO_CONF (or the default config lookup), exercising
 # the paths whose OpenSearch calls changed across versions: index creation,
 # composable templates + ingest pipeline (journal), scripted corrections,

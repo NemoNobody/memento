@@ -72,7 +72,8 @@ docs fetched over time), journal ops histogram, journal entries per period
 index, three donuts (project/category/status), top fact keys horizontal bar.
 Index SIZES are deliberately absent: sizes live outside searchable data and
 Vega url data sources are GET-only (the OSD console proxy is POST-only).
-Sizes trend = roadmap item 30 (memento metrics). Live sizes meanwhile:
+A size TREND needs a self-monitoring metric (planned, not built yet).
+Live sizes meanwhile:
 Stack Management -> Index Management, or `memento status` for the cluster view.
 
 After a mapping change (new fact/journal/doc fields) regenerate the field

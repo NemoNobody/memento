@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# memento installer (roadmap 16). Downloads the binaries published by
+# memento installer. Downloads the binaries published by
 # release.yml (memento-<os>-<arch> + checksums.txt), verifies sha256 and
 # installs into ~/.local/bin (override: --install-dir / MEMENTO_INSTALL_DIR).
 #

@@ -1,5 +1,5 @@
-# Single-node OpenSearch for development and single-machine installs
-# (roadmap 11). podman-compose / docker compose compatible.
+# Single-node OpenSearch for development and single-machine installs.
+# podman-compose / docker compose compatible.
 #
 # Dev posture: security plugin OFF, port bound to 127.0.0.1 only. That is the
 # documented dev rule: plaintext credentials are acceptable while the node

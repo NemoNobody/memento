@@ -55,4 +55,5 @@ node, 1 on a multi-node cluster.
 - **keyringnative on darwin/windows** — cross-compiled binaries are smoke-tested
   only on linux/amd64; platform keyring paths need real machines.
 - The OpenSearch **Dashboards bundle** targets the current OSD line; older OSD
-  versions are out of scope by decision (roadmap 34).
+  versions are out of scope by decision: adapting saved objects to every old
+  OSD line is a maintenance tax with no paying user.
