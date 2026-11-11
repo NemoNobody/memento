@@ -114,6 +114,11 @@ func printFact(w io.Writer, f *model.Fact, now time.Time, history bool, entries 
 		b.WriteString(displaySafe(f.Notes, true))
 		b.WriteString("\n")
 	}
+	if len(f.Keywords) > 0 {
+		b.WriteString("keywords: ")
+		b.WriteString(strings.Join(f.Keywords, ", "))
+		b.WriteString("\n")
+	}
 	b.WriteString("observed_at: ")
 	b.WriteString(displayTime(f.ObservedAt))
 	b.WriteString("\n")

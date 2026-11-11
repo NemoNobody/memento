@@ -27,8 +27,7 @@ jobs:
         run: |
           # The keyring dispatcher's non-linux providers (zalando) and the
           # MCP/CLI stack must compile everywhere: release binaries ship
-          # darwin, and Windows users build from source. No tests run here
-          # (no Darwin/Windows runners in this project's CI budget).
+          # darwin, and Windows users build from source. No tests run here.
           GOOS=darwin GOARCH=arm64 go build ./...
           GOOS=windows GOARCH=amd64 go build ./...
       - name: Test
@@ -37,3 +36,23 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           version: v2.13.2
+
+  # Windows users build from source, so the tree must build AND its
+  # platform-neutral packages must pass their tests on Windows — a
+  # cross-compile job alone cannot see a runtime difference (paths, line
+  # endings, env). The full suite stays on Linux: the keyring and D-Bus
+  # paths are linux-only by design and would test the platform, not memento.
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Vet
+        run: go vet ./...
+      - name: Build
+        run: go build ./...
+      - name: Test platform-neutral packages
+        run: go test ./internal/model/ ./internal/config/ ./internal/secretguard/
