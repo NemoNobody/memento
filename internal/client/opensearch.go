@@ -139,12 +139,16 @@ func isAlreadyExists(err error) bool {
 // In string shape the type field is gone, so the race is recognised by
 // its wording: the engine's index-race reason carries the "index ["
 // marker (and a rewritten body may still name the exception type), while
-// doc-level collisions name the document id, never "index [".
+// doc-level collisions name the document id, never "index [". The same
+// wording guard applies to the struct branch as well: a middlebox that
+// rewrites resource_already_exists_exception to some other type must
+// not resurrect the hazard through the reason fallback.
 func isVersionConflict(err error) bool {
 	var ste *opensearch.StructError
 	if errors.As(err, &ste) {
 		return ste.Err.Type == "version_conflict_engine_exception" ||
 			(ste.Err.Type != "resource_already_exists_exception" &&
+				(!strings.Contains(ste.Err.Reason, "index [") || !strings.Contains(ste.Err.Reason, "already exists")) &&
 				ste.Status == http.StatusConflict &&
 				(strings.Contains(ste.Err.Reason, "version conflict") ||
 					strings.Contains(ste.Err.Reason, "already exists")))
