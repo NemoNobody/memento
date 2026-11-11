@@ -11,7 +11,11 @@ BIN     ?= memento
 CONTAINER ?= $(shell if command -v docker >/dev/null 2>&1; then echo "docker compose"; elif command -v podman-compose >/dev/null 2>&1; then echo "podman-compose"; else echo "podman compose"; fi)
 OSFILE := docker/opensearch.yml
 
-.PHONY: build test lint fmt vet ci install clean release dev-opensearch dev-opensearch-down dev-opensearch-logs dev-opensearch-dashboards
+.PHONY: build test lint fmt vet ci install clean release dev-opensearch dev-opensearch-down dev-opensearch-logs dev-opensearch-dashboards dev-opensearch-cluster dev-opensearch-secure
+
+# Compose profiles in docker/opensearch.yml. `down` must name them all or
+# profiled services survive it.
+OS_PROFILES := --profile single --profile dashboards --profile cluster --profile secure
 
 build:
 	go build -trimpath -ldflags "$(LDFLAGS)" -o $(BIN) .
@@ -43,10 +47,10 @@ install:
 # Dev/single-machine OpenSearch (roadmap 11): single node, localhost-only,
 # security plugin off (the dev rule), named data volume, snapshots on the host.
 dev-opensearch:
-	$(CONTAINER) -f $(OSFILE) up -d
+	$(CONTAINER) -f $(OSFILE) --profile single up -d
 
 dev-opensearch-down:
-	$(CONTAINER) -f $(OSFILE) down
+	$(CONTAINER) -f $(OSFILE) $(OS_PROFILES) down
 
 dev-opensearch-logs:
 	$(CONTAINER) -f $(OSFILE) logs --tail=100
@@ -60,7 +64,7 @@ dev-opensearch-logs:
 # re-runnable (stable object ids). For any other (secured) cluster use
 # scripts/push-dashboards.sh by hand.
 dev-opensearch-dashboards:
-	$(CONTAINER) -f $(OSFILE) --profile dashboards up -d
+	$(CONTAINER) -f $(OSFILE) --profile single --profile dashboards up -d
 	@echo "waiting for Dashboards on http://127.0.0.1:$${MEMENTO_DASH_PORT:-5601} ..."
 	@ok=""; for i in $$(seq 1 60); do \
 	  if curl -sf -o /dev/null --max-time 3 "http://127.0.0.1:$${MEMENTO_DASH_PORT:-5601}/api/status"; then ok=1; break; fi; \
@@ -76,6 +80,22 @@ dev-opensearch-dashboards:
 	if [ -z "$$ok" ]; then \
 	  echo "bundle push still failing; manual retry: MEMENTO_OS_URL=http://127.0.0.1:$${MEMENTO_OS_PORT:-9200} scripts/push-dashboards.sh"; exit 1; \
 	fi
+
+# 3-node cluster (topology test): memento stamps replicas automatically
+# (index_replicas=-1: 0 on a lone node, 1 on a real cluster). Endpoints:
+# 127.0.0.1:9400/9401/9402. Point a config at it to smoke-test memento
+# against real shard allocation.
+dev-opensearch-cluster:
+	$(CONTAINER) -f $(OSFILE) --profile cluster up -d
+
+# single node WITH security (auth/https smoke): the image installs the
+# demo security config using the password passed on the make command
+# line — e.g. make dev-opensearch-secure MEMENTO_SECURE_DEV_PASSWORD=...
+# then connect with opensearch_url=https://127.0.0.1:9443,
+# opensearch_user=admin and insecure_skip_verify=true (demo certs).
+dev-opensearch-secure:
+	@test -n "$(MEMENTO_SECURE_DEV_PASSWORD)" || { echo "usage: make dev-opensearch-secure MEMENTO_SECURE_DEV_PASSWORD=<pw>"; exit 1; }
+	$(CONTAINER) -f $(OSFILE) --profile secure up -d
 
 # obscura: one-time installer for the opt-in render fallback (fetch_render=
 # obscura). Third-party binary, ~75MB, linux x86_64 glibc 2.35+; the sha256

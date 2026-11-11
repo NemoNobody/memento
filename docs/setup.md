@@ -104,6 +104,24 @@ DASHBOARDS_USER=admin
 DASHBOARDS_PASSWORD=...
 ```
 
+### Multi-node and secure topologies (optional)
+
+Two more compose profiles for smoke-testing what a single dev node cannot
+show (all loopback-bound, all torn down by `make dev-opensearch-down`):
+
+- `make dev-opensearch-cluster` — three-node cluster (`memento-cluster`),
+  endpoints `http://127.0.0.1:9400/9401/9402`. With more than one data node
+  the client automatically stamps `number_of_replicas: 1` on the facts index,
+  the docs index and the journal template, so shard/replica placement — and
+  survival of one node — can be watched with `_cat/shards/memento*`. Point a
+  config file at any endpoint (`opensearch_url`); the client talks to the
+  cluster through one node like any client does.
+- `make dev-opensearch-secure MEMENTO_SECURE_DEV_PASSWORD=<pw>` — single node
+  WITH the security plugin (demo config and self-signed certs installed by
+  the image entry point). Endpoint `https://127.0.0.1:9443`; connect with
+  `opensearch_user: "admin"`, the password via keyring/env, and
+  `insecure_skip_verify: true` for the demo certs.
+
 ## 3. Configure memento
 
 Config lookup order:
@@ -139,6 +157,11 @@ chmod 600 ~/.memento.conf
   (off by default). Containers and ssh sessions have no keyring — export
   `OPENSEARCH_PASSWORD` there.
 - The index is created automatically on first use — you do not have to create it.
+- Newly created memento indices stamp a replica count from `index_replicas`
+  (config, default `-1` = auto): a single data node gets `0` (a replica there
+  could never assign — permanent yellow), two or more data nodes get `1`, so
+  losing one node loses neither facts nor journal history. Set an explicit
+  `0`–`N` to override.
 - The history journal is created automatically on the first accepted write: an
   ingest pipeline `<index>-journal-ts` (stamps entries with the server clock),
   a composable index template `<index>-journal`, and dated journal indices
@@ -201,8 +224,7 @@ secret_guard: reject
 author: "admin" (security)
 password: keyring
 cluster: opensearch (OpenSearch 3.8.0)
-storage: cluster=yellow index=yellow unassigned_shards=1 data_nodes=1
-  all primary shards are active; some replica shards are unassigned, so redundancy is reduced
+storage: cluster=green index=green unassigned_shards=0 data_nodes=1
 disk: busiest data node node-1 at 15% used
 status: OK
 ```
