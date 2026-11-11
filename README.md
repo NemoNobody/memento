@@ -193,10 +193,11 @@ when to consult and update memory, and how to keep it honest.
 
 ## Dashboards
 
-`dashboards/memento-dashboard.ndjson` — a ready-made OpenSearch Dashboards
-overview: totals, breakdowns by status/project/category/source, observation
-activity, the oldest observations (re-verification queue), and facts with
-notes. Import instructions and caveats: [docs/dashboard.md](docs/dashboard.md).
+`docker/dashboards/objects.ndjson` — a ready-made OpenSearch Dashboards
+overview ("Memento — store overview"): KPI row for facts/journal/docs,
+activity trends, breakdowns by project/category/status, journal ops and the
+top fact keys. Push it with `scripts/push-dashboards.sh`. Install instructions
+and caveats: [docs/dashboard.md](docs/dashboard.md).
 
 ## Storage
 

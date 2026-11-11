@@ -1,76 +1,63 @@
 # Dashboard
 
-A ready-made OpenSearch Dashboards dashboard over the facts store — import it
-and the state of memory is visible at a glance:
+A ready-made OpenSearch Dashboards overview of the store — "Memento — store
+overview". It covers facts, the journal (history) and cached documents:
 
 | Panel | Answers |
 |-------|---------|
-| Total facts | how much is stored |
-| By status / project / category / source | what kind of knowledge is in the store |
-| Observation activity | when facts were observed (histogram over `observed_at`) |
-| Oldest observations (re-check first) | the re-verification queue: facts that age the longest |
-| Facts with notes (qualifiers) | facts carrying caveats (`notes:*`) |
+| Facts / Journal entries / Docs cached / Facts with history (KPI row) | how much is stored, how live the journal is |
+| Facts updates over time / Journal writes over time / Docs fetched over time | activity trends (area charts over the time field) |
+| Journal ops | writes/patches/rediscoveries per bucket (histogram over `op`) |
+| Journal entries per period index | how the monthly history indices grow |
+| By project / category / status (donuts) | what kind of knowledge is in the store |
+| Top fact keys by journal writes | the hottest facts (re-verification candidates) |
 
-## Import
+## Install
 
-`dashboards/memento-dashboard.ndjson` holds 10 saved objects: the `memento`
-data view (index pattern with time field `observed_at`), 8 visualizations and
-the dashboard itself.
-
-**UI:** Dashboards Management → Saved Objects → Import → select the file.
-The dashboard opens as `memento — facts memory`.
-
-**API:**
+The bundle (`docker/dashboards/objects.ndjson`: 3 index patterns, 13
+visualizations, the dashboard) is pushed with the bundled script:
 
 ```bash
-curl -u admin:<your-password> -H 'osd-xsrf: true' \
-  -F file=@dashboards/memento-dashboard.ndjson \
-  'http://localhost:5601/api/saved_objects/_import?overwrite=true'
+scripts/push-dashboards.sh
 ```
 
-Two things to know:
+It resolves cluster credentials the same way the server does (wallet first)
+and writes the saved objects **directly into the global tenant storage** (the
+`.kibana` alias backing index). Do not use the Dashboards UI `_import`: OSD
+3.x import strips each visualization's index reference and the panels then
+die with "Trying to initialize aggs without index pattern". The
+`securitytenant`/`security_tenant` HTTP header is ignored for basic-auth
+requests — a REST push always lands in the pushing user's personal tenant,
+which is why the script indexes the objects itself.
 
-- **Tenants.** Saved objects live per tenant, and the import lands in the
-  tenant you are in (`Private` by default). For the shared `Global` tenant add
-  `-H 'securitytenant: global'`. Switch the view via avatar menu → Switch
-  tenants.
-- **Field list.** The data view carries its own copy of the field list; it is
-  shipped inside the NDJSON, so panels resolve fields right after import.
-  After a mapping change, refresh it: Dashboards Management → Index patterns →
-  the `memento` data view → Refresh field list.
+After the push: open Dashboards, make sure the tenant switcher (avatar menu →
+Switch tenants) shows **Global**, and hard-reload the tab — the SPA caches
+the index-pattern list per session. A quick start for the whole stack:
+`make dev-opensearch && make dev-opensearch-dashboards` (see
+`docker/dashboards/README.md` for the bundle's invariants).
 
-## How it reads facts
+## How it reads the store
 
-- The time field is `observed_at`, and the dashboard applies a time range
-  (`now-10y`…`now`). **Facts without `observed_at` do not appear** — a
-  time-filtered query skips documents that lack the time field. Facts written
-  by `memento` always carry it; older ones can be backfilled (below).
-- The journal history of accepted values lives in journal indices and is not
-  modeled in Dashboards; read it with `memento journal <key>` (entries) or
-  `memento history-info <key>` (counts). The legacy in-doc `history` array
-  (pre-journal facts) is stored but not indexed, so it never appears in
-  Dashboards — read it with `memento get <key> --history`.
+- Three index patterns with time fields: `memento` (facts, `updated_at`),
+  `memento-history-*` (journal, `created_at`), `memento-docs` (doc snapshots,
+  `fetched_at`). The dashboard pins a `now-90d` window (`timeRestore`).
+- The index patterns carry their field lists inside the bundle (OSD cannot
+  introspect them over the API). After a mapping change regenerate and push:
 
-## Backfilling `observed_at`
+  ```bash
+  python3 docker/dashboards/gen_fields.py
+  scripts/push-dashboards.sh
+  ```
 
-Facts created before the field existed have none. Backfill from `updated_at` —
-the same fallback `memento` uses when a fact's value changes:
-
-```bash
-curl -k -u admin:<your-password> -H 'Content-Type: application/json' \
-  'https://127.0.0.1:9200/memento/_update_by_query?refresh=true&conflicts=proceed' -d '{
-    "script": {
-      "lang": "painless",
-      "source": "if (ctx._source.observed_at == null) { ctx._source.observed_at = ctx._source.updated_at != null ? ctx._source.updated_at : ctx._source.created_at; }"
-    },
-    "query": {"bool": {"must_not": [{"exists": {"field": "observed_at"}}]}}
-  }'
-```
+- Journal entries are also readable without Dashboards: `memento journal
+  <key>` (entries) and `memento_history_info <key>` (counts).
 
 ## Troubleshooting
 
 | Symptom | Cause / fix |
 |---------|-------------|
-| `Could not locate that index-pattern-field (id: …)` on panels | The data view has no field list — re-import the NDJSON (it includes the fields), or Refresh field list |
-| Dashboard renders but shows no facts | The facts lack `observed_at` — backfill (above) |
-| Dashboard not in the list | It was imported into another tenant — avatar → Switch tenants and look there |
+| `Trying to initialize aggs without index pattern` | the objects came through `_import` — push with `scripts/push-dashboards.sh` instead |
+| `Could not locate that index-pattern-field (id: …)` | stale/empty field list in a pattern — re-run `gen_fields.py` + push |
+| Dashboard opens completely empty (no panels) | hand-edited `panelsJSON` in map form — it must be a JSON array (the shipped bundle is correct) |
+| `AnalyticEngineError: does not support DSL queries` | stale SPA cache — hard reload the tab |
+| Dashboard not in the list | you are in another tenant — avatar → Switch tenants → Global |
