@@ -61,7 +61,13 @@ attribution, not trust.
 
 ## Quick start
 
-Build (Go 1.26.8+):
+A 20-second tour (`hack/quickstart-demo.sh` against a throwaway node — add a
+fact with provenance and a tag, read it back, correct it, and watch the journal
+keep both values):
+
+![memento in a terminal: add, get, correct, journal](docs/media/quickstart.gif)
+
+Build (Go 1.26+):
 
 ```
 go build -o memento .
