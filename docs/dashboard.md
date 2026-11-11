@@ -14,12 +14,15 @@ overview". It covers facts, the journal (history) and cached documents:
 
 ## Install
 
-The bundle (`docker/dashboards/objects.ndjson`: 3 index patterns, 13
+The bundle (`docker/dashboards/objects.ndjson`: 3 index patterns, 15
 visualizations, the dashboard) is pushed with the bundled script:
 
 ```bash
 scripts/push-dashboards.sh
 ```
+
+On the dev stack `make dev-opensearch-dashboards` does both at once — it
+starts the UI, waits for it and pushes the bundle automatically.
 
 It resolves cluster credentials the same way the server does (wallet first)
 and writes the saved objects **directly into the global tenant storage** (the

@@ -1,7 +1,7 @@
 # Dashboards bundle
 
 `objects.ndjson` — saved objects for the "Memento — store overview"
-dashboard: 3 index patterns, 13 visualizations, the dashboard itself.
+dashboard: 3 index patterns, 15 visualizations, the dashboard itself.
 Stable `memento-store-*` ids make the push idempotent (update in place).
 
 Push with `scripts/push-dashboards.sh` (wallet-first credentials, see its

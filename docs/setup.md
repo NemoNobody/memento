@@ -76,22 +76,26 @@ see [backup.md](backup.md) §5.
 `make dev-opensearch-dashboards` adds OpenSearch Dashboards on top of the dev
 node (compose profile `dashboards`, so the plain `up`/`down` cycle does not
 pull it in). UI: http://127.0.0.1:5601 (`MEMENTO_DASH_PORT=5699` to move it);
-with the security plugin off it opens without login.
+with the security plugin off it opens without login. The target then waits
+for the UI and pushes the ready-made bundle into it automatically — after it
+finishes, open http://127.0.0.1:5601 and look for "Memento — store overview".
 
-A ready-made bundle ships in `docker/dashboards/objects.ndjson`: index
-patterns for `memento`, `memento-history-*` and `memento-docs`, visualizations
-(facts by project/category/status, journal writes over time, most-written keys,
-counts) and the "Memento — store overview" dashboard. Push it with:
+The bundle ships in `docker/dashboards/objects.ndjson`: index patterns for
+`memento`, `memento-history-*` and `memento-docs`, KPI tiles, activity
+trends and journal panels, and the dashboard itself. To install it against
+your own cluster, run the same script by hand:
 
 ```
-scripts/push-dashboards.sh
+scripts/push-dashboards.sh            # defaults to https://127.0.0.1:9200
+MEMENTO_OS_URL=http://db-host:9200 scripts/push-dashboards.sh
 ```
 
-Re-runnable: objects carry stable `memento-store-*` ids and the import
-overwrites them in place. Against a secured cluster (security plugin on) the
-script resolves the password wallet-first: `memento creds get` — the same
+Re-runnable: objects carry stable `memento-store-*` ids and are overwritten
+in place (they go straight into the global Dashboards tenant storage — see
+docker/dashboards/README.md). Against a secured cluster the script resolves
+the password wallet-first: `memento creds get` — the same
 keyring entry the MCP server uses (point at a config outside the cwd with
-`MEMENTO_CONF=...`). Overrides: `DASHBOARDS_USER`/`DASHBOARDS_PASSWORD` env;
+`MEMENTO_CONF=...`). Overrides: `MEMENTO_OS_USER`/`OPENSEARCH_PASSWORD` env;
 headless fallback (no session bus): a `~/.config/memento/dashboards.env`
 file (mode 600):
 

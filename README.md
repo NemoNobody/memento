@@ -196,7 +196,8 @@ when to consult and update memory, and how to keep it honest.
 `docker/dashboards/objects.ndjson` — a ready-made OpenSearch Dashboards
 overview ("Memento — store overview"): KPI row for facts/journal/docs,
 activity trends, breakdowns by project/category/status, journal ops and the
-top fact keys. Push it with `scripts/push-dashboards.sh`. Install instructions
+top fact keys. `make dev-opensearch-dashboards` pushes it automatically on the
+dev stack; elsewhere use `scripts/push-dashboards.sh`. Install instructions
 and caveats: [docs/dashboard.md](docs/dashboard.md).
 
 ## Storage
