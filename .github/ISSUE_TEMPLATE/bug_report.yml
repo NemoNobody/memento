@@ -1,0 +1,68 @@
+name: Bug report
+description: Something stored, fetched or printed is wrong
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. memento is a personal-scale tool without an SLA, but a
+        reproducible report gets fixed.
+
+        Do not paste real secrets, private host names or internal URLs — the store
+        is plaintext and issues are public.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: The observed behavior, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The exact command or MCP tool call, with the store shape (single node / cluster, OpenSearch version).
+      placeholder: |
+        1. memento add ...
+        2. memento search ...
+        3. observed: ...
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: Relevant output. `memento status` answers most environment questions (version, commit, index health, storage) — paste it with credentials removed.
+      render: text
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: memento version
+      description: Output of `memento --version` (or the `mcp_version`/`commit` from `memento_status`).
+      placeholder: "0.8.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - linux (amd64)
+        - linux (arm64)
+        - macOS
+        - Windows
+        - other / container
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I removed secrets, private hosts and internal URLs from this report.
+          required: true
+        - label: The store is reachable (`memento status` says OK) or the failure is about that.
+          required: false
