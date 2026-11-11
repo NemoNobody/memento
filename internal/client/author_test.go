@@ -165,10 +165,13 @@ func TestAddCorrectionCarriesUpdatedBy(t *testing.T) {
 	if !strings.Contains(updateBody, `"updated_by":"bob"`) {
 		t.Errorf("correction must stamp updated_by: %s", updateBody)
 	}
-	// The birth labels are write-once: the script carries no author fields.
-	for _, forbidden := range []string{`"author":`, `"author_source":`} {
-		if strings.Contains(updateBody, forbidden) {
-			t.Errorf("correction body carries the birth label %s (write-once): %s", forbidden, updateBody)
+	// The birth labels are write-once: the script params carry no top-level
+	// author fields. (confirmed_by legitimately names its confirmers; the
+	// assertion is about the fact-level birth labels, so it parses the params.)
+	params := patchParams(t, updateBody)
+	for _, forbidden := range []string{"author", "author_source"} {
+		if _, has := params[forbidden]; has {
+			t.Errorf("correction params carry the birth label %q (write-once): %+v", forbidden, params)
 		}
 	}
 	// The journal entry names its own writer.

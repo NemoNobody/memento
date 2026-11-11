@@ -64,6 +64,44 @@ type Fact struct {
 	// "the journal contains the current value" as data. Facts created before
 	// the journal (and before the migrate-history run) have it empty.
 	CurrentRef string `json:"current_ref,omitempty" yaml:"current_ref,omitempty"`
+
+	// ConfirmedBy is who has verified that the CURRENT value is true, in order
+	// of first confirmation. It starts with the creator (adding a fact is the
+	// first verification) and grows on memento_patch reverify. A value change
+	// or a resurrection resets it: those confirmations were about a different
+	// value (or a fact that was declared dead) and must not count. The full
+	// log of every confirmation — time, model, session — is the journal.
+	ConfirmedBy []Confirmer `json:"confirmed_by,omitempty" yaml:"confirmed_by,omitempty"`
+}
+
+// Confirmer is one verification of a fact's current value. Author/AuthorSource
+// are the same self-reported chain labels as everywhere else; Host names the
+// machine (a multi-user, multi-machine store identifies a confirmer by user +
+// host), and At is when the confirmation happened.
+type Confirmer struct {
+	Author       string    `json:"author" yaml:"author"`
+	AuthorSource string    `json:"author_source,omitempty" yaml:"author_source,omitempty"`
+	Host         string    `json:"host,omitempty" yaml:"host,omitempty"`
+	At           time.Time `json:"at" yaml:"at"`
+}
+
+// AddConfirmer records a verification of the current value: an existing entry
+// for the same author on the same host is refreshed (latest At wins, position
+// kept — the array is ordered by first confirmation), a new pair is appended.
+func (f *Fact) AddConfirmer(c Confirmer) {
+	for i := range f.ConfirmedBy {
+		if f.ConfirmedBy[i].Author == c.Author && f.ConfirmedBy[i].Host == c.Host {
+			f.ConfirmedBy[i] = c
+			return
+		}
+	}
+	f.ConfirmedBy = append(f.ConfirmedBy, c)
+}
+
+// ResetConfirmers replaces the set with a single confirmer: the writer of a
+// new value (or of a resurrection) is the only verification of that value.
+func (f *Fact) ResetConfirmers(c Confirmer) {
+	f.ConfirmedBy = []Confirmer{c}
 }
 
 // NewFact creates a new fact with a generated ID and timestamps.

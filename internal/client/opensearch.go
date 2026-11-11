@@ -305,8 +305,11 @@ func buildIndexProperties() map[string]interface{} {
 		"observed_at": map[string]interface{}{"type": "date"},
 		"ttl_days":    map[string]interface{}{"type": "integer"},
 		"keywords":    map[string]interface{}{"type": "keyword"},
-		"source":      map[string]interface{}{"type": "keyword"},
-		"notes":       map[string]interface{}{"type": "text"},
+		// Verifications of the current value: stored for reads, not
+		// indexed (the journal is where confirmations are queried).
+		"confirmed_by": map[string]interface{}{"type": "object", "enabled": false},
+		"source":       map[string]interface{}{"type": "keyword"},
+		"notes":        map[string]interface{}{"type": "text"},
 		// Summary is the table-of-contents rendering of value: searchable
 		// text, so listings and BM25 can work from it.
 		"summary": map[string]interface{}{"type": "text"},
@@ -381,6 +384,7 @@ ctx._source.value = params.value;
 ctx._source.category = params.category;
 if (params.ttl_days != null) { ctx._source.ttl_days = params.ttl_days; }
 if (params.keywords != null) { ctx._source.keywords = params.keywords; }
+if (params.confirmed_by != null) { ctx._source.confirmed_by = params.confirmed_by; }
 ctx._source.observed_at = params.observed_at;
 if (params.source != null && params.source != "") { ctx._source.source = params.source; }
 if (params.notes != null && params.notes != "") { ctx._source.notes = params.notes; }
@@ -470,9 +474,12 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 			return AddResult{}, err
 		}
 		// Birth labels are stamped once (write-once): who/what/where created
-		// the fact. Later writes move only updated_by.
-		c.resolveAuthor(ctx).stampFact(f)
+		// the fact. Later writes move only updated_by. Adding a fact IS the
+		// first verification of its value, so the creator opens confirmed_by.
+		author := c.resolveAuthor(ctx)
+		author.stampFact(f)
 		f.UpdatedBy = f.Author
+		f.ConfirmedBy = []model.Confirmer{author.confirmer(f.ObservedAt)}
 		// Distinct names: the create pair belongs to the link only. The outer
 		// seqNo/primaryTerm must keep receiving the create-loser re-read below —
 		// the touch path conditions on those.
@@ -579,6 +586,10 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 			}
 			stated.Status = "verified"
 			stated.ObservedAt = observed
+			// A resurrection is a fresh verification by the writer: the prior
+			// confirmations belong to a fact that was declared dead.
+			stated.ConfirmedBy = []model.Confirmer{c.resolveAuthor(ctx).confirmer(observed)}
+			doc["confirmed_by"] = stated.ConfirmedBy
 			// Doc-first: the entry is built and its id preallocated here, the
 			// entry itself is indexed only after the update is accepted.
 			entry = c.newJournalEntryFor(ctx, &stated, existing.FactID, observed)
@@ -681,17 +692,19 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 			"lang":   "painless",
 			"source": addCorrectionScript,
 			"params": map[string]interface{}{
-				"value":       f.Value,
-				"category":    f.Category,
-				"ttl_days":    ttlParam,
-				"keywords":    kwParam,
-				"observed_at": f.ObservedAt.UTC().Format(time.RFC3339),
-				"source":      f.Source,
-				"notes":       f.Notes,
-				"summary":     f.Summary,
-				"updated_at":  now,
-				"current_ref": ref,
-				"updated_by":  c.resolveAuthor(ctx).Author,
+				"value":    f.Value,
+				"category": f.Category,
+				"ttl_days": ttlParam,
+				"keywords": kwParam,
+				// A new value is verified only by its writer: the set resets.
+				"confirmed_by": []model.Confirmer{c.resolveAuthor(ctx).confirmer(f.ObservedAt)},
+				"observed_at":  f.ObservedAt.UTC().Format(time.RFC3339),
+				"source":       f.Source,
+				"notes":        f.Notes,
+				"summary":      f.Summary,
+				"updated_at":   now,
+				"current_ref":  ref,
+				"updated_by":   c.resolveAuthor(ctx).Author,
 			},
 		},
 	})
@@ -1073,14 +1086,22 @@ type PatchFields struct {
 	Reason      string   // why it became obsolete (folded into notes; guard-checked)
 	TTLDays     int      // retunes the staleness window (bounded by the category cap); 0 = untouched
 	Keywords    []string // replaces the tag set when non-empty (tags are journaled with each accepted value)
+	// Reverify re-confirms the current value: observed_at moves to now, the
+	// journal gains an op=rediscovery entry, and the writer joins confirmed_by.
+	// It cannot be combined with a value or status change — those are other
+	// events (and both reset the confirmation set).
+	Reverify bool
 }
 
 // PatchResult reports what the patch did.
 type PatchResult struct {
-	// Changed: a new version was accepted (value change, status transition).
-	// false = qualifier-only patch (notes/source/summary): touch, no journal.
+	// Changed: a new version was accepted (value change, status transition) or
+	// a re-confirmation was journaled (Reverified).
 	Changed bool
 	Status  string
+	// Reverified: the value was re-confirmed in place (observed_at moved, the
+	// journal gained op=rediscovery, the value itself did not change).
+	Reverified bool
 }
 
 // patchScript applies only the provided params (null = untouched). The notes
@@ -1102,6 +1123,19 @@ if (params.reason_append != null) {
 if (params.source != null) { ctx._source.source = params.source; }
 if (params.ttl_days != null) { ctx._source.ttl_days = params.ttl_days; }
 if (params.keywords != null) { ctx._source.keywords = params.keywords; }
+if (params.confirmed_by != null) { ctx._source.confirmed_by = params.confirmed_by; }
+if (params.confirmer != null) {
+  if (ctx._source.confirmed_by == null) { ctx._source.confirmed_by = new ArrayList(); }
+  boolean found = false;
+  for (int i = 0; i < ctx._source.confirmed_by.size(); i++) {
+    def c = ctx._source.confirmed_by.get(i);
+    if (c.author == params.confirmer.author && c.host == params.confirmer.host) {
+      ctx._source.confirmed_by.set(i, params.confirmer);
+      found = true;
+    }
+  }
+  if (!found) { ctx._source.confirmed_by.add(params.confirmer); }
+}
 if (params.status != null) { ctx._source.status = params.status; }
 if (params.observed_at != null) { ctx._source.observed_at = params.observed_at; }
 if (params.current_ref != null) { ctx._source.current_ref = params.current_ref; }
@@ -1116,8 +1150,11 @@ ctx._source.updated_by = params.updated_by;
 // error would drown in the "do not retry" advice).
 func ValidatePatchFields(p PatchFields) error {
 	if p.Value == "" && p.Summary == "" && p.Notes == "" && p.NotesAppend == "" &&
-		p.Source == "" && p.Status == "" && p.Reason == "" && p.TTLDays == 0 && len(p.Keywords) == 0 {
-		return fmt.Errorf("patch: nothing to change (provide value, summary, notes, notes_append, source, status, reason, ttl_days, or keywords)")
+		p.Source == "" && p.Status == "" && p.Reason == "" && p.TTLDays == 0 && len(p.Keywords) == 0 && !p.Reverify {
+		return fmt.Errorf("patch: nothing to change (provide value, summary, notes, notes_append, source, status, reason, ttl_days, keywords, or reverify)")
+	}
+	if p.Reverify && (p.Value != "" || p.Summary != "" || p.Status != "") {
+		return fmt.Errorf("patch: reverify cannot be combined with a value, summary or status change (a new value is verified by its writer; a status transition is its own event)")
 	}
 	if p.TTLDays < 0 {
 		return fmt.Errorf("patch: ttl_days must be positive, got %d", p.TTLDays)
@@ -1235,7 +1272,7 @@ func (c *Client) Patch(ctx context.Context, key string, p PatchFields) (PatchRes
 	now := time.Now().UTC()
 	currentRef := existing.CurrentRef
 	var entry *model.JournalEntry
-	if valueChanged || statusChanged {
+	if valueChanged || statusChanged || p.Reverify {
 		stated := *existing
 		if valueChanged {
 			stated.Value = p.Value
@@ -1261,12 +1298,20 @@ func (c *Client) Patch(ctx context.Context, key string, p PatchFields) (PatchRes
 			// dead) is a write: marking it retire would date the burial wrong.
 			entry.Op = model.OpRetire
 		}
+		if p.Reverify {
+			// Same value, freshly observed: the reserved rediscovery marker is
+			// exactly this event, and the entry names who re-confirmed it.
+			entry.Op = model.OpRediscovery
+		}
 		currentRef = uuid.New().String()
 	}
 
 	newStatus := existing.Status
 	if p.Status != "" {
 		newStatus = p.Status
+	}
+	if p.Reverify && existing.Status == "obsolete" {
+		return PatchResult{}, contractErrorf("patch: fact %q is obsolete — re-declaring it alive is a resurrection (status=verified or add), not a re-verification", key)
 	}
 
 	params := map[string]interface{}{
@@ -1278,6 +1323,8 @@ func (c *Client) Patch(ctx context.Context, key string, p PatchFields) (PatchRes
 		"source":        nil,
 		"ttl_days":      nil,
 		"keywords":      nil,
+		"confirmed_by":  nil,
+		"confirmer":     nil,
 		"status":        nil,
 		"observed_at":   nil,
 		"current_ref":   nil,
@@ -1294,11 +1341,24 @@ func (c *Client) Patch(ctx context.Context, key string, p PatchFields) (PatchRes
 		params["summary"] = p.Summary
 		params["observed_at"] = now.Format(time.RFC3339)
 		params["current_ref"] = currentRef
+		// A new value is verified only by its writer: the set resets.
+		params["confirmed_by"] = []model.Confirmer{c.resolveAuthor(ctx).confirmer(now)}
 	} else if statusChanged {
 		params["current_ref"] = currentRef
 	}
 	if resurrect {
 		params["observed_at"] = now.Format(time.RFC3339)
+		// A resurrection is a fresh verification by the resurrector: the prior
+		// confirmations belong to a fact that was declared dead.
+		params["confirmed_by"] = []model.Confirmer{c.resolveAuthor(ctx).confirmer(now)}
+	}
+	if p.Reverify {
+		// observed_at moves (that is the point), and the confirmer is appended
+		// INSIDE the script: a Go-side read-modify-write of the list would drop
+		// a concurrent confirmation.
+		params["observed_at"] = now.Format(time.RFC3339)
+		params["current_ref"] = currentRef
+		params["confirmer"] = c.resolveAuthor(ctx).confirmer(now)
 	}
 	if p.Summary != "" && !valueChanged {
 		params["summary"] = p.Summary
@@ -1352,10 +1412,10 @@ func (c *Client) Patch(ctx context.Context, key string, p PatchFields) (PatchRes
 	}
 	if entry != nil {
 		if _, jErr := c.appendJournalID(ctx, entry, currentRef, "", false); jErr != nil {
-			return PatchResult{Changed: valueChanged || statusChanged, Status: newStatus}, fmt.Errorf("patch: accepted, the journal entry lagged: %w", jErr)
+			return PatchResult{Changed: valueChanged || statusChanged || p.Reverify, Status: newStatus, Reverified: p.Reverify}, fmt.Errorf("patch: accepted, the journal entry lagged: %w", jErr)
 		}
 	}
-	return PatchResult{Changed: valueChanged || statusChanged, Status: newStatus}, nil
+	return PatchResult{Changed: valueChanged || statusChanged || p.Reverify, Status: newStatus, Reverified: p.Reverify}, nil
 }
 
 // patchUpdateParams conditions a patch on the document version pair when it

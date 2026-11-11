@@ -394,3 +394,87 @@ func TestPatchKeywordsReplacesTags(t *testing.T) {
 		t.Errorf("a tag-only patch must not journal: %d appends", len(appends))
 	}
 }
+
+// TestPatchReverifyConfirmsInPlace pins the re-verification path: the same
+// value, freshly observed. observed_at moves (the whole point of a stale
+// re-check), the journal gains op=rediscovery, the writer joins confirmed_by,
+// and the value itself does not change.
+func TestPatchReverifyConfirmsInPlace(t *testing.T) {
+	var body string
+	c, fake := newFakeClient(t, patchRespond(
+		`{"key":"k","value":"v","category":"config","project":"p","status":"verified",`+
+			`"observed_at":"2026-01-01T00:00:00Z","confirmed_by":[{"author":"alice","author_source":"os","host":"h1","at":"2026-01-01T00:00:00Z"}]}`,
+		&body))
+
+	res, err := c.Patch(context.Background(), "k", PatchFields{Reverify: true})
+	if err != nil {
+		t.Fatalf("Patch: %v", err)
+	}
+	if !res.Reverified || !res.Changed || res.Status != "verified" {
+		t.Fatalf("res = %+v, want Reverified+Changed+verified", res)
+	}
+	params := patchParams(t, body)
+	if params["observed_at"] == nil || params["current_ref"] == nil {
+		t.Errorf("reverify must move observed_at and journal the entry: %v", params)
+	}
+	if params["value"] != nil || params["confirmed_by"] != nil {
+		t.Errorf("reverify must not rewrite the value or reset the set: %v", params)
+	}
+	conf, ok := params["confirmer"].(map[string]any)
+	if !ok || conf["author"] == "" || conf["at"] == "" {
+		t.Fatalf("confirmer param = %v, want author/at (the writer)", params["confirmer"])
+	}
+	appends := journalAppends(fake)
+	if len(appends) != 1 {
+		t.Fatalf("journal appends = %d, want 1", len(appends))
+	}
+	if !strings.Contains(appends[0].Body, `"op":"`+model.OpRediscovery+`"`) {
+		t.Errorf("reverify must journal op=rediscovery: %s", appends[0].Body)
+	}
+}
+
+// TestPatchReverifyRefusedCases pins the shape: a re-confirmation is one event,
+// so it cannot ride along with a value/status change, and a dead fact is
+// resurrected, not re-verified.
+func TestPatchReverifyRefusedCases(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		p    PatchFields
+	}{
+		{"with value", PatchFields{Reverify: true, Value: "v2"}},
+		{"with status", PatchFields{Reverify: true, Status: "verified"}},
+		{"with summary", PatchFields{Reverify: true, Summary: "s"}},
+	} {
+		if err := ValidatePatchFields(tc.p); err == nil {
+			t.Errorf("%s: reverify must be refused in combination", tc.name)
+		}
+	}
+	var body string
+	c, _ := newFakeClient(t, patchRespond(
+		`{"key":"k","value":"v","category":"config","project":"p","status":"obsolete"}`, &body))
+	_, err := c.Patch(context.Background(), "k", PatchFields{Reverify: true})
+	if err == nil || !strings.Contains(err.Error(), "obsolete") {
+		t.Errorf("reverify on an obsolete fact must be refused, got %v", err)
+	}
+}
+
+// TestPatchValueChangeResetsConfirmers pins the trust rule: confirmations
+// belong to the value they verified, so a new value starts with its writer.
+func TestPatchValueChangeResetsConfirmers(t *testing.T) {
+	var body string
+	c, _ := newFakeClient(t, patchRespond(
+		`{"key":"k","value":"v","category":"config","project":"p","status":"verified",`+
+			`"confirmed_by":[{"author":"alice","host":"h1","at":"2026-01-01T00:00:00Z"}]}`, &body))
+
+	if _, err := c.Patch(context.Background(), "k", PatchFields{Value: "v2"}); err != nil {
+		t.Fatalf("Patch: %v", err)
+	}
+	params := patchParams(t, body)
+	set, ok := params["confirmed_by"].([]any)
+	if !ok || len(set) != 1 {
+		t.Fatalf("confirmed_by = %v, want exactly the writer", params["confirmed_by"])
+	}
+	if _, has := set[0].(map[string]any)["author"]; !has {
+		t.Errorf("reset confirmer must name its author: %v", set[0])
+	}
+}

@@ -7,11 +7,11 @@ import (
 
 // Journal operations. The journal is a log of accepted values: every write
 // that changed (or established) a fact's value appends op=write. op=rediscovery
-// is reserved for the same value re-confirmed by a different author (the
-// author fields are defined on JournalEntry; the operation name is reserved
-// now so the journal vocabulary is stable from the first entry). op=retire
-// marks the entry written for a verified→obsolete transition, so "when and by
-// whom was this retired" is a query, not an inference from notes text.
+// records a re-confirmation of the same value (memento_patch reverify): the
+// fact's observed_at moves and the writer joins confirmed_by, so the event (who,
+// when) belongs in the log. op=retire marks the entry written for a
+// verified→obsolete transition, so "when and by whom was this retired" is a
+// query, not an inference from notes text.
 const (
 	OpWrite       = "write"
 	OpRediscovery = "rediscovery"

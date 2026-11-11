@@ -347,3 +347,30 @@ func TestStale(t *testing.T) {
 		}
 	}
 }
+
+// TestConfirmerSet pins the identity rule: a confirmer is identified by
+// author+host (same user on another machine is a separate confirmation), a
+// repeat refreshes the timestamp in place, and a reset leaves only the writer.
+func TestConfirmerSet(t *testing.T) {
+	now := time.Date(2026, 11, 11, 12, 0, 0, 0, time.UTC)
+	f := &Fact{}
+	f.AddConfirmer(Confirmer{Author: "alice", AuthorSource: "os", Host: "h1", At: now})
+	f.AddConfirmer(Confirmer{Author: "bob", AuthorSource: "security", Host: "h2", At: now})
+	f.AddConfirmer(Confirmer{Author: "alice", AuthorSource: "os", Host: "h1", At: now.Add(time.Hour)})
+	if len(f.ConfirmedBy) != 2 {
+		t.Fatalf("confirmers = %d, want 2 (alice@h1 refreshed in place)", len(f.ConfirmedBy))
+	}
+	if !f.ConfirmedBy[0].At.Equal(now.Add(time.Hour)) {
+		t.Errorf("repeat confirmation must refresh At in place: %+v", f.ConfirmedBy[0])
+	}
+	// Same user, different machine: a distinct confirmation (multi-machine store).
+	f.AddConfirmer(Confirmer{Author: "alice", Host: "h3", At: now})
+	if len(f.ConfirmedBy) != 3 {
+		t.Errorf("confirmers = %d, want 3 (user+host identifies a confirmer)", len(f.ConfirmedBy))
+	}
+
+	f.ResetConfirmers(Confirmer{Author: "carol", At: now})
+	if len(f.ConfirmedBy) != 1 || f.ConfirmedBy[0].Author != "carol" {
+		t.Errorf("after reset = %+v, want only the new writer", f.ConfirmedBy)
+	}
+}

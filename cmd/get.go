@@ -119,6 +119,29 @@ func printFact(w io.Writer, f *model.Fact, now time.Time, history bool, entries 
 		b.WriteString(strings.Join(f.Keywords, ", "))
 		b.WriteString("\n")
 	}
+	if len(f.ConfirmedBy) > 0 {
+		// One line: the trust signal is who verified the CURRENT value, and
+		// user+host is what identifies a confirmer in a shared store.
+		b.WriteString("confirmed_by: ")
+		for i, c := range f.ConfirmedBy {
+			if i > 0 {
+				b.WriteString("; ")
+			}
+			b.WriteString(c.Author)
+			if c.Host != "" {
+				b.WriteString("@")
+				b.WriteString(c.Host)
+			}
+			if c.AuthorSource != "" {
+				b.WriteString(" (")
+				b.WriteString(c.AuthorSource)
+				b.WriteString(")")
+			}
+			b.WriteString(" ")
+			b.WriteString(displayTime(c.At))
+		}
+		b.WriteString("\n")
+	}
 	b.WriteString("observed_at: ")
 	b.WriteString(displayTime(f.ObservedAt))
 	b.WriteString("\n")

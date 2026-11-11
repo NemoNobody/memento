@@ -24,6 +24,10 @@ Each fact carries evidence, not verdicts:
   `security` user when the cluster has one, else config/OS user — a
   self-reported audit label, not authentication) and which model/host/session
   produced it; the birth labels are write-once, corrections move `updated_by`;
+- **re-verification**: `confirmed_by` lists who verified the *current* value
+  (creator first, user+host per entry); `memento_patch reverify` moves
+  `observed_at` and journals an `op=rediscovery` entry, so a stale fact can
+  actually become fresh again;
 - **summary**: a value over `summary_min_len` must ship a short table-of-
   contents rendering (kept under `summary_max_len`), so store listings stay
   skimmable without pulling full values into context;

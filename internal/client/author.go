@@ -190,3 +190,10 @@ func (a AuthorInfo) stampFact(f *model.Fact) {
 	f.Author, f.AuthorSource = a.Author, a.AuthorSource
 	f.Model, f.Host, f.Session = a.Model, a.Host, a.Session
 }
+
+// confirmer turns this writer into one verification of a fact's current value:
+// the user label and its source (identity), the machine (a multi-user store
+// identifies a confirmer as user + host) and the moment.
+func (a AuthorInfo) confirmer(at time.Time) model.Confirmer {
+	return model.Confirmer{Author: a.Author, AuthorSource: a.AuthorSource, Host: a.Host, At: at.UTC()}
+}

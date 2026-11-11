@@ -296,32 +296,55 @@ type historyView struct {
 	Source     string `json:"source" jsonschema:"where this observation came from"`
 }
 
+// confirmerView is one verification of a fact's current value.
+type confirmerView struct {
+	Author       string `json:"author" jsonschema:"self-reported label of the confirmer (security user, config label or OS user)"`
+	AuthorSource string `json:"author_source,omitempty" jsonschema:"security | config | os | none — which chain produced the label"`
+	Host         string `json:"host,omitempty" jsonschema:"machine the confirmation came from (user + host identifies a confirmer in a shared store)"`
+	At           string `json:"at" jsonschema:"RFC3339 when the confirmation happened"`
+}
+
+// newConfirmerViews maps stored confirmations for the MCP contract.
+func newConfirmerViews(in []model.Confirmer) []confirmerView {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]confirmerView, 0, len(in))
+	for _, c := range in {
+		out = append(out, confirmerView{
+			Author: c.Author, AuthorSource: c.AuthorSource, Host: c.Host, At: rfc3339OrEmpty(c.At),
+		})
+	}
+	return out
+}
+
 // factView is the MCP-facing shape of a fact: a stable contract for clients
 // (RFC3339 timestamps, no internal fields) rather than the internal model.
 // In compact mode most fields carry omitempty so the JSON drops them: the
 // compact view is a table of contents (key, summary, state, age), the full
 // value is one memento_get away.
 type factView struct {
-	Key          string        `json:"key" jsonschema:"stable fact key, e.g. proj:foo:loc:bar.py"`
-	Value        string        `json:"value,omitempty" jsonschema:"the fact itself (compact mode: only a 100-rune head when the fact has no summary)"`
-	Category     string        `json:"category" jsonschema:"location | config | endpoint | behavior | context_map | recipe | rule"`
-	Project      string        `json:"project" jsonschema:"project name, or 'global'"`
-	Status       string        `json:"status" jsonschema:"verified | obsolete"`
-	Source       string        `json:"source" jsonschema:"where it came from, e.g. tool:read_file, doc:README, user:confirmed"`
-	Summary      string        `json:"summary,omitempty" jsonschema:"short table-of-contents rendering of the value; required for values over summary_min_len"`
-	Author       string        `json:"author,omitempty" jsonschema:"who recorded the fact (self-reported label, not authentication); the author_source field names the chain that produced it"`
-	AuthorSource string        `json:"author_source,omitempty" jsonschema:"security | config | os | none — which chain link named the author"`
-	UpdatedBy    string        `json:"updated_by,omitempty" jsonschema:"self-reported label of the last writer; the birth author fields are write-once"`
-	Notes        string        `json:"notes,omitempty" jsonschema:"qualifiers: what was checked, how far, caveats (compact mode: first 100 runes)"`
-	Keywords     []string      `json:"keywords,omitempty" jsonschema:"normalized tags (lowercase single tokens); the keyword filter of memento_search matches these exactly"`
-	ObservedAt   string        `json:"observed_at" jsonschema:"RFC3339 when the current value was observed"`
-	TTLDays      int           `json:"ttl_days,omitempty" jsonschema:"per-fact staleness override in days, when the writer chose one (otherwise the category default: config/endpoint 14, location/behavior 30, recipe 180, rule 90, context_map never)"`
-	AgeDays      int           `json:"age_days" jsonschema:"whole days since the observation; -1 when observed_at is unknown"`
-	AgeHours     int           `json:"age_hours" jsonschema:"whole hours since the observation; -1 when observed_at is unknown (0 age_days can mean 1 hour or 23 — hours disambiguate fresh facts)"`
-	Stale        bool          `json:"stale" jsonschema:"true when age passes the effective TTL (the per-fact ttl_days override when set, otherwise the category default: config/endpoint 14d, location/behavior 30d, recipe 180d, rule 90d, context_map never) — re-verify against the source before trusting"`
-	History      []historyView `json:"history,omitempty" jsonschema:"previous observations, oldest first; present only when include_history=true"`
-	CreatedAt    string        `json:"created_at,omitempty" jsonschema:"RFC3339 creation time (dropped in compact mode)"`
-	UpdatedAt    string        `json:"updated_at" jsonschema:"RFC3339 last update time; a same-value touch moves it (age/stale do not)"`
+	Key          string          `json:"key" jsonschema:"stable fact key, e.g. proj:foo:loc:bar.py"`
+	Value        string          `json:"value,omitempty" jsonschema:"the fact itself (compact mode: only a 100-rune head when the fact has no summary)"`
+	Category     string          `json:"category" jsonschema:"location | config | endpoint | behavior | context_map | recipe | rule"`
+	Project      string          `json:"project" jsonschema:"project name, or 'global'"`
+	Status       string          `json:"status" jsonschema:"verified | obsolete"`
+	Source       string          `json:"source" jsonschema:"where it came from, e.g. tool:read_file, doc:README, user:confirmed"`
+	Summary      string          `json:"summary,omitempty" jsonschema:"short table-of-contents rendering of the value; required for values over summary_min_len"`
+	Author       string          `json:"author,omitempty" jsonschema:"who recorded the fact (self-reported label, not authentication); the author_source field names the chain that produced it"`
+	AuthorSource string          `json:"author_source,omitempty" jsonschema:"security | config | os | none — which chain link named the author"`
+	UpdatedBy    string          `json:"updated_by,omitempty" jsonschema:"self-reported label of the last writer; the birth author fields are write-once"`
+	Notes        string          `json:"notes,omitempty" jsonschema:"qualifiers: what was checked, how far, caveats (compact mode: first 100 runes)"`
+	Keywords     []string        `json:"keywords,omitempty" jsonschema:"normalized tags (lowercase single tokens); the keyword filter of memento_search matches these exactly"`
+	ObservedAt   string          `json:"observed_at" jsonschema:"RFC3339 when the current value was observed"`
+	TTLDays      int             `json:"ttl_days,omitempty" jsonschema:"per-fact staleness override in days, when the writer chose one (otherwise the category default: config/endpoint 14, location/behavior 30, recipe 180, rule 90, context_map never)"`
+	AgeDays      int             `json:"age_days" jsonschema:"whole days since the observation; -1 when observed_at is unknown"`
+	AgeHours     int             `json:"age_hours" jsonschema:"whole hours since the observation; -1 when observed_at is unknown (0 age_days can mean 1 hour or 23 — hours disambiguate fresh facts)"`
+	Stale        bool            `json:"stale" jsonschema:"true when age passes the effective TTL (the per-fact ttl_days override when set, otherwise the category default: config/endpoint 14d, location/behavior 30d, recipe 180d, rule 90d, context_map never) — re-verify against the source before trusting"`
+	History      []historyView   `json:"history,omitempty" jsonschema:"previous observations, oldest first; present only when include_history=true"`
+	ConfirmedBy  []confirmerView `json:"confirmed_by,omitempty" jsonschema:"who has verified the CURRENT value, creator first (author+host identifies the confirmer; at is when). A value change resets the set; the journal has every confirmation event"`
+	CreatedAt    string          `json:"created_at,omitempty" jsonschema:"RFC3339 creation time (dropped in compact mode)"`
+	UpdatedAt    string          `json:"updated_at" jsonschema:"RFC3339 last update time; a same-value touch moves it (age/stale do not)"`
 }
 
 // rfc3339OrEmpty formats t for the MCP contract, or returns "" when t is the
@@ -371,6 +394,7 @@ func newFactView(f model.Fact, includeHistory, compact bool) factView {
 		UpdatedBy:    f.UpdatedBy,
 		Notes:        f.Notes,
 		Keywords:     f.Keywords,
+		ConfirmedBy:  newConfirmerViews(f.ConfirmedBy),
 		ObservedAt:   rfc3339OrEmpty(f.ObservedAt),
 		TTLDays:      f.TTLDays,
 		AgeDays:      f.AgeDays(time.Now().UTC()),
@@ -926,6 +950,7 @@ type patchInput struct {
 	Source      string   `json:"source,omitempty" jsonschema:"replaces source when non-empty"`
 	Status      string   `json:"status,omitempty" jsonschema:"verified | obsolete: a transition is journaled; obsolete→verified sets observed_at=now (re-declaring alive is a fresh verification)"`
 	Reason      string   `json:"reason,omitempty" jsonschema:"why it became obsolete (only with status=obsolete; folded into notes)"`
+	Reverify    bool     `json:"reverify,omitempty" jsonschema:"re-confirm the current value: observed_at moves to now, the journal gains op=rediscovery, the writer joins confirmed_by; cannot be combined with value/summary/status"`
 	TTLDays     int      `json:"ttl_days,omitempty" jsonschema:"retune the staleness window in days (bounded by the category cap: config/endpoint 14, location/behavior 30, recipe 180, rule 90; context_map uncapped); omitted = untouched; a qualifier touch, not journaled"`
 	Keywords    []string `json:"keywords,omitempty" jsonschema:"replaces the tag set when non-empty (same normalization as add: lowercase single tokens, max 10); a qualifier touch, not journaled — the tags appear in the history with the next accepted value"`
 
@@ -934,10 +959,11 @@ type patchInput struct {
 }
 
 type patchOutput struct {
-	Key     string `json:"key" jsonschema:"the patched key"`
-	Changed bool   `json:"changed" jsonschema:"true = new version accepted (value change, status transition; journal entry written); false = qualifier-only touch"`
-	Status  string `json:"status" jsonschema:"status of the fact after the patch"`
-	Note    string `json:"note,omitempty" jsonschema:"set on a qualifier-only touch: observed_at and age untouched, the journal not appended"`
+	Key        string `json:"key" jsonschema:"the patched key"`
+	Changed    bool   `json:"changed" jsonschema:"true = new version accepted (value change, status transition; journal entry written); false = qualifier-only touch"`
+	Status     string `json:"status" jsonschema:"status of the fact after the patch"`
+	Reverified bool   `json:"reverified,omitempty" jsonschema:"true when the patch re-confirmed the value in place (observed_at moved, op=rediscovery journaled, value unchanged)"`
+	Note       string `json:"note,omitempty" jsonschema:"set on a qualifier-only touch: observed_at and age untouched, the journal not appended"`
 }
 
 func (s *mcpServer) patch(ctx context.Context, req *mcp.CallToolRequest, in patchInput) (*mcp.CallToolResult, patchOutput, error) {
@@ -973,6 +999,7 @@ func patchFields(in patchInput) client.PatchFields {
 		Reason:      in.Reason,
 		TTLDays:     in.TTLDays,
 		Keywords:    in.Keywords,
+		Reverify:    in.Reverify,
 	}
 }
 
@@ -1024,11 +1051,11 @@ func (s *mcpServer) patchOne(ctx context.Context, cfg *config.Config, c *client.
 		// flags into its per-item output; do not drop them (see addOne's note —
 		// the single edge cannot show them, the batch edge must).
 		if res.Changed || res.Status != "" {
-			return patchOutput{Key: in.Key, Changed: res.Changed, Status: res.Status}, writeFailure("memento_patch", err)
+			return patchOutput{Key: in.Key, Changed: res.Changed, Status: res.Status, Reverified: res.Reverified}, writeFailure("memento_patch", err)
 		}
 		return patchOutput{}, writeFailure("memento_patch", err)
 	}
-	out := patchOutput{Key: in.Key, Changed: res.Changed, Status: res.Status}
+	out := patchOutput{Key: in.Key, Changed: res.Changed, Status: res.Status, Reverified: res.Reverified}
 	if !res.Changed {
 		out.Note = "qualifier-only touch: observed_at and the journal untouched, the fact keeps aging (re-verify when stale)"
 	}
@@ -1381,7 +1408,7 @@ type journalEntryView struct {
 	FactID       string    `json:"fact_id,omitempty" jsonschema:"stable fact identity the entry belongs to"`
 	Project      string    `json:"project,omitempty" jsonschema:"project of the entry"`
 	Category     string    `json:"category,omitempty" jsonschema:"category at the time of the entry"`
-	Op           string    `json:"op" jsonschema:"write (an accepted value) | rediscovery (reserved: same value, different author) | retire (verified→obsolete transition)"`
+	Op           string    `json:"op" jsonschema:"write (an accepted value) | rediscovery (a re-confirmation of the same value) | retire (verified→obsolete transition)"`
 	Value        string    `json:"value" jsonschema:"the accepted value at that moment"`
 	Notes        string    `json:"notes,omitempty" jsonschema:"notes shipped with the write"`
 	Source       string    `json:"source,omitempty" jsonschema:"source shipped with the write"`

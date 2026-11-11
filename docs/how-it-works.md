@@ -179,10 +179,9 @@ journal records every accepted write, so the events stay truthful.
 History is an append-only **journal** of dated indices, not an array inside
 the fact doc:
 
-- One entry per accepted value: `fact_key`, `op` (`write`; `rediscovery` is
-  reserved for same-value re-confirmation by a different author; `retire`
-  marks the verified→obsolete transition, so "when and by whom was this
-  retired" is a query), `value`,
+- One entry per accepted value: `fact_key`, `op` (`write`; `rediscovery` — a
+  re-confirmation of the same value; `retire` marks the verified→obsolete
+  transition, so "when and by whom was this retired" is a query), `value`,
   `notes`, `source`, `keywords`, `created_at`, author fields. `op_type=create`: appends
   never overwrite each other, there is no CAS.
 - Entries live in `<index>-history-<period-date>`: the period granularity is
@@ -284,6 +283,28 @@ list on a re-add leaves the stored tags alone (the notes/source convention);
 keywords are a stored qualifier, not a journaled observation. Every accepted
 value's journal entry carries the tag set as of that moment, so re-tagging is
 safe: the previous set stays recoverable from the entry that carried it.
+
+## Re-verification (`confirmed_by`)
+
+`stale` is an instruction to re-check, and a re-check has to leave a trace.
+Without one, a fact could never become fresh again (a same-value re-add is a
+touch: it deliberately does not move `observed_at`).
+
+`memento_patch {reverify: true}` re-confirms the current value in place:
+`observed_at` moves to now, the journal gains an `op=rediscovery` entry (who,
+when, model, session), and the writer joins the fact's `confirmed_by`. The
+value, notes, tags and summary are untouched; a `reverify` cannot ride along
+with a value or status change — those are different events.
+
+`confirmed_by` lists who has verified the **current** value, creator first, as
+`{author, author_source, host, at}`: the user label and the chain that produced
+it (`security` | `config` | `os`), the machine (user + host identifies a
+confirmer in a multi-user, multi-machine store), and when. A value change or a
+resurrection resets the set: those confirmations were about a different value
+(or a fact that was declared dead) and must not count. Repeats are
+deduplicated per user+host (latest time wins); every event stays in the journal.
+Who may confirm is a permissions question, and permissions live in OpenSearch
+roles — the store records, it does not gate.
 
 ## Advisory contract and precedence
 
