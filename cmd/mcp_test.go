@@ -328,7 +328,7 @@ func TestMCPServerAddBatchSurfacesPartialSuccess(t *testing.T) {
 		switch {
 		case r.Method == http.MethodHead && r.URL.Path == "/memento":
 			w.WriteHeader(http.StatusOK) // the facts index exists
-		case r.Method == http.MethodGet && r.URL.Path == "/memento/_doc/k":
+		case r.Method == http.MethodGet && (r.URL.Path == "/memento/_doc/k" || r.URL.Path == "/memento/_doc/k2"):
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = io.WriteString(w, `{"error":{"type":"document_missing_exception","reason":"no such document","index":"memento"},"status":404}`)
 		case r.Method == http.MethodGet && r.URL.Path == "/memento/_doc/t":
@@ -337,13 +337,22 @@ func TestMCPServerAddBatchSurfacesPartialSuccess(t *testing.T) {
 			_, _ = io.WriteString(w, `{"_index":"memento","_id":"t2","_version":1,"_seq_no":3,"_primary_term":1,"found":true,"_source":{"key":"t2","value":"v","category":"config","project":"p","status":"verified"}}`)
 		case r.Method == http.MethodGet && r.URL.Path == "/memento/_doc/t3":
 			_, _ = io.WriteString(w, `{"_index":"memento","_id":"t3","_version":1,"_seq_no":3,"_primary_term":1,"found":true,"_source":{"key":"t3","value":"v","category":"config","project":"p","status":"verified"}}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/memento/_doc/t4":
+			_, _ = io.WriteString(w, `{"_index":"memento","_id":"t4","_version":1,"_seq_no":3,"_primary_term":1,"found":true,"_source":{"key":"t4","value":"v","category":"config","project":"p","status":"verified"}}`)
 		case r.Method == http.MethodGet && r.URL.Path == "/memento/_doc/c":
 			_, _ = io.WriteString(w, `{"_index":"memento","_id":"c","_version":1,"_seq_no":4,"_primary_term":1,"found":true,"_source":{"key":"c","value":"old","category":"config","project":"p","status":"verified"}}`)
-		case strings.Contains(r.URL.Path, "-history-") && strings.Contains(r.URL.Path, "/_doc/"):
-			// every journal append shape: PUT <id> (the birth path) and
-			// POST <id>?op_type=create (the doc-first correction path)
-			w.WriteHeader(http.StatusInternalServerError)
-			_, _ = io.WriteString(w, `{"error":{"type":"cluster_block_exception","reason":"journal write blocked"},"status":500}`)
+		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "-history-") && strings.Contains(r.URL.Path, "/_doc/"):
+			// journal appends go PUT /<hist>/_doc/<id> (opensearch-go
+			// Index with a DocumentID). Fail only the k and c entries: the
+			// fixture also needs a CLEAN birth row — without one, a create
+			// wrongly counted as touched changes no assertion.
+			body, _ := io.ReadAll(r.Body)
+			if strings.Contains(string(body), `"fact_key":"k"`) || strings.Contains(string(body), `"fact_key":"c"`) {
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = io.WriteString(w, `{"error":{"type":"cluster_block_exception","reason":"journal write blocked"},"status":500}`)
+				return
+			}
+			_, _ = io.WriteString(w, `{"_index":"memento-history","_id":"journal-entry-1","_version":1,"_seq_no":0,"_primary_term":1,"result":"created"}`)
 		default:
 			_, _ = io.WriteString(w, `{"_index":"memento","_id":"k","_version":1,"_seq_no":0,"_primary_term":1,"result":"created"}`)
 		}
@@ -362,11 +371,16 @@ func TestMCPServerAddBatchSurfacesPartialSuccess(t *testing.T) {
 			// shape that separates the created and changed counters (a birth
 			// always has both, so without it swapped counters pass).
 			map[string]any{"key": "c", "value": "new", "category": "config"},
-			// second touch: created != touched, and with a third touch all
-			// three counters are pairwise distinct (1/2/3), so swapping ANY
-			// pair of increments flips an assertion.
+			// clean birth (its append succeeds): the row that pins the
+			// touched guard — err==nil && !changed — because dropping
+			// !changed would count this create as a touch too.
+			map[string]any{"key": "k2", "value": "v2", "category": "config"},
+			// three more touches: with the clean birth all counters are
+			// pairwise distinct (2/3/4), so swapping ANY pair of increments
+			// flips an assertion.
 			map[string]any{"key": "t2", "value": "v", "category": "config"},
 			map[string]any{"key": "t3", "value": "v", "category": "config"},
+			map[string]any{"key": "t4", "value": "v", "category": "config"},
 		}},
 	})
 	if err != nil {
@@ -387,8 +401,8 @@ func TestMCPServerAddBatchSurfacesPartialSuccess(t *testing.T) {
 	if err := json.Unmarshal(raw, &out); err != nil {
 		t.Fatalf("structured content: %v (%s)", err, raw)
 	}
-	if len(out.Items) != 5 {
-		t.Fatalf("items = %d, want 5: %s", len(out.Items), raw)
+	if len(out.Items) != 7 {
+		t.Fatalf("items = %d, want 7: %s", len(out.Items), raw)
 	}
 	it := out.Items[0]
 	if it.Error == "" {
@@ -405,19 +419,22 @@ func TestMCPServerAddBatchSurfacesPartialSuccess(t *testing.T) {
 		// partial success too: the doc correction landed, its entry lagged
 		t.Errorf("the correction item must be created=false changed=true beside its lag error, got %+v: %s", out.Items[2], raw)
 	}
-	if out.Items[3].Error != "" || out.Items[3].Created || out.Items[3].Changed {
-		t.Errorf("the second same-value item must be a clean non-created touch, got %+v: %s", out.Items[3], raw)
+	if out.Items[3].Error != "" || !out.Items[3].Created || !out.Items[3].Changed {
+		t.Errorf("the clean birth must be created=true changed=true with no error, got %+v: %s", out.Items[3], raw)
 	}
-	if out.Items[4].Error != "" || out.Items[4].Created || out.Items[4].Changed {
-		t.Errorf("the third same-value item must be a clean non-created touch, got %+v: %s", out.Items[4], raw)
+	for _, touch := range out.Items[4:7] {
+		if touch.Error != "" || touch.Created || touch.Changed {
+			t.Errorf("the same-value items must be clean non-created touches, got %+v: %s", touch, raw)
+		}
 	}
 	// The aggregate must agree with the rows (the patch twin pins the same):
-	// a summary that contradicts what the items says is the audit lie the
-	// counters exist to prevent. Birth/correction/touch rows give pairwise
-	// distinct populations (created=1, changed=2, touched=3), so swapping
-	// any pair of increments flips an assertion.
-	if out.Created != 1 || out.Changed != 2 || out.Touched != 3 {
-		t.Errorf("counters = created:%d changed:%d touched:%d, want 1/2/3: %s", out.Created, out.Changed, out.Touched, raw)
+	// a summary that contradicts what the items say is the audit lie the
+	// counters exist to prevent. Partial-birth/touch/correction/clean-birth/
+	// touch rows give pairwise distinct populations (created=2, changed=3,
+	// touched=4), and the clean birth pins the touched guard (dropping the
+	// !changed condition would count it as a fifth touch).
+	if out.Created != 2 || out.Changed != 3 || out.Touched != 4 {
+		t.Errorf("counters = created:%d changed:%d touched:%d, want 2/3/4: %s", out.Created, out.Changed, out.Touched, raw)
 	}
 }
 

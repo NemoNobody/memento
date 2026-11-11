@@ -603,18 +603,19 @@ func TestUUIDAppendCollisionIsNotSuccess(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "journal entry lagged") || !strings.Contains(err.Error(), "journal append") {
 		t.Fatalf("a 409 over a fresh uuid ref must report the lagged entry, got: %v", err)
 	}
-	// The 409 branch must have actually run: an append request was sent
-	// and rejected (not a fall-through to the 500 sentinel).
+	// The 409 branch must have actually run: an append DOC request was
+	// sent and rejected (not the pipeline _settings PUT, not a
+	// fall-through to the 500 sentinel).
 	fake.mu.Lock()
 	var sawAppend bool
 	for _, r := range fake.requests {
-		if r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-") {
+		if r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-") && strings.Contains(r.Path, "/_doc/") {
 			sawAppend = true
 		}
 	}
 	fake.mu.Unlock()
 	if !sawAppend {
-		t.Fatal("the journal append never reached the fake — the 409 path is not being exercised")
+		t.Fatal("the journal append doc write never reached the fake — the 409 path is not being exercised")
 	}
 }
 
@@ -624,7 +625,7 @@ func TestUUIDAppendCollisionIsNotSuccess(t *testing.T) {
 // entry beside Changed=true (the resurrect itself landed) — and the
 // message must name the resurrection, not a correction.
 func TestResurrectAppendCollisionIsNotSuccess(t *testing.T) {
-	c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
 		if code, body := journalInfraOK(r); code != http.StatusInternalServerError {
 			return code, body
 		}
@@ -644,6 +645,17 @@ func TestResurrectAppendCollisionIsNotSuccess(t *testing.T) {
 	}
 	if !res.Changed {
 		t.Errorf("res.Changed = false, want true (the resurrect itself landed): %v", err)
+	}
+	fake.mu.Lock()
+	var sawAppend bool
+	for _, r := range fake.requests {
+		if r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-") && strings.Contains(r.Path, "/_doc/") {
+			sawAppend = true
+		}
+	}
+	fake.mu.Unlock()
+	if !sawAppend {
+		t.Fatal("the resurrect journal append doc write never reached the fake — the 409 path is not being exercised")
 	}
 }
 
