@@ -113,6 +113,11 @@ for line in open(os.environ["DASH_OBJ"], encoding="utf-8"):
             failed += 1
             print(f"update {o['type']}/{o['id']}: {e.code} {e.read().decode()[:200]}", file=sys.stderr)
 
+# Index patterns carry their fields baked in (see the note in
+# docker/dashboards/README.md): OSD cannot resolve a pattern's timeFieldName
+# while fields is empty, and every OSD route that could introspect fields
+# (index_patterns/data_views/proxy) is UI-internal or absent in 3.x. To
+# refresh after a mapping change: regenerate the bundle from a live cluster.
 print(f"pushed {ok} saved object(s) to {url}: index patterns memento / memento-history-* / memento-docs, dashboard \"Memento — store overview\"")
 sys.exit(1 if failed else 0)
 PY
