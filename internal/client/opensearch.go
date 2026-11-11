@@ -489,7 +489,7 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 		}
 		if entry != nil {
 			if _, jErr := c.appendJournalID(ctx, entry, ref, "", false); jErr != nil {
-				return AddResult{Changed: true}, fmt.Errorf("add: correction accepted, the journal entry lagged: %w", jErr)
+				return AddResult{Changed: true}, fmt.Errorf("add: resurrection accepted, the journal entry lagged: %w", jErr)
 			}
 		}
 		// Same value: notes/source moved, observed_at must not (the

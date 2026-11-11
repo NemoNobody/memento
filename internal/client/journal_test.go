@@ -34,11 +34,12 @@ func journalInfraOK(r recordedRequest) (int, string) {
 func journalRoutesOK(r recordedRequest) (int, string) {
 	switch {
 	case r.Method == http.MethodPost && strings.HasPrefix(r.Path, "/memento-history-") && strings.Contains(r.Path, "/_doc"):
-		// auto-id appends (POST /_doc) and preallocated-id appends
-		// (POST /_doc/<id>, op_type=create — the doc-first write paths)
+		// auto-id appends (POST /_doc, no DocumentID)
 		return http.StatusOK, `{"_id":"journal-entry-1","result":"created"}`
 	case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-"):
-		// deterministic-id appends (migration): PUT /<index>/_doc/<id>
+		// preallocated-id appends (migration, birth): Index sends PUT
+		// /<index>/_doc/<id> whenever a DocumentID is set (op_type=create
+		// is only the query param)
 		return http.StatusOK, `{"_id":"journal-entry-1","result":"created"}`
 	case r.Method == http.MethodPost && strings.HasPrefix(r.Path, "/memento-history-") && strings.HasSuffix(r.Path, "/_search"):
 		return http.StatusOK, `{"took":1,"hits":{"total":{"value":0,"relation":"eq"},"hits":[]}}`
@@ -591,7 +592,9 @@ func TestUUIDAppendCollisionIsNotSuccess(t *testing.T) {
 			return http.StatusOK, `{"_index":"memento","_id":"k","_version":1,"_seq_no":1,"_primary_term":1,"found":true,"_source":{"key":"k","value":"old","category":"config","project":"p","status":"verified"}}`
 		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
 			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
-		case r.Method == http.MethodPost && strings.HasPrefix(r.Path, "/memento-history-"):
+		// opensearch-go Index sends PUT /<index>/_doc/<id> for a set
+		// DocumentID (op_type=create is only the query param)
+		case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-"):
 			return http.StatusConflict, `{"error":"version conflict, document already exists","status":409}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Method + " " + r.Path + `"}`
