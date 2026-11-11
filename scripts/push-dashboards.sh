@@ -19,9 +19,16 @@
 #      no session bus (no wallet reachable)
 #   4. no auth — the dev compose recipe runs with the security plugin off
 #
+# Tenant: requests carry "security_tenant: global" by default. A secured
+# OSD whose default tenant is private (opensearch_security.multitenancy)
+# silently routes header-less writes into the user's personal tenant —
+# dashboards then "exist" but never show up in the global UI. Override
+# with DASH_TENANT=<name>; the header is ignored when security is off.
+#
 # Usage:
-#   scripts/push-dashboards.sh                       # localhost:5601
+#   scripts/push-dashboards.sh                       # localhost:5601, global tenant
 #   DASHBOARDS_URL=http://host:5601 scripts/push-dashboards.sh
+#   DASH_TENANT=mystack scripts/push-dashboards.sh
 set -euo pipefail
 
 URL="${DASHBOARDS_URL:-http://localhost:5601}"
@@ -58,8 +65,9 @@ fi
 
 AUTH=()
 [ -n "$PASS" ] && AUTH=(-u "${USER:-admin}:$PASS")
+TENANT="${DASH_TENANT-global}"
 
-code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$URL/api/status" "${AUTH[@]}" || echo 000)
+code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "security_tenant: $TENANT" "$URL/api/status" "${AUTH[@]}" || echo 000)
 if [ "$code" = "401" ] && [ -z "$PASS" ]; then
   echo "dashboards requires authentication ($URL answered 401)." >&2
   echo "give the wallet an entry ('memento creds set'), set DASHBOARDS_USER/DASHBOARDS_PASSWORD, or fill in $ENVF" >&2
@@ -72,13 +80,14 @@ fi
 
 # Per-object create/update. Credentials travel through the environment: the
 # password never enters argv (ps shows command lines).
-DASH_URL="$URL" DASH_USER="${USER:-admin}" DASH_PASS="$PASS" DASH_OBJ="$OBJ" \
+DASH_URL="$URL" DASH_USER="${USER:-admin}" DASH_PASS="$PASS" DASH_OBJ="$OBJ" DASH_TENANT="$TENANT" \
 python3 - <<'PY'
 import json, os, sys, urllib.request, urllib.error
 
 url = os.environ["DASH_URL"].rstrip("/")
 user = os.environ.get("DASH_USER") or "admin"
 pw = os.environ.get("DASH_PASS") or ""
+tenant = os.environ.get("DASH_TENANT") or "global"
 import base64
 auth = base64.b64encode(f"{user}:{pw}".encode()).decode() if pw else None
 
@@ -86,6 +95,7 @@ def req(method, path, body=None):
     r = urllib.request.Request(url + path, method=method)
     r.add_header("osd-xsrf", "true")
     r.add_header("Content-Type", "application/json")
+    r.add_header("security_tenant", tenant)
     if auth:
         r.add_header("Authorization", "Basic " + auth)
     if body is not None:
