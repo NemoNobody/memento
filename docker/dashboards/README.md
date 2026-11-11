@@ -44,10 +44,12 @@ Bundle invariants (OSD 3.x quirks, all learned live):
 - visualization `attributes` must not contain `optionsJSON` (strict
   saved-object mapping rejects it; options live inside `visState`);
 - the dashboard's `panelsJSON` must be a JSON **array** of panel entries
-  (`{"version","type":"visualization","panelIndex":N,"panelRefName":
-  "panel_N","gridData":{"x","y","w","h","i"},"embeddableConfig":{}}`);
+  (`{"version","panelIndex":N,"panelRefName":"panel_N","gridData":
+  {"x","y","w","h","i"},"embeddableConfig":{}}`);
   the map form `{"p1":{...}}` saves without complaint but the dashboard
-  renders completely empty;
+  renders completely empty; entries must NOT carry a `"type"` field —
+  with `"type":"visualization"` present OSD 3.x collapses every panel to
+  a 1x1 tile (the UI itself writes type-less entries);
 - the classic grid is **12 columns** wide: keep `x+w<=12`, overflowing
   panels stack/squash near the origin;
 - patterns must list the `_index` meta field explicitly (aggregatable
