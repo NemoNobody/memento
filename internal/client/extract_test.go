@@ -185,8 +185,9 @@ func TestStripElementsLinear(t *testing.T) {
 // pass cached nothing about missing closing tags, so a page of repeated
 // unclosed <style> made every tag re-scan the whole tail (quadratic: ~75s at
 // the 2 MB fetch cap in the long-lived server, driven by one untrusted link).
-// The no-close cache must make the whole run a single pass; 300ms is a wide
-// margin over the linear cost and a hard fail for the quadratic one (~2s here).
+// The no-close cache must make the whole run a single pass; the budget is a
+// wide margin over the linear cost (~0.02 s) and a hard fail for the quadratic
+// one (~2.7 s here, measured by reverting the cache).
 func TestStripElementsUnclosedLinear(t *testing.T) {
 	const n = 50000
 	var b strings.Builder
@@ -583,9 +584,9 @@ func TestExtractSectionCapReportsTruncation(t *testing.T) {
 // TestExtractContentScanLinear guards the content-root scan. Two shapes made it
 // quadratic before the guards: a run of open tags followed by unrelated close
 // tags (every close walked the stack), and a deep stack with many candidates
-// (every rejected candidate walked the stack below it). Both fit in
-// fetch_max_bytes, so both must stay linear — the quadratic version took 15 s
-// and 3.5 s on these inputs.
+// (every rejected candidate walked the stack below it). Both are sized to stay
+// under the 2 MB fetch cap, so both must stay linear — the quadratic versions
+// took 15 s and 9 s on these inputs (measured by reverting each guard).
 func TestExtractContentScanLinear(t *testing.T) {
 	cases := []struct {
 		name string
@@ -593,8 +594,8 @@ func TestExtractContentScanLinear(t *testing.T) {
 	}{
 		{"unclosed main", strings.Repeat("<main>", 100000)},
 		{"unmatched close tags", strings.Repeat("<div>", 50000) + strings.Repeat("</span>", 200000)},
-		{"candidates in a deep stack", strings.Repeat("<div>", 30000) + "<main>" +
-			strings.Repeat("<article>x</article>", 140000) + "</main>"},
+		{"candidates in a deep stack", strings.Repeat("<div>", 39000) + "<main>" +
+			strings.Repeat("<article>x</article>", 90000) + "</main>"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -609,5 +610,27 @@ func TestExtractContentScanLinear(t *testing.T) {
 				t.Fatal("the content scan is not linear on this input")
 			}
 		})
+	}
+}
+
+// TestHtmlAttrsSeparators pins attribute whitespace: CRLF-separated markup is
+// real (pages saved on Windows, some generators), and a boolean attribute must
+// not eat the following key. Before this, an unquoted src on a CR line kept the
+// next attribute in its value.
+func TestHtmlAttrsSeparators(t *testing.T) {
+	for _, tc := range []struct {
+		tag  string
+		key  string
+		want string
+	}{
+		{"<img src=/a.png\rdata-x=1>", "src", "/a.png"},
+		{"<img src=/a.png/>", "src", "/a.png"},
+		{"<div hidden role=\"main\">", "role", "main"},
+		{"<div\nrole=\"main\">", "role", "main"},
+		{"<div\trole = \"main\">", "role", "main"},
+	} {
+		if got := htmlAttrs(tc.tag)[tc.key]; got != tc.want {
+			t.Errorf("htmlAttrs(%q)[%q] = %q, want %q", tc.tag, tc.key, got, tc.want)
+		}
 	}
 }

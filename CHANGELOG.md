@@ -20,7 +20,10 @@ and the outline read as navigation.
   is computed over non-whitespace runes: block tags inject a newline per
   element, and counting those padded a rail until it read as prose;
 - a page that is nothing but link blocks keeps its sections — an empty document
-  would hide the loss instead of showing it.
+  would hide the loss instead of showing it;
+- a dropped element that is left unclosed loses only its tag, and leaves a line
+  break behind: its text stays readable instead of merging into the paragraph
+  before it.
 
 Checked against the Python, Go and PostgreSQL documentation: no navigation
 sections, and a page with a content container is no longer truncated by its own
