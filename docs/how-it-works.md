@@ -20,12 +20,6 @@ document keyed by its `key` (the key is the document ID).
 | `observed_at` | date | when the current value was seen (moves only on value change) |
 | `ttl_days` | integer | optional per-fact staleness override, capped by the category TTL |
 | `keywords` | keyword[] | normalized tags: lowercase single tokens, deduped, max 10 |
-
-The catalog is applied twice: on index creation, and additively on an existing
-index (`PUT _mapping`, once per process). Without the second pass a field added
-after the index existed would be typed by the first write's dynamic mapping —
-a `keywords` array would become `text` with a `keyword` subfield, and an exact
-tag filter would silently stop matching tags the analyzer splits.
 | `source` | keyword | `tool:read_file \| experiment \| user:confirmed \| doc:*` |
 | `notes` | text | free-text qualifiers (omitted when empty; obsolete reasons appended here) |
 | `summary` | text | short table-of-contents rendering of the value; required when the value is over `summary_min_len` (see below) |
@@ -37,6 +31,12 @@ tag filter would silently stop matching tags the analyzer splits.
 | `updated_by` | keyword | self-reported label of the last writer (moves on every write) |
 | `current_ref` | keyword | id of the journal entry that carries the current value |
 | `history` | object (`enabled: false`) | **legacy** pre-journal array `[{value, observed_at, source}]` — stored, never indexed; `memento migrate-history` moves it into the journal and removes the field |
+
+The catalog is applied twice: on index creation, and additively on an existing
+index (`PUT _mapping`, once per process). Without the second pass a field added
+after the index existed would be typed by the first write's dynamic mapping —
+a `keywords` array would become `text` with a `keyword` subfield, and an exact
+tag filter would silently stop matching tags the analyzer splits.
 
 ### Key conventions
 

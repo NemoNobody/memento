@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for reporting. memento is a personal-scale tool without an SLA, but a
+        Thanks for reporting. memento is a small-team tool without an SLA, but a
         reproducible report gets fixed.
 
         Do not paste real secrets, private host names or internal URLs — the store

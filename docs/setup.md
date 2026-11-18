@@ -24,7 +24,7 @@ What `memento` expects:
 
 | What | Value |
 |---|---|
-| Version | OpenSearch 3.8.0; verified matrix 2.19.7 / 3.0.0 / 3.3.2 / 3.8.0 / 3.9.0 (rerun locally: `hack/version-matrix.sh`) |
+| Version | OpenSearch 3.8.0; tested matrix 2.19.7 / 3.0.0 / 3.3.2 / 3.8.0 / 3.9.0 — one live smoke run, with its date and caveats in [testing.md](testing.md#version-matrix--hackversion-matrixsh-2026-11-11); rerun locally with `hack/version-matrix.sh` |
 | REST API | `https://127.0.0.1:9200` — HTTPS with the bundled demo certificate is fine (`insecure_skip_verify: true`) |
 | Auth | basic auth, user `admin` |
 
@@ -309,13 +309,13 @@ What the app touches, permission by permission:
 `indices:admin/get` covers the index-existence HEAD the app runs on every
 start and the `GET /<index>` settings read behind `memento status`.
 
-If you provisioned the §7 role **before v0.7.0**, update it: journal appends
-now also require `indices:admin/create` and `indices:admin/settings/update`
-on `memento-history-*` (without them appends fail loudly with 403), and the
-docs index needs `indices:data/write/update` for re-tagging. Since **v0.8.0**
-the facts and docs patterns also need `indices:admin/settings/update`: the
-client realigns replica counts at startup, and without the permission that
-realignment is silently refused (the app treats it as best-effort).
+An older role may be missing a later permission: journal appends also need
+`indices:admin/create` and `indices:admin/settings/update` on
+`memento-history-*` (without them appends fail loudly with 403), the docs index
+needs `indices:data/write/update` for re-tagging, and since **v0.8.0** the facts
+and docs patterns also need `indices:admin/settings/update`: the client realigns
+replica counts at startup, and without the permission that realignment is
+silently refused (the app treats it as best-effort).
 
 `GET /_security/authinfo` (the authorship probe) is self-service: every
 authenticated user may call it for themselves, so no extra permission is

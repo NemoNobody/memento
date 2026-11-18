@@ -1,4 +1,4 @@
-# Snapshot location of the dev-opensearch compose (docs/dev-opensearch.md)
+# Snapshot location of the dev-opensearch compose (docs/setup.md, section 1)
 docker/os-snapshots/
 
 # Binary (the leading slash anchors this to the repo root, so a committed

@@ -73,8 +73,9 @@ jobs:
   # unlocked, and the test namespaces its entry, so nothing of the runner's is
   # touched.
   # macOS is gated: the Keychain provider is worth verifying for a release, but
-  # a macOS runner bills 10x minutes on a private repo, and every push does not
-  # need it. Run it on demand with `gh workflow run ci.yml`; releases trigger it.
+  # a macOS runner is the slowest job (10x the billed minutes), and every push
+  # does not need it. Run it on demand with `gh workflow run ci.yml`; releases
+  # trigger it.
   macos:
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
     runs-on: macos-latest

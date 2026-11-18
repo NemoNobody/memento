@@ -1,7 +1,13 @@
 # Changelog
 
-Notable changes per release tag. v0.8.0 is the first public release: it folds
-the pre-publication hardening into one baseline (earlier private tags are gone).
+Notable changes per release tag. `v0.8.0` is the first tagged baseline; the
+project was developed privately before it, so entries start there.
+
+## Unreleased
+
+Nothing yet. A change lands here while it is in review; the release commit
+moves the section under its version number (`.github/workflows/release.yml`
+reads that heading to build the release notes).
 
 ## v0.8.2 — 2026-11-19
 

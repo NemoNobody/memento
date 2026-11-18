@@ -8,8 +8,8 @@ what was run live against real clusters.
 
 - `make ci` = `go vet` + `go test ./...` + `golangci-lint` — the same gate CI
   runs on every push (`.github/workflows/ci.yml`).
-- ~340 test functions exercise the HTTP contract against a fake OpenSearch
-  (`httptest`): which endpoints are called, with what parameters and bodies —
+- more than 400 test functions exercise the HTTP contract against a fake
+  OpenSearch (`httptest`): which endpoints are called, with what parameters and bodies —
   index creation, composable journal templates, the ingest pipeline, scripted
   corrections with optimistic concurrency (`seq_no`/`primary_term`), the prune
   scripts, wildcard reads with `ignore_unavailable`, search bodies.
@@ -38,9 +38,11 @@ full infra-creation path runs) and executes the smoke above against it.
 | 3.8.0 (production) | PASS 23/23 |
 | 3.9.0 | PASS 23/23 |
 
-The run predates the guard's redaction path: the suite had 23 checks then and
-has 28 now (`hack/cli-smoke.sh` is the live count). The matrix was not re-run
-after that change.
+The run predates the guard's redaction path and the extractor rework: the suite
+had 23 checks then and has 28 now (`hack/cli-smoke.sh` is the live count). The
+matrix has not been re-run since; treat it as the compatibility floor (these
+versions work), not as a per-release verification. The unit and contract suites
+run against the mock transport on every push — that is the per-commit gate.
 
 Run it yourself: `hack/version-matrix.sh` (sequential; needs docker/podman).
 The images can also be pinned for everyday dev via `OPENSEARCH_IMAGE` in
@@ -67,9 +69,8 @@ turns on:
 - Linux: `make test-keyring` in the `build-test` job (Secret Service over D-Bus).
 - macOS: the `macos` job runs `MEMENTO_KEYRING_TEST=1 go test ./internal/keyring/`
   against the runner's login Keychain (the zalando provider: `security` CLI). It is
-  gated to tags and `workflow_dispatch`: a macOS runner bills 10x minutes on a
-  private repo, so a release check is the right cadence (`gh workflow run ci.yml`
-  forces it).
+  gated to tags and `workflow_dispatch`: a macOS runner bills 10x minutes, so a
+  release check is the right cadence (`gh workflow run ci.yml` forces it).
 - Windows: the `windows` job runs `vet`, `build`, the platform-neutral packages'
   tests and `MEMENTO_KEYRING_TEST=1 go test ./internal/keyring/` on every push —
   the Credential Manager is exercised for real (zalando -> wincred), not just

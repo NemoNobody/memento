@@ -7,13 +7,23 @@ Persistent, provenance-carrying memory for AI agents (and humans).
 ## What it is
 
 `memento` stores **facts you or an agent have verified** about your projects —
-file locations, endpoint and config values, behavior — in an OpenSearch index,
-so the same thing is not re-verified over and over. Every agent session
-relearns the same paths, ports and quirks; this stores them once, with the
-evidence and an age. The store records the
-evidence, who wrote it and when; it cannot verify anything itself. It is an
-advisory memory with an audit trail, not an oracle. Why OpenSearch and not
-files or SQL: [Storage](#storage).
+file locations, endpoint and config values, behavior — in an OpenSearch index.
+Every agent session relearns the same paths, ports and quirks; this stores them
+once, with the evidence and an age. The aim is to stop re-verifying the same
+path in every session: an agent that keeps the store in the loop (the rule file
+is [rules/memento.md](rules/memento.md)) reads the fact with its observation
+date and source, and goes back to the source only when the age says it may have
+moved. The store records that evidence, who wrote it and when; it cannot verify
+anything itself. It is an advisory memory with an audit trail, not an oracle.
+Why OpenSearch and not files or SQL: [Storage](#storage).
+
+Who it is for: one person or a small team working the same repositories
+session after session, who want one shared, inspectable store instead of a
+memory file per clone — and who already run (or don't mind running) an
+OpenSearch node. Sharing one store between sessions, machines and agents is the
+point: keys are namespaces, every write carries an author label, so two agents
+on the same project can pick up each other's facts without a human relaying
+them. If a flat `AGENTS.md` is enough, it is enough.
 
 Each fact carries evidence, not verdicts:
 
@@ -270,9 +280,9 @@ user. Options we weighed:
   we trade them for BM25, aggregations, index-per-period history and a query
   language that fits "find by summary, group by project, count by op". Value
   corrections here are last-writer-wins, not CAS ([docs/how-it-works.md](docs/how-it-works.md)).
-- **OpenSearch** (chosen) — one engine for all four questions above, already
-  running wherever the author works, and comfortable as a shared, inspectable
-  catalogue rather than a private blob. One local node is enough to start.
+- **OpenSearch** (chosen) — one engine for all four questions above, and
+  comfortable as a shared, inspectable catalogue rather than a private blob.
+  One local node is enough to start.
 
 The cost is honest: a JVM service to run and a plaintext store to protect. That
 is the deliberate trade; the security posture is below and in
