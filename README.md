@@ -8,7 +8,9 @@ Persistent, provenance-carrying memory for AI agents (and humans).
 
 `memento` stores **facts you or an agent have verified** about your projects —
 file locations, endpoint and config values, behavior — in an OpenSearch index,
-so the same thing is not re-verified over and over. The store records the
+so the same thing is not re-verified over and over. Every agent session
+relearns the same paths, ports and quirks; this stores them once, with the
+evidence and an age. The store records the
 evidence, who wrote it and when; it cannot verify anything itself. It is an
 advisory memory with an audit trail, not an oracle. Why OpenSearch and not
 files or SQL: [Storage](#storage).
@@ -91,49 +93,42 @@ Build (Go 1.26+):
 go build -o memento .
 ```
 
-Or install directly (once the module is public and tagged):
+Or install directly:
 
 ```
 go install github.com/NemoNobody/memento@latest
 ```
 
-Or grab a release binary (sha256-verified into `~/.local/bin`):
-
-```
-scripts/install.sh            # latest release; --version vX.Y.Z to pin
-```
+Or download the binary for your platform from
+[Releases](https://github.com/NemoNobody/memento/releases); with the repo
+cloned, `scripts/install.sh` picks it, verifies the sha256 and puts it in
+`~/.local/bin`.
 
 You also need a reachable OpenSearch (a single local node is enough). Quickest:
-`make dev-opensearch` runs one in a container (localhost-only, named volume —
-[docs/setup.md](docs/setup.md) §2). System install per the
-[official documentation](https://docs.opensearch.org/latest/install-and-configure/install-opensearch/index/);
-see [docs/setup.md](docs/setup.md) for what `memento` expects.
+`make dev-opensearch` runs one in a container (localhost-only, security plugin
+off, named volume — [docs/setup.md](docs/setup.md) §2). A system install follows
+the [official documentation](https://docs.opensearch.org/latest/install-and-configure/install-opensearch/index/);
+[docs/setup.md](docs/setup.md) covers what `memento` expects.
 
-Configure: copy `memento.conf.example` to `memento.conf` (or `~/.memento.conf`)
-and fill in your OpenSearch connection.
+Configure: copy `memento.conf.example` to `memento.conf` (or `~/.memento.conf`).
+Against the dev node — no TLS, security off, reachable only from this machine:
 
 ```json
 {
-  "opensearch_url": "https://127.0.0.1:9200",
-  "opensearch_user": "admin",
-  "insecure_skip_verify": false,
-  "index_name": "memento",
-  "history_index_period": "month",
-  "history_limit": 20,
-  "summary_min_len": 2000,
-  "summary_max_len": 400,
-  "secret_guard": "reject",
-  "allow_plaintext": false,
-  "docs_index_name": "memento-docs",
-  "docs_ttl_days": 90
+  "opensearch_url": "http://127.0.0.1:9200",
+  "opensearch_user": "dev",
+  "opensearch_password": "dev",
+  "allow_plaintext": true
 }
 ```
 
-Do not put `opensearch_password` in the file: store the password in the OS
-keyring with `memento creds set`, or export `OPENSEARCH_PASSWORD` in
-containers/headless setups (a plaintext file password is only read with
-`allow_plaintext: true`, off by default). For a self-signed local dev node
-set `insecure_skip_verify: true` — dev only; verification is on by default.
+Against a real cluster: `https://…`, drop `allow_plaintext`, and keep the
+password out of the file — in the OS keyring (`memento creds set`) or in
+`OPENSEARCH_PASSWORD` for containers and headless setups. A plaintext file
+password is only read when `allow_plaintext` is on, which is off by default.
+The full annotated example (index names, TTLs, fetch options) is
+`memento.conf.example`; `insecure_skip_verify: true` is for a self-signed
+local node only — verification is on by default.
 
 The index is created automatically on first use. Env vars override the file:
 `OPENSEARCH_URL`, `OPENSEARCH_USER`, `OPENSEARCH_PASSWORD`,
@@ -152,10 +147,9 @@ options (`memento fetch`): `MEMENTO_DOCS_INDEX`, `MEMENTO_DOCS_TTL_DAYS`,
 `MEMENTO_REPO_SCAN_DEPTH`.
 
 The password resolves from `OPENSEARCH_PASSWORD`, then the OS keyring (service
-`memento`, account `host[:port]`), then the config file — only when
-`allow_plaintext` is on (off by default). Store it in the keyring with
-`memento creds set` (the password is never taken from argv); in containers and
-headless setups export `OPENSEARCH_PASSWORD` instead. Check the connection:
+`memento`, account `host[:port]`), then the config file — the file only when
+`allow_plaintext` is on. `memento creds set` reads a hidden prompt (the password
+is never taken from argv). Check the connection:
 
 ```
 memento status
@@ -169,10 +163,12 @@ memento get demo:api:port
 memento search "api port"
 ```
 
-Fetch a web page into the docs index and read it back section by section:
+Fetch a web page into the docs index and read it back section by section
+(`example.com` is just a placeholder that always resolves — use the docs you
+actually read):
 
 ```
-memento fetch https://example.com/docs
+memento fetch https://example.com/
 memento doc <hash-from-output> 0
 memento docs "example"
 ```
