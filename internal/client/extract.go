@@ -29,16 +29,16 @@ const (
 var dropTags = []string{"script", "style", "noscript", "template", "svg", "select", "option", "head", "nav", "aside", "footer"}
 
 // blockTags end a text line in the extraction, approximating block layout.
-// The chrome elements are listed too: dropTags removes a well-formed one with
-// its content, but an unclosed or self-closed <nav> only loses its tag, and its
-// text must still end a line instead of merging into the previous paragraph.
+// Chrome elements (nav, aside, footer) are not listed: dropTags removes them
+// before this pass, and an unclosed one leaves a line break behind in
+// stripElements instead of merging its text into the previous paragraph.
 var blockTags = map[string]bool{
 	"p": true, "br": true, "div": true, "li": true, "ul": true, "ol": true,
 	"table": true, "tr": true, "td": true, "th": true, "pre": true,
 	"blockquote": true, "section": true, "article": true, "header": true,
-	"footer": true, "nav": true, "aside": true, "h1": true, "h2": true,
-	"h3": true, "h4": true, "h5": true, "h6": true, "dd": true, "dt": true,
-	"form": true, "figure": true, "figcaption": true, "hr": true,
+	"h1": true, "h2": true, "h3": true, "h4": true, "h5": true, "h6": true,
+	"dd": true, "dt": true, "form": true, "figure": true, "figcaption": true,
+	"hr": true,
 }
 
 // headingTags open a new section. Deep headings (h5/h6) are treated as plain
@@ -212,7 +212,10 @@ func contentSpans(lower, body string) []span {
 				}
 				accept(k, tagEnd)
 				for j := k; j < len(stack); j++ {
-					open[stack[j].name]--
+					n := stack[j].name
+					if open[n]--; open[n] <= 0 {
+						delete(open, n)
+					}
 				}
 				popTo(k)
 				break
@@ -546,7 +549,7 @@ func htmlAttrs(tag string) map[string]string {
 			}
 		default:
 			end := j
-			for end < len(rest) && rest[end] != ' ' && rest[end] != '\t' && rest[end] != '\n' {
+			for end < len(rest) && rest[end] != ' ' && rest[end] != '\t' && rest[end] != '\n' && rest[end] != '\r' {
 				end++
 			}
 			val = rest[j:end]
@@ -651,7 +654,11 @@ func stripElements(lower, body string) string {
 		if close < 0 {
 			// Self-closed or unclosed element: drop only the tag itself.
 			// Deleting the whole tail would silently lose real content —
-			// unclosed <style>/<svg> and self-closed <svg/> are common.
+			// unclosed <style>/<svg> and self-closed <svg/> are common. The
+			// newline keeps the surrounding text as separate lines: the tag that
+			// would have ended the line is gone, and without it the surviving
+			// text merges into the previous paragraph.
+			b.WriteByte('\n')
 			i = contentStart
 			continue
 		}

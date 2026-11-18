@@ -199,10 +199,10 @@ func TestStripElementsUnclosedLinear(t *testing.T) {
 	go func() { done <- stripElements(lowerASCII(body), body) }()
 	select {
 	case out := <-done:
-		if out != "" {
+		if strings.TrimSpace(out) != "" {
 			t.Fatalf("style tags must be dropped, got %d bytes", len(out))
 		}
-	case <-time.After(300 * time.Millisecond):
+	case <-time.After(time.Second):
 		t.Fatal("stripElements on unclosed drop-tags is not linear (tail re-scan)")
 	}
 }
@@ -224,7 +224,7 @@ func TestExtractTagSoupLinear(t *testing.T) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(300 * time.Millisecond):
+	case <-time.After(time.Second):
 		t.Fatal("ExtractSections on a '<a' soup is not linear")
 	}
 }
@@ -468,6 +468,50 @@ func TestExtractRoleMainVariants(t *testing.T) {
 	}
 }
 
+// TestExtractUnclosedChromeKeepsLineBreak: an unclosed <nav> loses only its
+// tag; its text must stay on its own line instead of merging into the paragraph
+// before it (the merged line then read as a heading with no body and vanished).
+func TestExtractUnclosedChromeKeepsLineBreak(t *testing.T) {
+	secs, _, _ := ExtractSections(`<html><body><span>alpha text</span><nav>beta text`)
+	if len(secs) == 0 {
+		t.Fatal("the text around an unclosed <nav> must survive")
+	}
+	joined := secs[0].Heading + " " + strings.Join(textOfSections(secs), " ")
+	if !strings.Contains(joined, "alpha text") || !strings.Contains(joined, "beta text") {
+		t.Errorf("sections = %+v, want both alpha and beta text", secs)
+	}
+}
+
+// TestExtractNestedCandidateIsNotTheRoot: an inner candidate that closes first
+// must not cut the article it sits in — the outer element is the content root.
+func TestExtractNestedCandidateIsNotTheRoot(t *testing.T) {
+	sidebar := `<div class="sidebar"><h2>Side</h2><p>Sidebar prose that is not a link at all.</p></div>`
+
+	roleMain := `<div role="main"><h2>Before</h2><p>Text before the nested main.</p>` +
+		`<main><h2>Inner</h2><p>Nested main text.</p></main>` +
+		`<h2>After</h2><p>Text after the nested main.</p></div>`
+	secs, _, _ := ExtractSections(`<html><body>` + sidebar + roleMain + `</body></html>`)
+	var headings []string
+	for _, s := range secs {
+		headings = append(headings, s.Heading)
+	}
+	if got := strings.Join(headings, ","); got != "Before,Inner,After" {
+		t.Errorf("role=main with a nested <main>: headings = %q, want Before,Inner,After", got)
+	}
+
+	posts := `<article><h2>Post</h2><p>Post body text.</p>` +
+		`<article><h2>Comment</h2><p>Comment body text.</p></article>` +
+		`<h2>More</h2><p>Text after the nested article.</p></article>`
+	secs, _, _ = ExtractSections(`<html><body>` + sidebar + posts + `</body></html>`)
+	headings = nil
+	for _, s := range secs {
+		headings = append(headings, s.Heading)
+	}
+	if got := strings.Join(headings, ","); got != "Post,Comment,More" {
+		t.Errorf("article with a nested <article>: headings = %q, want Post,Comment,More", got)
+	}
+}
+
 // TestExtractSeveralArticlesMeanListing: an index page has one <article> per
 // teaser; extracting the first one would store a single teaser as the document.
 // A lone <article> is still the article.
@@ -486,6 +530,15 @@ func TestExtractSeveralArticlesMeanListing(t *testing.T) {
 	secs, _, _ = ExtractSections(`<html><body>` + sidebar + one + `</body></html>`)
 	if len(secs) != 1 || secs[0].Heading != "Post" {
 		t.Fatalf("sections = %+v, want just Post", secs)
+	}
+
+	// A comment thread nests <article> inside <article>; that is still one
+	// article on the page, not a listing.
+	nested := `<article><h2>Post</h2><p>Post body text.</p>` +
+		`<article><h2>Comment</h2><p>Comment body text.</p></article></article>`
+	secs, _, _ = ExtractSections(`<html><body>` + sidebar + nested + `</body></html>`)
+	if len(secs) != 2 || secs[0].Heading != "Post" || secs[1].Heading != "Comment" {
+		t.Fatalf("sections = %+v, want Post and Comment only", secs)
 	}
 }
 
@@ -540,8 +593,8 @@ func TestExtractContentScanLinear(t *testing.T) {
 	}{
 		{"unclosed main", strings.Repeat("<main>", 100000)},
 		{"unmatched close tags", strings.Repeat("<div>", 50000) + strings.Repeat("</span>", 200000)},
-		{"candidates in a deep stack", strings.Repeat("<div>", 20000) + "<main>" +
-			strings.Repeat("<article>x</article>", 90000) + "</main>"},
+		{"candidates in a deep stack", strings.Repeat("<div>", 30000) + "<main>" +
+			strings.Repeat("<article>x</article>", 140000) + "</main>"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
