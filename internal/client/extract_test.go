@@ -380,11 +380,11 @@ func TestExtractStripsNavAsideFooter(t *testing.T) {
 }
 
 // TestExtractAnchorTargetDoesNotPoisonSections: <a id="x"/> is an anchor
-// target, not an opener. Counting it as one turned every following block into
-// a "link rail" and dropped real sections without a truncation flag.
+// target, not an opener. Counting it as one turned the rest of the paragraph
+// into link text and dropped a real section without a truncation flag.
 func TestExtractAnchorTargetDoesNotPoisonSections(t *testing.T) {
 	page := `<html><body>
-<h2>Install</h2><p>Run the installer and point it at the archive.<a id="after-install"/></p>
+<h2>Install</h2><p><a id="after-install"/>Run the installer and point it at the archive.</p>
 <h2>Verify</h2><p>Check that status reports the version.</p>
 <h2>Usage</h2><p>Fetch a page and read the stored sections.</p>
 </body></html>`
@@ -394,6 +394,20 @@ func TestExtractAnchorTargetDoesNotPoisonSections(t *testing.T) {
 	}
 	if secs[1].Heading != "Verify" || secs[2].Heading != "Usage" {
 		t.Errorf("headings = %q, %q; want Verify, Usage", secs[1].Heading, secs[2].Heading)
+	}
+}
+
+// TestExtractEmptyRootFallsThrough: an empty container is not the article; the
+// next candidate (here a lone <article>) still gets its turn.
+func TestExtractEmptyRootFallsThrough(t *testing.T) {
+	page := `<html><body>
+<div class="sidebar"><h2>Side</h2><p>Sidebar prose that is not a link at all.</p></div>
+<main></main>
+<article><h2>Article</h2><p>Article body text.</p></article>
+</body></html>`
+	secs, _, _ := ExtractSections(page)
+	if len(secs) != 1 || secs[0].Heading != "Article" {
+		t.Fatalf("sections = %+v, want just Article", secs)
 	}
 }
 
@@ -436,6 +450,9 @@ func TestExtractRoleMainVariants(t *testing.T) {
 	}{
 		{"spaced equals", `<div role = "main"><h2>Article</h2><p>Article text here.</p></div>`, "Article"},
 		{"token list", `<div role="main navigation"><h2>Article</h2><p>Article text here.</p></div>`, "Article"},
+		{"newline after tag name", "<div\nrole=\"main\"><h2>Article</h2><p>Article text here.</p></div>", "Article"},
+		{"tab after tag name", "<div\trole=\"main\"><h2>Article</h2><p>Article text here.</p></div>", "Article"},
+		{"boolean attribute first", `<div hidden role="main"><h2>Article</h2><p>Article text here.</p></div>`, "Article"},
 		{"data-role is not role", `<div data-role="main"><h2>Wrapper</h2><p>Wrapper prose here.</p></div>`, "Side,Wrapper"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -510,20 +527,34 @@ func TestExtractSectionCapReportsTruncation(t *testing.T) {
 	}
 }
 
-// TestExtractMainSoupLinear guards the content-root scan: a page of repeated
-// unclosed <main> once made one nesting-aware scan per candidate (measured
-// quadratic — 240 KB cost 35 s).
-func TestExtractMainSoupLinear(t *testing.T) {
-	const n = 100000
-	page := strings.Repeat("<main>", n)
-	done := make(chan struct{}, 1)
-	go func() {
-		ExtractSections(page)
-		done <- struct{}{}
-	}()
-	select {
-	case <-done:
-	case <-time.After(300 * time.Millisecond):
-		t.Fatal("ExtractSections on a '<main>' soup is not linear")
+// TestExtractContentScanLinear guards the content-root scan. Two shapes made it
+// quadratic before the guards: a run of open tags followed by unrelated close
+// tags (every close walked the stack), and a deep stack with many candidates
+// (every rejected candidate walked the stack below it). Both fit in
+// fetch_max_bytes, so both must stay linear — the quadratic version took 15 s
+// and 3.5 s on these inputs.
+func TestExtractContentScanLinear(t *testing.T) {
+	cases := []struct {
+		name string
+		page string
+	}{
+		{"unclosed main", strings.Repeat("<main>", 100000)},
+		{"unmatched close tags", strings.Repeat("<div>", 50000) + strings.Repeat("</span>", 200000)},
+		{"candidates in a deep stack", strings.Repeat("<div>", 20000) + "<main>" +
+			strings.Repeat("<article>x</article>", 90000) + "</main>"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			done := make(chan struct{}, 1)
+			go func() {
+				ExtractSections(tc.page)
+				done <- struct{}{}
+			}()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("the content scan is not linear on this input")
+			}
+		})
 	}
 }

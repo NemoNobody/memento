@@ -29,15 +29,16 @@ const (
 var dropTags = []string{"script", "style", "noscript", "template", "svg", "select", "option", "head", "nav", "aside", "footer"}
 
 // blockTags end a text line in the extraction, approximating block layout.
-// Chrome elements (nav, aside, footer) are absent: dropTags removes them before
-// this pass ever sees them.
+// The chrome elements are listed too: dropTags removes a well-formed one with
+// its content, but an unclosed or self-closed <nav> only loses its tag, and its
+// text must still end a line instead of merging into the previous paragraph.
 var blockTags = map[string]bool{
 	"p": true, "br": true, "div": true, "li": true, "ul": true, "ol": true,
 	"table": true, "tr": true, "td": true, "th": true, "pre": true,
 	"blockquote": true, "section": true, "article": true, "header": true,
-	"h1": true, "h2": true, "h3": true, "h4": true, "h5": true, "h6": true,
-	"dd": true, "dt": true, "form": true, "figure": true, "figcaption": true,
-	"hr": true,
+	"footer": true, "nav": true, "aside": true, "h1": true, "h2": true,
+	"h3": true, "h4": true, "h5": true, "h6": true, "dd": true, "dt": true,
+	"form": true, "figure": true, "figcaption": true, "hr": true,
 }
 
 // headingTags open a new section. Deep headings (h5/h6) are treated as plain
@@ -102,27 +103,30 @@ func ExtractTitle(body string) string {
 func ExtractSections(body string) (sections []model.Section, images []model.ImageRef, truncated bool) {
 	clean := stripElements(lowerASCII(body), body)
 	lower := lowerASCII(clean)
-	if rl, rb, ok := contentRoot(lower, clean); ok {
-		if secs, imgs, tr := extractFrom(lower[rl:rb], clean[rl:rb]); len(secs) > 0 {
+	for _, s := range contentSpans(lower, clean) {
+		if secs, imgs, tr := extractFrom(lower[s.start:s.end], clean[s.start:s.end]); len(secs) > 0 {
 			return secs, imgs, tr
 		}
 	}
 	return extractFrom(lower, clean)
 }
 
-// contentRoot returns the span of the page's main-content element, when the
-// markup names one: <main> first, then role="main", then a lone <article>.
+// contentSpans returns the byte spans of the page's content containers, in
+// order of preference: <main>, then role="main", then a lone <article>.
 //
 // The scan is one pass over a stack of open elements. The obvious shape — try
-// every candidate with a nesting-aware scan for its close tag — is quadratic:
-// a 240 KB page of repeated unclosed <main> cost 35 seconds of CPU (measured),
-// and fetch_max_bytes allows 2 MB.
+// every candidate with a nesting-aware scan for its close tag — is quadratic on
+// hostile input, and fetch_max_bytes allows 2 MB: a 240 KB page of repeated
+// unclosed <main> cost 35 seconds of CPU, and a deep stack of <div> followed by
+// a run of unrelated close tags cost 15 more (both measured). Hence the two
+// constant-time guards: a name that is not open cannot be closed, and "a
+// candidate is open below me" is computed once at push.
 //
 // Only the outermost candidate is taken: an inner element that closes first
-// must not cut the article it sits in. An element that never closes falls back
-// to the whole page — the safe direction, since the fallback keeps content and
-// only loses the chrome filtering.
-func contentRoot(lower, body string) (int, int, bool) {
+// must not cut the article it sits in. An element that never closes is not
+// offered at all — falling back to the whole page is the safe direction, since
+// the fallback keeps content and only loses the chrome filtering.
+func contentSpans(lower, body string) []span {
 	const (
 		classMain = iota
 		classRole
@@ -133,27 +137,45 @@ func contentRoot(lower, body string) (int, int, bool) {
 		name  string
 		pos   int
 		class int
+		// candsBelow/artsBelow are the counters at push time: recomputing a
+		// counter after popping is then a lookup of the entry below instead of
+		// a scan, and accept() answers "is an outer candidate still open?" in
+		// O(1) instead of walking the stack per candidate.
+		candsBelow int
+		artsBelow  int
 	}
 	var found [classCount]span
 	var have [classCount]bool
 	var stack []openElement
-	articles := 0
+	var open map[string]int // open counts per tag name: unmatched close tags are free
+	cands, arts, articles := 0, 0, 0
 
-	// accept records the span of a candidate that just closed, unless an outer
-	// candidate is still open (that one is the content root) or this class is
-	// already answered.
 	accept := func(idx, end int) {
 		cl := stack[idx].class
-		if cl < 0 || have[cl] {
+		// An outer candidate that is still open is the content root; this one
+		// sits inside it.
+		if cl < 0 || have[cl] || stack[idx].candsBelow > 0 {
 			return
-		}
-		for k := 0; k < idx; k++ {
-			if stack[k].class >= 0 {
-				return
-			}
 		}
 		found[cl] = span{stack[idx].pos, end}
 		have[cl] = true
+	}
+
+	popTo := func(k int) {
+		stack = stack[:k]
+		cands, arts = 0, 0
+		if k == 0 {
+			return
+		}
+		e := stack[k-1]
+		cands = e.candsBelow
+		if e.class >= 0 {
+			cands++
+		}
+		arts = e.artsBelow
+		if e.name == "article" {
+			arts++
+		}
 	}
 
 	for i := 0; i < len(lower); {
@@ -181,12 +203,19 @@ func contentRoot(lower, body string) (int, int, bool) {
 			continue
 		}
 		if isClose {
+			if open[name] == 0 {
+				continue
+			}
 			for k := len(stack) - 1; k >= 0; k-- {
-				if stack[k].name == name {
-					accept(k, tagEnd)
-					stack = stack[:k]
-					break
+				if stack[k].name != name {
+					continue
 				}
+				accept(k, tagEnd)
+				for j := k; j < len(stack); j++ {
+					open[stack[j].name]--
+				}
+				popTo(k)
+				break
 			}
 			continue
 		}
@@ -197,24 +226,39 @@ func contentRoot(lower, body string) (int, int, bool) {
 		switch {
 		case name == "main":
 			cl = classMain
-		case roleHasMain(body[p:tagEnd]):
+		case roleHasMain(lower[p:tagEnd]):
 			cl = classRole
 		case name == "article":
 			cl = classArticle
-			articles++
+			// Only a top-level <article> counts: one nested for comments is
+			// still a single-article page.
+			if arts == 0 {
+				articles++
+			}
 		}
-		stack = append(stack, openElement{name: name, pos: p, class: cl})
+		if open == nil {
+			open = map[string]int{}
+		}
+		stack = append(stack, openElement{name: name, pos: p, class: cl, candsBelow: cands, artsBelow: arts})
+		open[name]++
+		if cl >= 0 {
+			cands++
+		}
+		if name == "article" {
+			arts++
+		}
 	}
 
+	// Several <article> elements mean a listing page, not an article: one
+	// teaser is not the document.
+	var spans []span
 	for cl := classMain; cl <= classArticle; cl++ {
-		// Several <article> elements mean a listing page, not an article: one
-		// teaser is not the document.
 		if !have[cl] || (cl == classArticle && articles > 1) {
 			continue
 		}
-		return found[cl].start, found[cl].end, true
+		spans = append(spans, found[cl])
 	}
-	return 0, 0, false
+	return spans
 }
 
 // span is a byte range in a page.
@@ -223,8 +267,12 @@ type span struct{ start, end int }
 // roleHasMain reports whether the tag carries the ARIA main landmark role. The
 // attribute is parsed, not substring-matched: "data-role=main" is a different
 // attribute and "role=mainnav" a different role, and a quoted token list
-// ("main navigation") is still the main landmark.
+// ("main navigation") is still the main landmark. tag must already be
+// lowercased.
 func roleHasMain(tag string) bool {
+	if !strings.Contains(tag, "role") {
+		return false // most open tags: skip building an attribute map
+	}
 	for _, tok := range strings.Fields(htmlAttrs(tag)["role"]) {
 		if strings.EqualFold(tok, "main") {
 			return true
@@ -448,9 +496,10 @@ func imageRef(tag string) (model.ImageRef, bool) {
 // lowercased-key map. It only reads the tag, never the document.
 func htmlAttrs(tag string) map[string]string {
 	attrs := map[string]string{}
-	// Skip "<img".
+	// Skip the tag name: any whitespace ends it, not just a space (a newline or
+	// a tab after "<div" is valid markup).
 	rest := tag
-	if i := strings.IndexByte(rest, ' '); i >= 0 {
+	if i := strings.IndexAny(rest, " \t\n\r"); i >= 0 {
 		rest = rest[i+1:]
 	}
 	if i := strings.LastIndexByte(rest, '>'); i >= 0 {
@@ -460,7 +509,7 @@ func htmlAttrs(tag string) map[string]string {
 	for i := 0; i < len(rest); {
 		// key
 		j := i
-		for j < len(rest) && rest[j] != '=' && rest[j] != ' ' && rest[j] != '\t' && rest[j] != '\n' {
+		for j < len(rest) && rest[j] != '=' && rest[j] != ' ' && rest[j] != '\t' && rest[j] != '\n' && rest[j] != '\r' {
 			j++
 		}
 		key := strings.ToLower(rest[i:j])
@@ -468,16 +517,19 @@ func htmlAttrs(tag string) map[string]string {
 			i = j + 1
 			continue
 		}
-		for j < len(rest) && (rest[j] == ' ' || rest[j] == '\t' || rest[j] == '\n') {
-			j++
+		k := j
+		for k < len(rest) && (rest[k] == ' ' || rest[k] == '\t' || rest[k] == '\n' || rest[k] == '\r') {
+			k++
 		}
-		if j >= len(rest) || rest[j] != '=' {
+		if k >= len(rest) || rest[k] != '=' {
+			// A boolean attribute: the next key starts at the delimiter, not
+			// after it ("hidden role=main" must not become "ole=main").
 			attrs[key] = ""
-			i = j + 1
+			i = j
 			continue
 		}
-		j++ // past '='
-		for j < len(rest) && (rest[j] == ' ' || rest[j] == '\t' || rest[j] == '\n') {
+		j = k + 1 // past '='
+		for j < len(rest) && (rest[j] == ' ' || rest[j] == '\t' || rest[j] == '\n' || rest[j] == '\r') {
 			j++ // role = "main" is valid HTML
 		}
 		var val string
