@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
+      - name: Vet
+        run: go vet ./...
+      - name: Build
+        run: go build ./...
+      - name: Cross-compile (darwin, windows)
+        run: |
+          # The keyring dispatcher's non-linux providers (zalando) and the
+          # MCP/CLI stack must compile everywhere: release binaries ship
+          # darwin, and Windows users build from source. No tests run here.
+          GOOS=darwin GOARCH=arm64 go build ./...
+          GOOS=windows GOARCH=amd64 go build ./...
+      - name: Test
+        run: go test ./...
+      - name: Install keyring test deps
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq gnome-keyring
+      - name: Keyring integration (Secret Service)
+        run: make test-keyring
+      - name: Lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.13.2
+
+  # Windows users build from source, so the tree must build AND its
+  # platform-neutral packages must pass their tests on Windows — a
+  # cross-compile job alone cannot see a runtime difference (paths, line
+  # endings, env). The keyring provider is the Windows Credential Manager
+  # (zalando/go-keyring -> wincred); it is exercised for real here, not just
+  # compiled: a name we call "supported" has to run.
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Vet
+        run: go vet ./...
+      - name: Build
+        run: go build ./...
+      - name: Test platform-neutral packages
+        run: go test ./internal/model/ ./internal/config/ ./internal/secretguard/
+      - name: Keyring integration (Credential Manager)
+        run: go test ./internal/keyring/ -v
+        env:
+          MEMENTO_KEYRING_TEST: "1"
+
+  # macOS users get the Keychain provider (zalando/go-keyring): the only way to
+  # know it actually works there is to run it. The runner's login keychain is
+  # unlocked, and the test namespaces its entry, so nothing of the runner's is
+  # touched.
+  # macOS is gated: the Keychain provider is worth verifying for a release, but
+  # a macOS runner bills 10x minutes on a private repo, and every push does not
+  # need it. Run it on demand with `gh workflow run ci.yml`; releases trigger it.
+  macos:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Vet
+        run: go vet ./...
+      - name: Build
+        run: go build ./...
+      - name: Keyring integration (Keychain)
+        run: MEMENTO_KEYRING_TEST=1 go test ./internal/keyring/ -v

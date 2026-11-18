@@ -1,0 +1,151 @@
+# Single-node OpenSearch for development and single-machine installs.
+# podman-compose / docker compose compatible.
+#
+# Dev posture: security plugin OFF, port bound to 127.0.0.1 only. That is the
+# documented dev rule: plaintext credentials are acceptable while the node
+# cannot be reached off this machine. For anything shared, enable the security
+# plugin (demo config or real certificates) and use a real password.
+name: memento-os
+
+services:
+  opensearch:
+    # OPENSEARCH_IMAGE/OSD_IMAGE override the tags for version-matrix testing
+    # (hack/version-matrix.sh) or pinning; defaults are the verified pair.
+    image: ${OPENSEARCH_IMAGE:-opensearchproject/opensearch:3.8.0}
+    container_name: memento-opensearch
+    profiles: ["single"]
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - DISABLE_SECURITY_PLUGIN=true
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+      # snapshots land in ./os-snapshots on the host (see docs/backup.md §5:
+      # snapshot before `down`, containers lose anonymous data on prune)
+      - OPENSEARCH_PATH_REPO=/snapshots
+    volumes:
+      # named volume: survives `compose down` (anonymous volumes get pruned)
+      - memento-os-data:/usr/share/opensearch/data
+      - ./os-snapshots:/snapshots
+    ports:
+      # MEMENTO_OS_PORT lets a machine that already runs OpenSearch on 9200
+      # run the dev node side by side (e.g. MEMENTO_OS_PORT=9299 make dev-opensearch)
+      - "127.0.0.1:${MEMENTO_OS_PORT:-9200}:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health | grep -q '\"status\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+
+  # Optional UI (make dev-opensearch-dashboards). The compose profile keeps
+  # it out of the plain dev-opensearch up/down cycle: only the dashboards
+  # target pulls it in. Security plugin is off on the dev node, so the UI
+  # opens without login; bound to 127.0.0.1 like the API.
+  dashboards:
+    image: ${OSD_IMAGE:-opensearchproject/opensearch-dashboards:3.8.0}
+    container_name: memento-opensearch-dashboards
+    profiles: ["dashboards"]
+    restart: unless-stopped
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    environment:
+      - OPENSEARCH_HOSTS=["http://opensearch:9200"]
+      - DISABLE_SECURITY_DASHBOARDS_PLUGIN=true
+    ports:
+      # MEMENTO_DASH_PORT avoids a clash with an existing dashboards install
+      - "127.0.0.1:${MEMENTO_DASH_PORT:-5601}:5601"
+
+  # --- 3-node cluster (make dev-opensearch-cluster) ---
+  # Bare topology test: how memento indices, their shards and replicas live
+  # on a real cluster. Security stays off (test posture), all ports loopback.
+  #   node1: 127.0.0.1:9400  node2: 127.0.0.1:9401  node3: 127.0.0.1:9402
+  opensearch-node1: &cluster-node
+    image: ${OPENSEARCH_IMAGE:-opensearchproject/opensearch:3.8.0}
+    container_name: memento-os-node1
+    profiles: ["cluster"]
+    restart: unless-stopped
+    environment: &cluster-env
+      - cluster.name=memento-cluster
+      - node.name=opensearch-node1
+      - discovery.seed_hosts=opensearch-node1,opensearch-node2,opensearch-node3
+      - cluster.initial_cluster_manager_nodes=opensearch-node1,opensearch-node2,opensearch-node3
+      - DISABLE_SECURITY_PLUGIN=true
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+      - OPENSEARCH_PATH_REPO=/snapshots
+    volumes:
+      - memento-os-n1-data:/usr/share/opensearch/data
+      - ./os-snapshots:/snapshots
+    ports:
+      - "127.0.0.1:9400:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health | grep -q '\"status\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+
+  opensearch-node2:
+    <<: *cluster-node
+    container_name: memento-os-node2
+    environment:
+      - cluster.name=memento-cluster
+      - node.name=opensearch-node2
+      - discovery.seed_hosts=opensearch-node1,opensearch-node2,opensearch-node3
+      - cluster.initial_cluster_manager_nodes=opensearch-node1,opensearch-node2,opensearch-node3
+      - DISABLE_SECURITY_PLUGIN=true
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+      - OPENSEARCH_PATH_REPO=/snapshots
+    volumes:
+      - memento-os-n2-data:/usr/share/opensearch/data
+      - ./os-snapshots:/snapshots
+    ports:
+      - "127.0.0.1:9401:9200"
+
+  opensearch-node3:
+    <<: *cluster-node
+    container_name: memento-os-node3
+    environment:
+      - cluster.name=memento-cluster
+      - node.name=opensearch-node3
+      - discovery.seed_hosts=opensearch-node1,opensearch-node2,opensearch-node3
+      - cluster.initial_cluster_manager_nodes=opensearch-node1,opensearch-node2,opensearch-node3
+      - DISABLE_SECURITY_PLUGIN=true
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+      - OPENSEARCH_PATH_REPO=/snapshots
+    volumes:
+      - memento-os-n3-data:/usr/share/opensearch/data
+      - ./os-snapshots:/snapshots
+    ports:
+      - "127.0.0.1:9402:9200"
+
+  # --- single node WITH security (make dev-opensearch-secure) ---
+  # Auth/https smoke: demo security config is installed by the image entry
+  # point (since 2.12) using OPENSEARCH_INITIAL_ADMIN_PASSWORD, which the
+  # Makefile requires in the environment — never bake a password here.
+  # MCP/CLI side: insecure_skip_verify=true in the config for demo certs.
+  #   endpoint: https://127.0.0.1:9443
+  opensearch-secure:
+    image: ${OPENSEARCH_IMAGE:-opensearchproject/opensearch:3.8.0}
+    container_name: memento-os-secure
+    profiles: ["secure"]
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      # the make target refuses to run without the password set (compose
+      # interpolates the whole file, so no required-variable syntax here)
+      - "OPENSEARCH_INITIAL_ADMIN_PASSWORD=${MEMENTO_SECURE_DEV_PASSWORD:-}"
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+    ports:
+      - "127.0.0.1:9443:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sfk https://localhost:9200/_cluster/health | grep -q '\"status\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+
+# named volume for the data dir: must be declared at the top level,
+# compose v2 refuses services referencing undeclared volumes
+volumes:
+  memento-os-data:
+  memento-os-n1-data:
+  memento-os-n2-data:
+  memento-os-n3-data:

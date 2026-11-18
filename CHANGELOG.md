@@ -1,0 +1,390 @@
+# Changelog
+
+Notable changes per release tag. v0.8.0 is the first public release: it folds
+the pre-publication hardening into one baseline (earlier private tags are gone).
+
+## v0.8.0 — 2026-11-11
+
+First public baseline. Everything below the fold landed in the same cycle:
+append-only journal history, facts/docs split, dashboard bundle, keyring
+providers, Windows/macOS CI. Headlines of the cycle that ended here:
+
+- **categories** `recipe` (TTL 180d) and `rule` (90d); the category TTL is
+  also the cap for a writer-chosen per-fact `ttl_days`;
+- **keywords** on facts (normalized tags, exact-term filter) and an additive
+  mapping reconcile that upgrades existing indices on first use;
+- **re-verification**: `confirmed_by` (who verified the *current* value,
+  user+host per entry) plus `memento_patch reverify` → `observed_at` moves and
+  the journal gains `op=rediscovery`, so a stale fact can become fresh again;
+- **`op=retire`** marks the verified→obsolete transition in the journal;
+- **journal time windows** (`since`/`until`), `keywords` on patch;
+- **conditional GET** for the docs cache (ETag/Last-Modified → 304 keeps the
+  snapshot and moves only the timestamps);
+- **status** reports per-index sizes, replica drift and the effective fetch
+  configuration;
+- **dashboard**: docs-by-via/host/project donuts and a TTL KPI on `expires_at`;
+- **CI**: real keyring tests (Secret Service, Keychain, Credential Manager),
+  Windows job on every push, macOS job on tags/dispatch;
+- docs: advisory contract and precedence, "Not yet covered" test inventory.
+
+History journal: the in-doc `history` array is replaced by an append-only
+journal of dated indices (`<index>-history-<period-date>`, monthly by default;
+`history_index_period` config, `MEMENTO_HISTORY_PERIOD` env).
+
+- Doc-first journaling: the fact doc update lands first, the journal entry
+  is appended only once the cluster accepted the write — a refused update
+  leaves no journal trace (the entry id is preallocated and carried into the
+  update as `current_ref`). Script sources stay escape-free to match the
+  cluster painless dialect (separators arrive as params; a lint test pins
+  it). The journal is write-forever
+  (entries are never rewritten, no CAS); `history_limit` is now only the
+  default `--keep` for the manual `memento prune`.
+- New commands: `memento journal <key> [--limit N]`, `memento history-info
+  <key>`, `memento migrate-history [--project p] [--yes]` (one-time move of
+  pre-journal in-doc arrays); new MCP tools `memento_journal`,
+  `memento_history_info` (13 tools).
+- Journal infrastructure (server-clock ingest pipeline, index template) is
+  created automatically on the first accepted write. Dated indices keep old
+  periods cheap to inspect, snapshot, or delete; after an admin deletes old
+  journal indices, read counts are lower bounds.
+- Backups: snapshots must include `memento-history-*` (docs/backup.md).
+- Optional UI: `make dev-opensearch-dashboards` adds OpenSearch Dashboards to
+  the dev compose (profile-gated); `scripts/push-dashboards.sh` imports a
+  ready-made bundle (index patterns for facts/journal/docs, visualizations,
+  an overview dashboard) — idempotent. Credentials resolve wallet-first via
+  the new `memento creds get` (prints the resolved password to stdout for
+  scripted use; never argv), overridable by `DASHBOARDS_USER`/
+  `DASHBOARDS_PASSWORD`, with `~/.config/memento/dashboards.env` as the
+  headless fallback.
+
+Authorship and summary:
+- Every write is stamped with self-reported audit labels: `author` (resolved
+  from the store's security plugin, else config `author`, else the OS user),
+  `author_source` (`security`/`config`/`os`/`none`), `model`, `host`,
+  `session`. Birth labels are write-once; later writes move `updated_by`.
+  Journal entries carry the writer who appended them.
+- Long values stay skimmable: a value over `summary_min_len` (default 2000)
+  requires a `summary` (CLI `--summary`, MCP `summary`) capped at
+  `summary_max_len` (default 400). The rule covers accepted values; notes
+  touches of old long facts are never rejected. `memento_search` matches
+  summaries: the search fields are value, notes and summary.
+- Config keys `author`/`model`/`host`/`session`/`summary_min_len`/
+  `summary_max_len`; env `MEMENTO_AUTHOR`/`MEMENTO_MODEL`/`MEMENTO_HOST`/
+  `MEMENTO_SESSION`/`MEMENTO_SUMMARY_MIN_LEN`/`MEMENTO_SUMMARY_MAX_LEN`.
+  `memento status` reports the effective author and its chain.
+
+MCP ergonomics (context economy, partial updates, batch):
+- `memento_list` is **compact by default** (`compact: false` restores full
+  rows) and **sorted by `updated_at` desc** by default (`sort: "key"` for the
+  old stable order). A compact row carries key/summary/category/status/
+  notes-head/age; the full value is one `memento_get` away (~5x tokens saved
+  on the most expensive call in a session). `memento_keys` is always compact.
+  **Breaking** for clients relying on full rows / key order.
+- New `memento_patch`: partial update of an existing fact — value, summary,
+  source, notes replace, atomic `notes_append` (dated line, applied
+  server-side so concurrent writers cannot drop a note), status flip
+  (a transition is journaled; obsolete→verified sets `observed_at=now`;
+  `reason` goes with obsolete). On a value change the old summary is cleared
+  unless a new one is provided (a stale table of contents is a lie).
+- New `memento_add_batch` (1..10 facts per call, the session-end ritual in
+  one round-trip): per-item guard and `confirm_secret`, duplicate keys
+  rejected, partial success reported per item.
+- New `memento_patch_batch` (1..10 patches per call): the same batch shape
+  and per-item contract as `memento_add_batch`, `memento_patch` field
+  semantics per item (never creates).
+- `memento_get` accepts `keys: [...]` (up to 10) for batch reads
+  (`items[]` with per-key `found`).
+- `memento_add` answers say what happened: `created`, `changed` (false =
+  same-value touch) and `previous_summary` (the superseded table of
+  contents). `memento_obsolete`/status flips are journaled (audit symmetry).
+- `memento_search_docs` hits carry the MATCHED section (`section: {order,
+  heading, snippet}` centered on the match) — `memento_get_doc(section=order)`
+  reads it in full; doc-level snippet remains the fallback.
+- `memento_search`/`memento_list` zero-hit answers carry a navigation `hint`;
+  `memento_search` is **compact by default** (`compact: false` restores full
+  rows; a hit's summary is the table of contents, the value is one
+  `memento_get` away). **Breaking** for clients relying on full search rows.
+- `memento_status` reports `mcp_version`, `commit`, `started_at` (the running
+  binary, not the repo on disk); `version` renamed to `opensearch_version`.
+  **Breaking** for clients reading `version`.
+- Keys are trimmed at every edge (add/patch/get/keys/journal/obsolete/prune;
+  the batch dupe check uses the trimmed key): `" k "` and `"k"` never become
+  two docs. A compact answer never ships history (full rows only).
+- Answers say what the write did: a same-value touch (`memento_add`/
+  `memento_patch` with `changed: false`) carries a `note` spelling out that
+  only notes/source moved — `observed_at`, age and the journal untouched. The
+  batch answers add summary counters (`created`/`changed`/`touched`).
+- Reads carry `age_hours` next to `age_days`: a fresh fact with `age_days: 0`
+  can be 1 hour or 23 hours old, and the trust decision depends on it.
+- 16 MCP tools.
+
+Fetch guard triage and fetch v1 fixes:
+- The secret guard now grades findings: `high` (vendor prefixes, PEM blocks,
+  basic-auth URLs, `Bearer`, assignments with a 20+ char multi-class secret) vs
+  `medium` (long hex/base64, weak assignments like `password = someVarName`).
+  On fetched pages: high-confidence shapes in agent-visible fields are REDACTED
+  in place (marker `[memento-redacted:pattern]`) and the page is stored — the
+  answer lists `redactions` (field/pattern/size, no preview) plus a `warning`;
+  redaction runs before `size`/`content_hash`, so metadata matches the stored
+  text. Medium findings in visible text route on the stored `content_type`:
+  documentation types (html/markdown/plain) keep the page and surface
+  `guard_medium_ignored: N` (CLI outline, MCP field) — refusing on asset
+  hashes and quoted SHAs made documentation unreadable; API types
+  (`application/json|xml`, `+json`/`+xml`) still refuse the write (confirmable
+  at `ask`, no bypass at `reject`).
+  The URL and the post-redirect `final_url` are scanned high-confidence only
+  (identity fields: a git SHA in a GitHub path is ordinary; a
+  credential-bearing redirect target refuses the doc); image hrefs are
+  redacted in place; the credential-assignment rule reads quoted JSON/YAML
+  config lines (`"api_key": "S3cr3t"`); the agent-supplied `project` tag is
+  guard-scanned on every write path (facts and docs — for cached docs at the
+  call, the re-tag path never sees the content guard).
+- The stored raw HTML is redacted with the high-confidence set, twice: the
+  second pass closes the common overlap-tail case (a span starting inside an
+  earlier replacement; the marker rule refuses a right-hand side starting with
+  `[`, so the pair is a fixed point). A greedy span can still swallow a scheme
+  prefix — the residual exposure is disk-only, the stored HTML is never served
+  to agents. Its redactions join the audit trail as field `html`.
+- `memento obsolete` refuses a reason on an already-obsolete fact (mirrors
+  `memento_patch`): the journal skips a re-retire, so notes must not grow an
+  audit line the journal never recorded.
+- Keys, project labels and doc hashes are trimmed at every CLI and MCP edge
+  (`add`, `get`, `obsolete`, `prune`, `journal`, `history-info`, `list`,
+  `search`, `keys --match/--project`, `doc`; MCP read filters and the MCP
+  project default included) — a padded filter never answers a silent zero.
+- A same-value `add` on an obsolete fact resurrects it with a journal entry
+  and moves `observed_at` (the Patch resurrect rule kept symmetric): the
+  status flip is never silent. The MCP `memento_obsolete` guard now scans the
+  key as well as the reason (CLI parity).
+- Retire reasons fold to one line in notes (whitespace runs → single spaces):
+  the audit trail stays one event per line.
+- Render env-proxy hardening: the proxy Go's environment machinery produced
+  is validated as a parsed struct — a malformed env proxy normalized so the
+  credentials hide in the path is refused, and no `@` ever reaches obscura's
+  argv (`/proc`-visible): the `@`/`%40` path check guards both the config and
+  the env branch, and the SSRF pre-check is documented as guarding the
+  requested URL only (obscura follows redirects itself — run it behind a
+  proxy for per-hop policy).
+- `add` never erases a stored `source` with an empty one (the notes rule):
+  the qualifier is not kept in history on the touch path, so the wipe would
+  be irreversible; a correction replaces source only when one is given.
+- The guard's `redactions` audit lists only the spans the text actually lost
+  (a match folded into an overlapping one is no longer reported), and the
+  double redaction pass now covers every agent-visible field, not just the
+  stored HTML.
+- SSRF tunnels: the NAT64 well-known prefix (`64:ff9b::/96`, and its local
+  `/48` variant `64:ff9b:1::/48`) is decoded to its embedded IPv4 like 6to4
+  and Teredo already were; arbitrary RFC 6052 prefixes stay a documented
+  residual.
+- A correction journals the MERGED accepted state (the new value with the
+  stored `source`/`notes` when the request left them empty): the journal
+  entry and the doc never disagree about the qualifiers. The entry also
+  repeats the doc's write-once `project` (a correction with the default
+  `global` no longer journals a project the fact never had), and a
+  resurrected fact journals the canonicalized category the doc received.
+  `memento keys "k *"` normalizes to `k` once (the guard-checked prefix is
+  what the wire sees), `memento_list`/`memento_search`/`memento_keys` and the
+  CLI `search`/`keys` validate status (and `search --limit >= 0`) before any
+  store contact (`prune` resolves `keep` from the local config before building
+  the client too), and `memento status`'s env list is now pinned against the
+  loader's source (the "kept in sync" comment is a test, not a promise).
+  `memento_patch` answers its shape errors (nothing to change, a bogus
+  `status`, a `reason` without `status=obsolete`) before any store contact
+  too — one exported validator, one contract on both edges. Fact search
+  (`memento_search`, `memento search`) refuses an empty query up-front like
+  `memento_search_docs` does: a silent zero is not an answer.
+- `memento keys` shape errors answer before any store contact: a prefix that
+  normalizes to empty (" " or "*") with no `--match` is a caller error, not
+  a wrapped "the store is unreachable" advisory. `memento fetch --project`
+  and `memento docs --project` are trimmed like every other edge, `memento
+  status` lists the render env overrides (`MEMENTO_FETCH_RENDER`,
+  `MEMENTO_FETCH_OBSCURA_PATH`, `MEMENTO_FETCH_OBSCURA_STEALTH`), and
+  `memento prune` on legacy keys reports the actually removed count instead
+  of a pre-read guess.
+
+- Default fetch User-Agent is a desktop Chrome string (sites 403 known bot
+  UAs; override with `fetch_user_agent`/`MEMENTO_FETCH_USER_AGENT`).
+- 429 is treated as an IP ban: with `fetch_proxy_fallback` the proxy is a new
+  IP; without a proxy, one polite retry after a short pause. `Retry-After` is
+  not honored (a hostile server could park the client).
+- `text/markdown` / `text/x-markdown` responses extract as plain text (raw
+  README endpoints are documentation); the request Accept advertises it.
+- New config keys `fetch_render` (`off`|`obscura`, default `off`),
+  `fetch_obscura_path` (default `obscura`), `fetch_obscura_stealth`
+  (default `true`); env `MEMENTO_FETCH_RENDER`, `MEMENTO_FETCH_OBSCURA_PATH`,
+  `MEMENTO_FETCH_OBSCURA_STEALTH`.
+
+Named-hash context exemption:
+- The three generic token shapes (`long-hex`, `long-base64`,
+  `long-opaque-token`) are skipped when a word NAMES them within 40 bytes
+  (`sha256:`, `md5`, `hash`, `digest`, `checksum`, `revision`, `rev`,
+  `commit`, `hex`, `git`, `blob`, `tree`, `tag`, `sum`): a hash the author
+  labels is a content fingerprint, not a credential. Vendor-prefixed shapes
+  and the assignment rule never take the exemption (a labeled secret stays
+  a secret; a real credential beside "commit" still meets the assignment
+  rule). Applies uniformly to fact writes and fetched pages.
+- Documents store `content_type` (the server media type), the input the
+  fetch guard routes on.
+
+JS rendering (opt-in, obscura):
+- `fetch_render: "obscura"` adds a browser-render fallback for fetches refused
+  the way bot walls refuse (network failures, 403/422/429 — NOT 404/401, not
+  allowlist refusals, redirect limits, oversize): the URL goes to the
+  [obscura](https://github.com/h4ckf0r0day/obscura) headless browser
+  (Chrome-shaped stealth TLS/HTTP2 fingerprint), and the rendered HTML flows
+  through the same extract + guard + store pipeline; the doc is stored
+  `via: obscura`. Render failures surface BOTH reasons (plain + renderer).
+- Third-party by design: ~75 MB binary, executes page JS locally, linux
+  x86_64 glibc 2.35+. `make obscura` installs the sha256-pinned 0.2.6
+  stealth build into `~/.local/bin`. The renderer is serialized (one render
+  at a time, cancel-aware); `robots.txt` (when respected) gates both paths;
+  the renderer keeps the operator's egress — `fetch_proxy_url` is validated
+  at config load (every command fails on a bad value: the proxy is a route,
+  not a fetch decoration), the environment proxy (`HTTP_PROXY`) is consulted
+  for the render target too, and a proxy that cannot be forwarded
+  (credentials, a scheme-less value) is a load error: the render never runs
+  direct behind it (argv hygiene: a credential proxy is never forwarded to
+  the subprocess); a typo in `fetch_render` is a loud startup error.
+- SSRF: a **direct** render resolves the target through the same public-address
+  rule as the plain fetch and refuses internal addresses (the render is the
+  SSRF gate for its own route; `fetch_allow_private` opens it). With a proxy
+  the proxy enforces the policy. Known limit: obscura follows redirects on
+  its own, and a DNS-rebinding window between the pre-check and obscura's
+  dial remains — run the renderer behind a proxy for policy-enforced egress.
+- v1 limits: rendered docs store `final_url` = the requested URL (the dump
+  mode does not report redirects); success = exit 0 + non-empty dump.
+  README “JS rendering” and docs/setup.md §8.
+- Docs: least-privilege store user guide for clusters with the security
+  plugin (role/user/role-mapping recipes; the app role cannot delete the
+  facts index; `indices:admin/get` + per-pattern create/settings/update
+  actions included, with an upgrade note for roles provisioned before
+  this release), linked from SECURITY.md.
+
+Fixed:
+- `memento_obsolete` (CLI and MCP) writes are scripted: the reason appends
+  inside the painless script, so a concurrent atomic `notes_append` can no
+  longer be dropped by the read-modify-write from the stale read (the
+  contract `memento_patch` already had). A `reason` with `memento_patch` on
+  an already-obsolete fact is refused (it would append a duplicate line with
+  no journal entry).
+- Journal infrastructure: a failed first install (403, network blip) is
+  no longer remembered as "installed" — appends retry it until it lands,
+  so a long-lived MCP server never journals without the template and the
+  server-clock pipeline. Journal indices created while that was broken are
+  healed: before appending, the app pins the ts pipeline on the index
+  (idempotent settings PUT), so entries never sort as the oldest and
+  become the first prune victims.
+- `memento migrate-history` reruns are safe after a partial failure:
+  entries are appended under content-derived ids, so the rerun collides
+  with (and skips) what the previous run wrote instead of duplicating;
+  a racing write's `current_ref` is never overwritten.
+- `prune`: a transient fact-read failure aborts the prune instead of
+  silently deleting the entry that carries the current value.
+- Journal reads order by the store clock (`ingest_at`), not the writers'.
+- Correction journal entries carry the fact's real `fact_id`.
+- Negative `MEMENTO_SUMMARY_MIN_LEN`/`MEMENTO_SUMMARY_MAX_LEN` are
+  rejected (they silently disabled the corresponding check); blank
+  author labels are a loud config error, not a silent OS-user fallback.
+- `list`/`search` lines show the summary (the table of contents
+  contract); `get` shows a summary line; author labels are quoted in
+  `get`/`journal`/`status` and stripped of non-printable characters.
+
+Hardening (pre-release):
+- SSRF: IPv4-compatible `::/96` addresses (`::127.0.0.1`, `::169.254.169.254`)
+  are decoded by hand and blocked (`To4()` only understands `::ffff/96`); a
+  policy refusal (allowlist / public-address rule) is FINAL — the proxy
+  fallback never re-tries a refused URL through `fetch_proxy_url`;
+  stored docs drop image references aimed at internal hosts (self-hosted
+  docs keep them under `fetch_allow_private`); `robots.txt` rules honor
+  RFC 9309 `*` and `$`; the obscura child environment drops every
+  `MEMENTO_*`/`OPENSEARCH_*` variable and sandboxes HOME.
+- Config refuses silent erosion: `MEMENTO_FETCH_HOSTS` set but naming zero
+  hosts, `docs_ttl_days < 0`, and an `opensearch_url` without a host are
+  load errors.
+- Keyring (native Linux provider): upsert is create-then-delete — a
+  cancelled prompt or dropped RPC can no longer destroy the stored
+  credential; duplicate entries are picked deterministically and healed by
+  the next write.
+- Author labels are stripped of invisible Unicode (C1 controls, zero-width
+  spaces, bidi overrides), not just C0/DEL.
+- `memento get --history` fetches the newest journal entries for
+  journal-era facts (the flag used to print nothing); `memento search
+  --limit` clamps to the navigation cap with a note; every rendered
+  timestamp says UTC (`Z`), unset times say `unknown`; a same-value touch
+  says the passed summary was ignored.
+- Exit codes: missing key is 3 (`get`/`obsolete`/`prune`), general errors
+  stay 1 — scripts can tell "no such fact" from "store down".
+- MCP write failures classify honestly: local contract rejections
+  (summary bounds, re-retiring with a reason) and a missing key answer as
+  themselves, no fake availability advice over a healthy store; search and
+  navigation answers carry exact match counts (`track_total_hits`);
+  journal reads count undecodable entries (`skipped`) instead of dropping
+  them silently.
+- Docs: clock synchronization is stated as the operational prerequisite of
+  period-based journal pruning (entry routing follows the writer clock).
+- `memento migrate-history` converges on stores past the navigation cap:
+  the scan filter (needs-migration) moved server-side, so capped pages no
+  longer walk past already-migrated facts and re-report the same head.
+- Concurrent-write honesty: snapshot-derived writes (the same-value touch,
+  the resurrect, the retirement, the status flip) are conditioned on the
+  document version pair (`if_seq_no`/`if_primary_term`); a concurrent write
+  that landed since the read fails as a named conflict — "re-read and
+  retry" — instead of silently clobbering it. Value corrections stay
+  last-write-wins (both writers journal; the audit stays truthful).
+- Keyring upsert no longer sweeps the just-saved secret away when the kept
+  item carries a bogus resource path (multiple matches now say so).
+- A JSON body served with no declared Content-Type is refused, not parsed
+  as a page (an API error blob would have been stored as a document).
+- `memento_list` requires a project (cross-project navigation is
+  `memento_keys`); stored text can no longer forge terminal layout —
+  control and invisible format characters are stripped when CLI output
+  prints fact values, summaries and notes.
+- `robots.txt` groups with several consecutive `User-agent:` lines are
+  kept whole, and when one agent appears in several groups their rules are
+  COMBINED per RFC 9309 2.2.1 (first-wins and last-wins both silently
+  dropped half of the file's stated policy).
+- The birth link (`current_ref` for a freshly created fact) is CAS-conditioned
+  on the version pair returned by the create itself — no re-read window where
+  a concurrent writer could slip between the read and the link.
+- Batch answers are honest about partial success: per-item flags carry the
+  accepted write beside its lagged-journal error, and the aggregate counters
+  (created/changed/touched) count exactly what landed — a summary can no
+  longer contradict the rows it summarizes.
+- Conflict classification answers from either error shape the client can produce
+  (a middlebox-rewritten 409 included), is gated to real 409s, and refuses the
+  index-creation-race signature wherever the engine leaves it — top level,
+  root_cause, or a caused_by chain; success-by-collision is limited to
+  content-derived deterministic journal ids, so a collision over a fresh uuid
+  ref surfaces as a lagged entry, never as a clean success with a dangling
+  `current_ref`.
+
+- `memento docs` / `memento_search_docs` on a store without any fetched page
+  returned an `index_not_found` error; the docs index is created lazily on the
+  first fetch, so an absent index now reads as an empty result (same posture as
+  journal wildcard reads).
+- Replica counts now follow the topology as a steady-state property, not just
+  at index creation: on startup the client re-checks the facts/docs indices,
+  every existing history period index and the journal template, and corrects
+  drift (`PUT _settings` / template re-PUT).
+  A single-node install that later grows into a cluster self-heals instead of
+  staying unreplicated. In auto mode nothing is written when the health probe
+  fails — an unknown topology is never "fixed" toward 0; an explicit
+  `index_replicas` value is now enforced on existing indices too. The
+  journal-template reader parses the nested settings shape OpenSearch actually
+  returns (the flat-key form never matched, so the template re-PUT never fired),
+  reconcile now claims one pass per store per process (a long-lived MCP server
+  builds a fresh client per call), a health probe reporting zero data nodes is
+  treated as unknown, and the shared-store DLS recipe is honored end to end: a
+  403 reading the pipeline/template or pinning the journal pipeline is taken as
+  "externally managed infra" instead of failing the write.
+- Verified version matrix: the live CLI smoke (`hack/cli-smoke.sh`, 23 checks)
+  passes on OpenSearch 2.19.7, 3.0.0, 3.3.2, 3.8.0 and 3.9.0
+  (`hack/version-matrix.sh`); `OPENSEARCH_IMAGE`/`OSD_IMAGE` can pin the dev
+  stack images. What is covered is now written down in `docs/testing.md`. The
+  matrix runs under its own compose project (`-p memento-matrix`) and asserts
+  the reported version matches the tag, so it can neither wipe a developer's
+  `memento-os` data volume nor score a PASS against the wrong image.
+- `scripts/install.sh`: release installer (latest or `--version`, os/arch
+  detection, sha256 verification against the release `checksums.txt`, installs
+  into `~/.local/bin`).
+- Community files: `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, issue templates.

@@ -1,0 +1,59 @@
+name: Feature request or feedback
+description: A capability you are missing, or how memento works for your workflow
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        One form for both: a concrete feature ask and "here is how I use it, this
+        part hurts" are the same conversation. The second kind is often more
+        useful — it tells where the tool actually sits in a workflow.
+
+        Scope note: memento is verified memory over OpenSearch (facts + provenance +
+        journal + a fetched-docs cache). Storage backends other than OpenSearch and
+        secret storage are out of scope; see README "Design posture".
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and where does memento get in the way? Describe the workflow, not only the missing command.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed shape (optional)
+      description: A command, tool parameter or behavior you have in mind. Sketches are fine.
+    validations:
+      required: false
+  - type: textarea
+    id: usage
+    attributes:
+      label: How you use memento (optional)
+      description: |
+        Single agent or several? One machine or a shared store? Facts only, or the docs cache too?
+        This shapes priorities more than the number of votes.
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - facts store (add/search/list/journal)
+        - docs cache (fetch/get_doc)
+        - dashboard
+        - MCP server / agent integration
+        - install / packaging / platform
+        - documentation
+        - other
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I checked the roadmap/docs for this being a deliberate non-goal (e.g. semantic search is intentionally out of scope).
+          required: false

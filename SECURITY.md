@@ -1,0 +1,28 @@
+# Security policy
+
+## Reporting a vulnerability
+
+Please do not open a public issue for security problems.
+
+Use GitHub's private reporting: **Security → Report a vulnerability** on this
+repository, or open a draft advisory at
+`https://github.com/NemoNobody/memento/security/advisories/new`. You will get a
+response within a few days.
+
+## Scope and notes
+
+- `memento` stores facts in **plaintext by design**. A best-effort secret
+  guard (default mode `reject`) scans writes and refuses credential-shaped
+  values, but it is not protection: "Never store secrets" remains a rule for
+  agents (see the README). Reports about the store not being encrypted are by
+  design.
+- Relevant areas: credential handling (`memento.conf`, environment variables),
+  the MCP server (stdio), request construction to OpenSearch, and anything that
+  could leak a secret into logs or outputs.
+- The OpenSearch cluster itself is out of scope — report those to the OpenSearch
+  project or your cluster operator.
+- On a shared cluster, run `memento` as a least-privilege store user: the
+  recipes (role, user, role mapping) are in
+  [docs/setup.md](docs/setup.md) §7. The role deliberately cannot delete the
+  facts index; authorship labels stamped on writes come from the account the
+  server authenticates.
