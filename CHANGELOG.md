@@ -3,7 +3,7 @@
 Notable changes per release tag. v0.8.0 is the first public release: it folds
 the pre-publication hardening into one baseline (earlier private tags are gone).
 
-## v0.8.2 — 2026-11-18
+## v0.8.2 — 2026-11-19
 
 Extraction stores the article, not the site around it.
 
