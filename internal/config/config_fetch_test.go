@@ -24,8 +24,8 @@ func TestDefaultConfigFetchFields(t *testing.T) {
 	if cfg.FetchUserAgent == "" {
 		t.Error("FetchUserAgent must have a default")
 	}
-	if cfg.FetchRespectRobots {
-		t.Error("FetchRespectRobots must default to off (user-initiated fetches)")
+	if !cfg.FetchRespectRobots {
+		t.Error("FetchRespectRobots must default to on: the store fetches for every session, and opting out per site is one config line")
 	}
 	if cfg.FetchProxyFallback {
 		t.Error("FetchProxyFallback must default to off")

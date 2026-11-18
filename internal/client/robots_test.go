@@ -191,6 +191,7 @@ func TestCheckRobots(t *testing.T) {
 	off := config.DefaultConfig()
 
 	off.FetchAllowPrivate = true
+	off.FetchRespectRobots = false
 	off.FetchUserAgent = "memento/test"
 	if err := CheckRobots(ctx, off, srv.URL+"/secret"); err != nil {
 		t.Errorf("robots off: %v", err)

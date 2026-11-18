@@ -5,7 +5,7 @@
 # which is exactly what we want to verify). Sequential on purpose — the
 # versions must not run simultaneously.
 #
-# Needs docker/podman access (on this machine: sg docker -c ...).
+# Needs docker/podman access (e.g. `sg docker -c ...` where the user is not in the group).
 # Port 9299 by default so a host running OpenSearch on 9200 is not clashed.
 # A dedicated project name (-p) keeps this matrix off the dev stack's
 # project/volume: the compose file pins `name: memento-os`, and an unqualified

@@ -1,8 +1,9 @@
 # Snapshot location of the dev-opensearch compose (docs/dev-opensearch.md)
 docker/os-snapshots/
 
-# Binary
-memento
+# Binary (the leading slash anchors this to the repo root, so a committed
+# `memento` directory further down the tree is not caught)
+/memento
 
 # Config (contains auth)
 memento.conf

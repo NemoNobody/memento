@@ -795,7 +795,7 @@ func TestObsoleteKeepsValueAndAppendsReason(t *testing.T) {
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected"}`
 	})
 
-	if err := c.Obsolete(context.Background(), "k", "file deleted"); err != nil {
+	if err := c.Obsolete(context.Background(), "k", "file deleted", nil); err != nil {
 		t.Fatalf("Obsolete: %v", err)
 	}
 
@@ -843,7 +843,7 @@ func TestObsoleteMissingFactIsNotFound(t *testing.T) {
 		return http.StatusNotFound, `{"status":404,"error":"document_missing_exception"}`
 	})
 
-	err := c.Obsolete(context.Background(), "nope", "")
+	err := c.Obsolete(context.Background(), "nope", "", nil)
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("err = %v, want ErrNotFound", err)
 	}

@@ -22,7 +22,7 @@
   "fetch_proxy_url": "",
   "fetch_proxy_fallback": false,
   "fetch_allow_private": false,
-  "fetch_respect_robots": false,
+  "fetch_respect_robots": true,
   "fetch_render": "off",
   "fetch_obscura_path": "obscura",
   "fetch_obscura_stealth": true,

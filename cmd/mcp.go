@@ -128,8 +128,9 @@ func runMCPServer(confPath string) error {
 			"require a summary (kept under summary_max_len): it is the " +
 			"store's table of contents. For cheap partial updates (dated note, " +
 			"status flip) use memento_patch — no value resend. Never store " +
-			"secrets (passwords, tokens, keys): the store is plaintext and a " +
-			"secret_guard rejects credential-like text on writes.",
+			"secrets (passwords, tokens, keys): the store is plaintext and the " +
+			"secret_guard refuses credential shapes and redacts heuristic hits " +
+			"(the answer lists redactions) on writes.",
 	}, s.add)
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -325,27 +326,28 @@ func newConfirmerViews(in []model.Confirmer) []confirmerView {
 // compact view is a table of contents (key, summary, state, age), the full
 // value is one memento_get away.
 type factView struct {
-	Key          string          `json:"key" jsonschema:"stable fact key, e.g. proj:foo:loc:bar.py"`
-	Value        string          `json:"value,omitempty" jsonschema:"the fact itself (compact mode: only a 100-rune head when the fact has no summary)"`
-	Category     string          `json:"category" jsonschema:"location | config | endpoint | behavior | context_map | recipe | rule"`
-	Project      string          `json:"project" jsonschema:"project name, or 'global'"`
-	Status       string          `json:"status" jsonschema:"verified | obsolete"`
-	Source       string          `json:"source" jsonschema:"where it came from, e.g. tool:read_file, doc:README, user:confirmed"`
-	Summary      string          `json:"summary,omitempty" jsonschema:"short table-of-contents rendering of the value; required for values over summary_min_len"`
-	Author       string          `json:"author,omitempty" jsonschema:"who recorded the fact (self-reported label, not authentication); the author_source field names the chain that produced it"`
-	AuthorSource string          `json:"author_source,omitempty" jsonschema:"security | config | os | none — which chain link named the author"`
-	UpdatedBy    string          `json:"updated_by,omitempty" jsonschema:"self-reported label of the last writer; the birth author fields are write-once"`
-	Notes        string          `json:"notes,omitempty" jsonschema:"qualifiers: what was checked, how far, caveats (compact mode: first 100 runes)"`
-	Keywords     []string        `json:"keywords,omitempty" jsonschema:"normalized tags (lowercase single tokens); the keyword filter of memento_search matches these exactly"`
-	ObservedAt   string          `json:"observed_at" jsonschema:"RFC3339 when the current value was observed"`
-	TTLDays      int             `json:"ttl_days,omitempty" jsonschema:"per-fact staleness override in days, when the writer chose one (otherwise the category default: config/endpoint 14, location/behavior 30, recipe 180, rule 90, context_map never)"`
-	AgeDays      int             `json:"age_days" jsonschema:"whole days since the observation; -1 when observed_at is unknown"`
-	AgeHours     int             `json:"age_hours" jsonschema:"whole hours since the observation; -1 when observed_at is unknown (0 age_days can mean 1 hour or 23 — hours disambiguate fresh facts)"`
-	Stale        bool            `json:"stale" jsonschema:"true when age passes the effective TTL (the per-fact ttl_days override when set, otherwise the category default: config/endpoint 14d, location/behavior 30d, recipe 180d, rule 90d, context_map never) — re-verify against the source before trusting"`
-	History      []historyView   `json:"history,omitempty" jsonschema:"previous observations, oldest first; present only when include_history=true"`
-	ConfirmedBy  []confirmerView `json:"confirmed_by,omitempty" jsonschema:"who has verified the CURRENT value, creator first (author+host identifies the confirmer; at is when). A value change resets the set; the journal has every confirmation event"`
-	CreatedAt    string          `json:"created_at,omitempty" jsonschema:"RFC3339 creation time (dropped in compact mode)"`
-	UpdatedAt    string          `json:"updated_at" jsonschema:"RFC3339 last update time; a same-value touch moves it (age/stale do not)"`
+	Key          string            `json:"key" jsonschema:"stable fact key, e.g. proj:foo:loc:bar.py"`
+	Value        string            `json:"value,omitempty" jsonschema:"the fact itself (compact mode: only a 100-rune head when the fact has no summary)"`
+	Category     string            `json:"category" jsonschema:"location | config | endpoint | behavior | context_map | recipe | rule"`
+	Project      string            `json:"project" jsonschema:"project name, or 'global'"`
+	Status       string            `json:"status" jsonschema:"verified | obsolete"`
+	Source       string            `json:"source" jsonschema:"where it came from, e.g. tool:read_file, doc:README, user:confirmed"`
+	Summary      string            `json:"summary,omitempty" jsonschema:"short table-of-contents rendering of the value; required for values over summary_min_len"`
+	Author       string            `json:"author,omitempty" jsonschema:"who recorded the fact (self-reported label, not authentication); the author_source field names the chain that produced it"`
+	AuthorSource string            `json:"author_source,omitempty" jsonschema:"security | config | os | none — which chain link named the author"`
+	UpdatedBy    string            `json:"updated_by,omitempty" jsonschema:"self-reported label of the last writer; the birth author fields are write-once"`
+	Notes        string            `json:"notes,omitempty" jsonschema:"qualifiers: what was checked, how far, caveats (compact mode: first 100 runes)"`
+	Keywords     []string          `json:"keywords,omitempty" jsonschema:"normalized tags (lowercase single tokens); the keyword filter of memento_search matches these exactly"`
+	Redactions   []model.Redaction `json:"redactions,omitempty" jsonschema:"spans the write-time secret guard replaced before storing (field, pattern, chars — never the text): the stored value is SHORTER than the one written, so a reader must not take it for the complete claim"`
+	ObservedAt   string            `json:"observed_at" jsonschema:"RFC3339 when the current value was observed"`
+	TTLDays      int               `json:"ttl_days,omitempty" jsonschema:"per-fact staleness override in days, when the writer chose one (otherwise the category default: config/endpoint 14, location/behavior 30, recipe 180, rule 90, context_map never)"`
+	AgeDays      int               `json:"age_days" jsonschema:"whole days since the observation; -1 when observed_at is unknown"`
+	AgeHours     int               `json:"age_hours" jsonschema:"whole hours since the observation; -1 when observed_at is unknown (0 age_days can mean 1 hour or 23 — hours disambiguate fresh facts)"`
+	Stale        bool              `json:"stale" jsonschema:"true when age passes the effective TTL (the per-fact ttl_days override when set, otherwise the category default: config/endpoint 14d, location/behavior 30d, recipe 180d, rule 90d, context_map never) — re-verify against the source before trusting"`
+	History      []historyView     `json:"history,omitempty" jsonschema:"previous observations, oldest first; present only when include_history=true"`
+	ConfirmedBy  []confirmerView   `json:"confirmed_by,omitempty" jsonschema:"who has verified the CURRENT value, creator first (author+host identifies the confirmer; at is when). A value change resets the set; the journal has every confirmation event"`
+	CreatedAt    string            `json:"created_at,omitempty" jsonschema:"RFC3339 creation time (dropped in compact mode)"`
+	UpdatedAt    string            `json:"updated_at" jsonschema:"RFC3339 last update time; a same-value touch moves it (age/stale do not)"`
 }
 
 // rfc3339OrEmpty formats t for the MCP contract, or returns "" when t is the
@@ -395,6 +397,7 @@ func newFactView(f model.Fact, includeHistory, compact bool) factView {
 		UpdatedBy:    f.UpdatedBy,
 		Notes:        f.Notes,
 		Keywords:     f.Keywords,
+		Redactions:   f.Redactions,
 		ConfirmedBy:  newConfirmerViews(f.ConfirmedBy),
 		ObservedAt:   rfc3339OrEmpty(f.ObservedAt),
 		TTLDays:      f.TTLDays,
@@ -744,6 +747,11 @@ type addOutput struct {
 	// it, created=false+changed=false reads like a no-op and agents mis-age
 	// the fact.
 	Note string `json:"note,omitempty" jsonschema:"what exactly this write did when the shape alone does not say (same-value touch: observed_at and age keep counting, notes/source moved only; resurrect: an obsolete fact re-declared alive)"`
+	// Redactions names every span the secret guard replaced before storing
+	// (field, detector pattern, size — never the text). Non-empty means the
+	// stored value is SHORTER than the one written: the flag is not noise, it
+	// tells the caller the claim lost a piece.
+	Redactions []model.Redaction `json:"redactions,omitempty" jsonschema:"spans the secret guard replaced before storing (field, pattern, chars); the stored value is shorter than the one written"`
 }
 
 func (s *mcpServer) add(ctx context.Context, req *mcp.CallToolRequest, in addInput) (*mcp.CallToolResult, addOutput, error) {
@@ -798,15 +806,22 @@ func (s *mcpServer) addOne(ctx context.Context, cfg *config.Config, c *client.Cl
 	// rejected even when OpenSearch is down. The project label is agent-supplied
 	// identity text stored in the shared index (the fetch path gates it the same
 	// way) — the default "global" is inert.
-	if err := guardCheck(cfg.SecretGuard, in.ConfirmSecret,
-		guardField{Name: "key", Text: in.Key},
-		guardField{Name: "value", Text: in.Value},
-		guardField{Name: "project", Text: in.Project},
-		guardField{Name: "notes", Text: in.Notes},
-		guardField{Name: "summary", Text: in.Summary},
-		guardField{Name: "keywords", Text: strings.Join(in.Keywords, " ")},
-		guardField{Name: "source", Text: in.Source}); err != nil {
-		return addOutput{}, err
+	//
+	// Identity fields (key, project, source, tags) can only refuse: rewriting a
+	// span there would silently change what the fact IS. Text fields may come
+	// back shortened (a medium-confidence heuristic hit is replaced, not fatal),
+	// and the audit of what was cut travels with the stored fact.
+	kwForGuard := strings.Join(in.Keywords, " ")
+	redactions, gErr := guardSanitize(cfg.SecretGuard, in.ConfirmSecret,
+		identityField("key", &in.Key),
+		textField("value", &in.Value),
+		identityField("project", &in.Project),
+		textField("notes", &in.Notes),
+		textField("summary", &in.Summary),
+		identityField("keywords", &kwForGuard),
+		identityField("source", &in.Source))
+	if gErr != nil {
+		return addOutput{}, gErr
 	}
 	if cErr != nil {
 		return addOutput{}, cErr
@@ -821,6 +836,7 @@ func (s *mcpServer) addOne(ctx context.Context, cfg *config.Config, c *client.Cl
 	f := model.NewFact(in.Key, in.Value, in.Category, in.Project, in.Source, in.Notes)
 	f.Summary = in.Summary
 	f.TTLDays = in.TTLDays
+	f.Redactions = redactions
 	// Normalized at the edge as well as in the client: the error must name the
 	// tool call, and client.Add re-normalizes for the CLI path.
 	kw, kwErr := model.NormalizeKeywords(in.Keywords)
@@ -838,12 +854,12 @@ func (s *mcpServer) addOne(ctx context.Context, cfg *config.Config, c *client.Cl
 		// output next to item.Error, where they are visible. Do not "simplify"
 		// this away: the batch answer would silently zero what did store.
 		if res.Created || res.Changed {
-			return addOutput{Key: in.Key, Created: res.Created, Changed: res.Changed, Status: f.Status}, writeFailure("memento_add", err)
+			return addOutput{Key: in.Key, Created: res.Created, Changed: res.Changed, Status: f.Status, Redactions: redactions}, writeFailure("memento_add", err)
 		}
 		return addOutput{}, writeFailure("memento_add", err)
 	}
 	out := addOutput{Key: in.Key, Created: res.Created, Changed: res.Changed,
-		Status: f.Status, PreviousSummary: res.PreviousSummary}
+		Status: f.Status, PreviousSummary: res.PreviousSummary, Redactions: redactions}
 	if !res.Created && !res.Changed {
 		out.Note = "same-value touch: observed_at and the journal untouched, the fact keeps aging (re-verify when stale); notes/source moved only"
 		if in.Summary != "" {
@@ -882,6 +898,10 @@ type addBatchItem struct {
 	// failure). Partial success is legal: OpenSearch writes are per-doc, and
 	// a batch transaction would be a fiction.
 	Error string `json:"error,omitempty" jsonschema:"this item's failure (guard/validation/store); other items were processed regardless"`
+	// Redactions is memento_add's audit per item: the stored value lost a
+	// flagged span. The batch answer must carry it — the per-item outcome is
+	// the only place a caller can see that a write landed shortened.
+	Redactions []model.Redaction `json:"redactions,omitempty" jsonschema:"spans the secret guard replaced before storing (see memento_add)"`
 }
 
 func (s *mcpServer) addBatch(ctx context.Context, req *mcp.CallToolRequest, in addBatchInput) (*mcp.CallToolResult, addBatchOutput, error) {
@@ -915,7 +935,7 @@ func (s *mcpServer) addBatch(ctx context.Context, req *mcp.CallToolRequest, in a
 		res, err := s.addOne(ctx, cfg, c, cErr, it)
 		// The echo carries the TRIMMED key: it is what the store holds, and a
 		// caller reconciling answers against the store must not miss on " k ".
-		item := addBatchItem{Key: strings.TrimSpace(it.Key), Created: res.Created, Changed: res.Changed, Status: res.Status}
+		item := addBatchItem{Key: strings.TrimSpace(it.Key), Created: res.Created, Changed: res.Changed, Status: res.Status, Redactions: res.Redactions}
 		if err != nil {
 			// Label the item, not the single-add tool: an agent reading a
 			// batch answer must not conclude memento_add itself broke.
@@ -965,6 +985,8 @@ type patchOutput struct {
 	Status     string `json:"status" jsonschema:"status of the fact after the patch"`
 	Reverified bool   `json:"reverified,omitempty" jsonschema:"true when the patch re-confirmed the value in place (observed_at moved, op=rediscovery journaled, value unchanged)"`
 	Note       string `json:"note,omitempty" jsonschema:"set on a qualifier-only touch: observed_at and age untouched, the journal not appended"`
+	// Redactions: see memento_add — the stored value lost a flagged span.
+	Redactions []model.Redaction `json:"redactions,omitempty" jsonschema:"spans the secret guard replaced before storing (see memento_add)"`
 }
 
 func (s *mcpServer) patch(ctx context.Context, req *mcp.CallToolRequest, in patchInput) (*mcp.CallToolResult, patchOutput, error) {
@@ -1014,24 +1036,30 @@ func (s *mcpServer) patchOne(ctx context.Context, cfg *config.Config, c *client.
 	if in.Key == "" {
 		return patchOutput{}, errors.New("memento_patch: key is required")
 	}
-	fields := patchFields(in)
-	if err := client.ValidatePatchFields(fields); err != nil {
+	// Shape first, on the text as written: a malformed patch is the caller's
+	// problem and must be answered before the guard rewrites anything.
+	if err := client.ValidatePatchFields(patchFields(in)); err != nil {
 		return patchOutput{}, err
 	}
 	// Every provided field is user-supplied text on a write path — the guard
 	// covers all of them, notes_append and reason included (a secret can
-	// arrive in a dated note as easily as in a value).
-	if err := guardCheck(cfg.SecretGuard, in.ConfirmSecret,
-		guardField{Name: "key", Text: in.Key},
-		guardField{Name: "value", Text: in.Value},
-		guardField{Name: "summary", Text: in.Summary},
-		guardField{Name: "notes", Text: in.Notes},
-		guardField{Name: "notes_append", Text: in.NotesAppend},
-		guardField{Name: "source", Text: in.Source},
-		guardField{Name: "keywords", Text: strings.Join(in.Keywords, " ")},
-		guardField{Name: "reason", Text: in.Reason}); err != nil {
-		return patchOutput{}, err
+	// arrive in a dated note as easily as in a value). Same split as add:
+	// identity fields refuse, text fields may come back shortened.
+	kwForGuard := strings.Join(in.Keywords, " ")
+	redactions, gErr := guardSanitize(cfg.SecretGuard, in.ConfirmSecret,
+		identityField("key", &in.Key),
+		textField("value", &in.Value),
+		textField("summary", &in.Summary),
+		textField("notes", &in.Notes),
+		textField("notes_append", &in.NotesAppend),
+		identityField("source", &in.Source),
+		identityField("keywords", &kwForGuard),
+		textField("reason", &in.Reason))
+	if gErr != nil {
+		return patchOutput{}, gErr
 	}
+	fields := patchFields(in)
+	fields.Redactions = redactions
 	if cErr != nil {
 		return patchOutput{}, cErr
 	}
@@ -1056,7 +1084,7 @@ func (s *mcpServer) patchOne(ctx context.Context, cfg *config.Config, c *client.
 		}
 		return patchOutput{}, writeFailure("memento_patch", err)
 	}
-	out := patchOutput{Key: in.Key, Changed: res.Changed, Status: res.Status, Reverified: res.Reverified}
+	out := patchOutput{Key: in.Key, Changed: res.Changed, Status: res.Status, Reverified: res.Reverified, Redactions: redactions}
 	if !res.Changed {
 		out.Note = "qualifier-only touch: observed_at and the journal untouched, the fact keeps aging (re-verify when stale)"
 	}
@@ -1080,11 +1108,12 @@ type patchBatchOutput struct {
 }
 
 type patchBatchItem struct {
-	Key        string `json:"key" jsonschema:"the item's key"`
-	Changed    bool   `json:"changed" jsonschema:"see memento_patch"`
-	Reverified bool   `json:"reverified,omitempty" jsonschema:"see memento_patch"`
-	Status     string `json:"status,omitempty" jsonschema:"status of the fact after the patch"`
-	Error      string `json:"error,omitempty" jsonschema:"this item's failure (guard/validation/store); other items were processed regardless"`
+	Key        string            `json:"key" jsonschema:"the item's key"`
+	Changed    bool              `json:"changed" jsonschema:"see memento_patch"`
+	Reverified bool              `json:"reverified,omitempty" jsonschema:"see memento_patch"`
+	Status     string            `json:"status,omitempty" jsonschema:"status of the fact after the patch"`
+	Error      string            `json:"error,omitempty" jsonschema:"this item's failure (guard/validation/store); other items were processed regardless"`
+	Redactions []model.Redaction `json:"redactions,omitempty" jsonschema:"spans the secret guard replaced before storing (see memento_add)"`
 }
 
 func (s *mcpServer) patchBatch(ctx context.Context, req *mcp.CallToolRequest, in patchBatchInput) (*mcp.CallToolResult, patchBatchOutput, error) {
@@ -1113,7 +1142,7 @@ func (s *mcpServer) patchBatch(ctx context.Context, req *mcp.CallToolRequest, in
 	out := patchBatchOutput{Items: make([]patchBatchItem, 0, len(in.Items))}
 	for i, it := range in.Items {
 		res, err := s.patchOne(ctx, cfg, c, cErr, it)
-		item := patchBatchItem{Key: strings.TrimSpace(it.Key), Changed: res.Changed, Status: res.Status, Reverified: res.Reverified}
+		item := patchBatchItem{Key: strings.TrimSpace(it.Key), Changed: res.Changed, Status: res.Status, Reverified: res.Reverified, Redactions: res.Redactions}
 		if err != nil {
 			// Batch label, same as memento_add_batch: the item failed, not
 			// the single-patch tool.
@@ -1278,6 +1307,8 @@ type obsoleteInput struct {
 type obsoleteOutput struct {
 	Key    string `json:"key" jsonschema:"the key that was marked obsolete"`
 	Status string `json:"status" jsonschema:"the new status"`
+	// Redactions: see memento_add — the stored reason text lost a flagged span.
+	Redactions []model.Redaction `json:"redactions,omitempty" jsonschema:"spans the secret guard replaced before storing (see memento_add)"`
 }
 
 func (s *mcpServer) obsolete(ctx context.Context, req *mcp.CallToolRequest, in obsoleteInput) (*mcp.CallToolResult, obsoleteOutput, error) {
@@ -1294,23 +1325,26 @@ func (s *mcpServer) obsolete(ctx context.Context, req *mcp.CallToolRequest, in o
 	}
 	// The CLI edge scans key+reason; the MCP edge must not be the narrower
 	// gate (a credential-shaped key reaches the shared index via MCP only).
-	if err := guardCheck(cfg.SecretGuard, in.ConfirmSecret,
-		guardField{Name: "key", Text: in.Key},
-		guardField{Name: "reason", Text: in.Reason}); err != nil {
-		return nil, obsoleteOutput{}, err
+	// Key is identity (rename it), the reason is text: a heuristic hit there is
+	// redacted and the retirement proceeds, the same policy as add/patch.
+	redactions, gErr := guardSanitize(cfg.SecretGuard, in.ConfirmSecret,
+		identityField("key", &in.Key),
+		textField("reason", &in.Reason))
+	if gErr != nil {
+		return nil, obsoleteOutput{}, gErr
 	}
 	c, err := s.clientFromConfig(ctx, cfg)
 	if err != nil {
 		return nil, obsoleteOutput{}, storeError("memento_obsolete", err)
 	}
-	err = c.Obsolete(ctx, in.Key, in.Reason)
+	err = c.Obsolete(ctx, in.Key, in.Reason, redactions)
 	if errors.Is(err, client.ErrNotFound) {
 		return nil, obsoleteOutput{}, fmt.Errorf("no fact with key %q: nothing to mark obsolete", in.Key)
 	}
 	if err != nil {
 		return nil, obsoleteOutput{}, writeFailure("memento_obsolete", err)
 	}
-	return nil, obsoleteOutput{Key: in.Key, Status: "obsolete"}, nil
+	return nil, obsoleteOutput{Key: in.Key, Status: "obsolete", Redactions: redactions}, nil
 }
 
 type pruneInput struct {
@@ -1410,21 +1444,22 @@ type journalInput struct {
 }
 
 type journalEntryView struct {
-	FactKey      string    `json:"fact_key" jsonschema:"the fact key this entry observes"`
-	FactID       string    `json:"fact_id,omitempty" jsonschema:"stable fact identity the entry belongs to"`
-	Project      string    `json:"project,omitempty" jsonschema:"project of the entry"`
-	Category     string    `json:"category,omitempty" jsonschema:"category at the time of the entry"`
-	Op           string    `json:"op" jsonschema:"write (an accepted value) | rediscovery (a re-confirmation of the same value) | retire (verified→obsolete transition)"`
-	Value        string    `json:"value" jsonschema:"the accepted value at that moment"`
-	Notes        string    `json:"notes,omitempty" jsonschema:"notes shipped with the write"`
-	Source       string    `json:"source,omitempty" jsonschema:"source shipped with the write"`
-	Keywords     []string  `json:"keywords,omitempty" jsonschema:"tag set as of this accepted value (a tag-only change is a touch, so the previous set stays in the last entry that carried it)"`
-	CreatedAt    time.Time `json:"created_at" jsonschema:"writer-side observation time (UTC)"`
-	Author       string    `json:"author,omitempty" jsonschema:"who appended this entry (self-reported label)"`
-	AuthorSource string    `json:"author_source,omitempty" jsonschema:"security | config | os | none for this writer"`
-	Model        string    `json:"model,omitempty" jsonschema:"model label of this writer"`
-	Host         string    `json:"host,omitempty" jsonschema:"host label of this writer"`
-	Session      string    `json:"session,omitempty" jsonschema:"agent session label of this writer"`
+	FactKey      string            `json:"fact_key" jsonschema:"the fact key this entry observes"`
+	FactID       string            `json:"fact_id,omitempty" jsonschema:"stable fact identity the entry belongs to"`
+	Project      string            `json:"project,omitempty" jsonschema:"project of the entry"`
+	Category     string            `json:"category,omitempty" jsonschema:"category at the time of the entry"`
+	Op           string            `json:"op" jsonschema:"write (an accepted value) | rediscovery (a re-confirmation of the same value) | retire (verified→obsolete transition)"`
+	Value        string            `json:"value" jsonschema:"the accepted value at that moment"`
+	Notes        string            `json:"notes,omitempty" jsonschema:"notes shipped with the write"`
+	Source       string            `json:"source,omitempty" jsonschema:"source shipped with the write"`
+	Keywords     []string          `json:"keywords,omitempty" jsonschema:"tag set as of this accepted value (a tag-only change is a touch, so the previous set stays in the last entry that carried it)"`
+	Redactions   []model.Redaction `json:"redactions,omitempty" jsonschema:"spans the write-time secret guard replaced in this version (see memento_add)"`
+	CreatedAt    time.Time         `json:"created_at" jsonschema:"writer-side observation time (UTC)"`
+	Author       string            `json:"author,omitempty" jsonschema:"who appended this entry (self-reported label)"`
+	AuthorSource string            `json:"author_source,omitempty" jsonschema:"security | config | os | none for this writer"`
+	Model        string            `json:"model,omitempty" jsonschema:"model label of this writer"`
+	Host         string            `json:"host,omitempty" jsonschema:"host label of this writer"`
+	Session      string            `json:"session,omitempty" jsonschema:"agent session label of this writer"`
 }
 
 func newJournalEntryViews(entries []model.JournalEntry) []journalEntryView {
@@ -1433,8 +1468,9 @@ func newJournalEntryViews(entries []model.JournalEntry) []journalEntryView {
 		views = append(views, journalEntryView{
 			FactKey: e.FactKey, FactID: e.FactID, Project: e.Project, Category: e.Category,
 			Op: e.Op, Value: e.Value, Notes: e.Notes, Source: e.Source, CreatedAt: e.CreatedAt,
-			Keywords: e.Keywords,
-			Author:   e.Author, AuthorSource: e.AuthorSource, Model: e.Model,
+			Keywords:   e.Keywords,
+			Redactions: e.Redactions,
+			Author:     e.Author, AuthorSource: e.AuthorSource, Model: e.Model,
 			Host: e.Host, Session: e.Session,
 		})
 	}

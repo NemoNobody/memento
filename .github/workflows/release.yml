@@ -3,10 +3,19 @@ name: Release
 # Cutting a tag (make release VERSION=vX.Y.Z) builds release binaries for the
 # supported platforms and publishes them as a GitHub release. On a private
 # repository the release is private too.
+#
+# The workflow can also be dispatched by hand for an existing tag: that is the
+# repair path when a release exists without binaries or a publish run failed
+# (see CONTRIBUTING, "Releases").
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Existing tag to publish, e.g. v0.8.1"
+        required: true
 
 permissions:
   contents: write
@@ -16,6 +25,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.version || github.ref }}
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -23,10 +34,13 @@ jobs:
       - name: Test
         run: go test ./...
       - name: Build
+        env:
+          VERSION: ${{ inputs.version || github.ref_name }}
         run: |
           set -euo pipefail
-          VERSION="${GITHUB_REF_NAME}"
-          COMMIT="${GITHUB_SHA:0:7}"
+          # The tag commit, not the default-branch head: a dispatched run starts
+          # from a branch, the binaries must still name the tagged commit.
+          COMMIT="$(git rev-parse --short HEAD)"
           LDFLAGS="-s -w -X github.com/NemoNobody/memento/internal/version.Version=${VERSION} -X github.com/NemoNobody/memento/internal/version.Commit=${COMMIT}"
           for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
             os="${target%/*}"; arch="${target#*/}"
@@ -39,14 +53,41 @@ jobs:
       - name: Publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version || github.ref_name }}
         run: |
           set -euo pipefail
-          VERSION="${GITHUB_REF_NAME}"
+          # A dispatched run takes the tag from an input: validate it before any
+          # GitHub write (a branch name here would make `gh release create`
+          # invent a tag from it).
+          if ! printf '%s' "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "version must be vX.Y.Z or vX.Y.Z-suffix, got: $VERSION"
+            exit 1
+          fi
+          # A suffixed tag (v1.0.0-rc1) is a pre-release: say so on the release.
+          prerelease=()
+          case "$VERSION" in *-*) prerelease=(--prerelease) ;; esac
           # Release notes come from the CHANGELOG section for this tag
-          # ("## v0.6.0 — ..."); fall back to generated notes if absent.
-          awk -v v="$VERSION" '$0 ~ "^## "v {p=1; print; next} /^## / {p=0} p {print}' CHANGELOG.md > notes.md
-          if [ -s notes.md ]; then
-            gh release create "$VERSION" dist/* --title "$VERSION" --notes-file notes.md
+          # ("## v0.8.1 — ..."). The trailing space keeps v0.8.1 from matching
+          # the v0.8.10 header.
+          awk -v v="$VERSION" 'index($0, "## " v " ") == 1 {p=1; print; next} /^## / {p=0} p {print}' CHANGELOG.md > notes.md
+          # The release may already exist — created by hand, or by an earlier
+          # run of this job. Upload into it instead of failing on "already
+          # exists": a release with notes and no binaries is a broken release.
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            gh release upload "$VERSION" dist/* --clobber
+            if [ -s notes.md ]; then
+              # A hand-made release may carry stale notes: the changelog is the
+              # authority once this job publishes the binaries.
+              gh release edit "$VERSION" --notes-file notes.md
+            fi
+            # Independent of the notes: a suffixed tag must be marked even when
+            # that tag has no changelog section (an unmarked rc can win the
+            # "latest release" slot over a stable one).
+            if [ "${#prerelease[@]}" -gt 0 ]; then
+              gh release edit "$VERSION" "${prerelease[@]}"
+            fi
+          elif [ -s notes.md ]; then
+            gh release create "$VERSION" dist/* --title "$VERSION" --notes-file notes.md --verify-tag "${prerelease[@]}"
           else
-            gh release create "$VERSION" dist/* --generate-notes
+            gh release create "$VERSION" dist/* --generate-notes --verify-tag "${prerelease[@]}"
           fi

@@ -381,6 +381,10 @@ func (c *Client) EnsureIndex(ctx context.Context) error {
 // 'memento migrate-history' moves it.
 const addCorrectionScript = `
 ctx._source.value = params.value;
+// The guard audit describes the value: a clean correction clears the rows of
+// the value it replaced (a stale audit would claim a loss that did not happen).
+if (params.redactions != null) { ctx._source.redactions = params.redactions; }
+else { ctx._source.remove("redactions"); }
 ctx._source.category = params.category;
 if (params.ttl_days != null) { ctx._source.ttl_days = params.ttl_days; }
 if (params.keywords != null) { ctx._source.keywords = params.keywords; }
@@ -415,6 +419,27 @@ type AddResult struct {
 	// correction (changed=true), and a correction over an obsolete fact
 	// hides the status transition entirely.
 	Resurrected bool
+}
+
+// redactionsForFields keeps the audit rows of the fields this write stores. A
+// field the write drops (a summary on a same-value touch) must not claim a loss
+// that never landed, and a field the caller did not touch must not inherit
+// another field's rows.
+func redactionsForFields(rows []model.Redaction, fields ...string) []model.Redaction {
+	if len(rows) == 0 || len(fields) == 0 {
+		return nil
+	}
+	keep := make(map[string]bool, len(fields))
+	for _, f := range fields {
+		keep[f] = true
+	}
+	out := make([]model.Redaction, 0, len(rows))
+	for _, r := range rows {
+		if keep[r.Field] {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // Add stores a fact under its key. Three cases: the key is new (created, then
@@ -551,6 +576,17 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 		// Only the explicit dead state resurrects (a status-less legacy doc
 		// is not "dead": it stays a plain touch).
 		resurrect := existing.Status == "obsolete"
+		// The audit follows the fields this write actually stores. A same-value
+		// touch never writes the summary (it is dropped, see the write edge), so
+		// only notes can contribute rows; and because the touch OVERWRITES notes,
+		// the stored notes row is dropped even when the new note is clean (a stale
+		// row would claim a loss that no longer exists). Rows of the value survive.
+		var touchFields []string
+		if f.Notes != "" {
+			touchFields = append(touchFields, "notes")
+		}
+		touchRows := redactionsForFields(f.Redactions, touchFields...)
+		mergedRows := model.MergeRedactions(existing.Redactions, touchFields, touchRows)
 		var entry *model.JournalEntry
 		var ref string
 		doc := map[string]interface{}{
@@ -577,6 +613,9 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 			stated.Category = f.Category
 			if f.Notes != "" {
 				stated.Notes = f.Notes
+			}
+			if len(touchFields) > 0 || len(touchRows) > 0 {
+				stated.Redactions = mergedRows
 			}
 			if len(f.Keywords) > 0 {
 				stated.Keywords = f.Keywords
@@ -606,6 +645,11 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 		}
 		if f.Notes != "" {
 			doc["notes"] = f.Notes
+		}
+		if len(touchFields) > 0 || len(touchRows) > 0 {
+			// The note was rewritten (or a span in it was cut): the stored notes
+			// row must follow, and rows of the value it sits next to stay.
+			doc["redactions"] = mergedRows
 		}
 		body, _ := json.Marshal(map[string]interface{}{
 			"doc": doc,
@@ -686,6 +730,12 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 	if len(f.Keywords) > 0 {
 		kwParam = f.Keywords
 	}
+	// nil when the guard cut nothing: the script removes the field, so a clean
+	// value never inherits the audit of the value it replaced.
+	var redactionsParam interface{}
+	if len(f.Redactions) > 0 {
+		redactionsParam = f.Redactions
+	}
 
 	body, _ := json.Marshal(map[string]interface{}{
 		"script": map[string]interface{}{
@@ -696,6 +746,9 @@ func (c *Client) Add(ctx context.Context, f *model.Fact) (AddResult, error) {
 				"category": f.Category,
 				"ttl_days": ttlParam,
 				"keywords": kwParam,
+				// Redactions of the value being stored: nil clears the audit of the
+				// value it replaces.
+				"redactions": redactionsParam,
 				// A new value is verified only by its writer: the set resets.
 				"confirmed_by": []model.Confirmer{c.resolveAuthor(ctx).confirmer(f.ObservedAt)},
 				"observed_at":  f.ObservedAt.UTC().Format(time.RFC3339),
@@ -745,6 +798,7 @@ func (c *Client) newJournalEntryFor(ctx context.Context, f *model.Fact, factID s
 	}
 	e := model.NewJournalEntry(f.Key, factID, f.Project, f.Category, model.OpWrite, f.Value, f.Notes, f.Source, ts)
 	e.Keywords = f.Keywords
+	e.Redactions = f.Redactions
 	c.resolveAuthor(ctx).applyTo(e)
 	return e
 }
@@ -971,13 +1025,18 @@ if (params.reason_append != null) {
   String n = ctx._source.notes == null ? "" : ctx._source.notes.toString();
   ctx._source.notes = n.isEmpty() ? params.reason_append : n + params.nsep + params.reason_append;
 }
+if (params.redactions != null) { ctx._source.redactions = params.redactions; }
 ctx._source.status = params.status;
 ctx._source.current_ref = params.current_ref;
 ctx._source.updated_at = params.updated_at;
 ctx._source.updated_by = params.updated_by;
 `
 
-func (c *Client) Obsolete(ctx context.Context, key, reason string) error {
+// Obsolete retires a fact. redactions is the write-time secret-guard audit of
+// the reason text: a redacted reason lands in notes, and the rows travel with
+// the fact (merged with the current value's audit, which the retirement does
+// not rewrite).
+func (c *Client) Obsolete(ctx context.Context, key, reason string, redactions []model.Redaction) error {
 	existing, seqNo, primaryTerm, err := c.getFactVersion(ctx, key)
 	if err != nil {
 		return fmt.Errorf("obsolete fact: %w", err)
@@ -1003,10 +1062,15 @@ func (c *Client) Obsolete(ctx context.Context, key, reason string) error {
 	// stays truthful about the events even then).
 	notes := appendNote(existing.Notes, reason)
 	currentRef := existing.CurrentRef
+	// The audit of the stored value survives a retirement: only the reason text
+	// may add rows (an appended reason accumulates — the earlier text is still
+	// in the notes).
+	mergedRedactions := model.MergeRedactions(existing.Redactions, nil, redactions)
 	var entry *model.JournalEntry
 	if existing.Status != "obsolete" {
 		stated := *existing
 		stated.Notes = notes
+		stated.Redactions = mergedRedactions
 		// Doc-first: the entry is built and its id preallocated here, the
 		// entry itself is indexed only after the transition is accepted.
 		entry = c.newJournalEntryFor(ctx, &stated, existing.FactID, time.Now().UTC())
@@ -1028,6 +1092,9 @@ func (c *Client) Obsolete(ctx context.Context, key, reason string) error {
 	}
 	if reason != "" {
 		params["reason_append"] = reason
+	}
+	if len(redactions) > 0 {
+		params["redactions"] = mergedRedactions
 	}
 	body, _ := json.Marshal(map[string]interface{}{
 		"script": map[string]interface{}{
@@ -1091,6 +1158,10 @@ type PatchFields struct {
 	// It cannot be combined with a value or status change — those are other
 	// events (and both reset the confirmation set).
 	Reverify bool
+	// Redactions is the write-time secret-guard audit for the value this patch
+	// stores (see model.Fact). A value change replaces the audit: the old rows
+	// described the old value. Non-value patches leave the stored audit alone.
+	Redactions []model.Redaction
 }
 
 // PatchResult reports what the patch did.
@@ -1110,6 +1181,8 @@ type PatchResult struct {
 // (the correction script's notes handling has the same property by design).
 const patchScript = `
 if (params.value != null) { ctx._source.value = params.value; }
+if (params.redactions != null) { ctx._source.redactions = params.redactions; }
+else if (params.redactions_clear) { ctx._source.remove("redactions"); }
 if (params.summary != null) { ctx._source.summary = params.summary; }
 if (params.notes != null) { ctx._source.notes = params.notes; }
 if (params.notes_append != null) {
@@ -1271,6 +1344,36 @@ func (c *Client) Patch(ctx context.Context, key string, p PatchFields) (PatchRes
 
 	now := time.Now().UTC()
 	currentRef := existing.CurrentRef
+	// The audit rows this write lands. A value change REPLACES the set (a clean
+	// value clears it — stale rows would describe text that no longer exists);
+	// a qualifier-only write MERGES its rows in, so the audit of the value it
+	// sits next to stays true.
+	var qualifierRedactions []model.Redaction
+	var replacedFields []string
+	if !valueChanged {
+		if p.Summary != "" {
+			replacedFields = append(replacedFields, "summary")
+		}
+		if p.Notes != "" {
+			replacedFields = append(replacedFields, "notes")
+		}
+		// Appended text adds rows instead of replacing them, but it is scanned
+		// only when the patch actually appends it.
+		scanFields := append([]string(nil), replacedFields...)
+		if p.NotesAppend != "" {
+			scanFields = append(scanFields, "notes_append")
+		}
+		if p.Reason != "" {
+			scanFields = append(scanFields, "reason")
+		}
+		qualifierRedactions = redactionsForFields(p.Redactions, scanFields...)
+	}
+	effectiveRedactions := existing.Redactions
+	if valueChanged {
+		effectiveRedactions = p.Redactions
+	} else if len(replacedFields) > 0 || len(qualifierRedactions) > 0 {
+		effectiveRedactions = model.MergeRedactions(existing.Redactions, replacedFields, qualifierRedactions)
+	}
 	var entry *model.JournalEntry
 	if valueChanged || statusChanged || p.Reverify {
 		stated := *existing
@@ -1288,6 +1391,10 @@ func (c *Client) Patch(ctx context.Context, key string, p PatchFields) (PatchRes
 		if len(p.Keywords) > 0 {
 			// The snapshot states the tag set the doc will hold.
 			stated.Keywords = p.Keywords
+		}
+		if valueChanged || len(replacedFields) > 0 || len(qualifierRedactions) > 0 {
+			// The entry states the text it records, audit included.
+			stated.Redactions = effectiveRedactions
 		}
 		// Doc-first: the entry is built and its id preallocated here, the
 		// entry itself is indexed only after the update is accepted.
@@ -1315,21 +1422,23 @@ func (c *Client) Patch(ctx context.Context, key string, p PatchFields) (PatchRes
 	}
 
 	params := map[string]interface{}{
-		"value":         nil,
-		"summary":       nil,
-		"notes":         nil,
-		"notes_append":  nil,
-		"reason_append": nil,
-		"source":        nil,
-		"ttl_days":      nil,
-		"keywords":      nil,
-		"confirmed_by":  nil,
-		"confirmer":     nil,
-		"status":        nil,
-		"observed_at":   nil,
-		"current_ref":   nil,
-		"updated_at":    now.Format(time.RFC3339),
-		"updated_by":    c.resolveAuthor(ctx).Author,
+		"value":            nil,
+		"redactions":       nil,
+		"redactions_clear": false,
+		"summary":          nil,
+		"notes":            nil,
+		"notes_append":     nil,
+		"reason_append":    nil,
+		"source":           nil,
+		"ttl_days":         nil,
+		"keywords":         nil,
+		"confirmed_by":     nil,
+		"confirmer":        nil,
+		"status":           nil,
+		"observed_at":      nil,
+		"current_ref":      nil,
+		"updated_at":       now.Format(time.RFC3339),
+		"updated_by":       c.resolveAuthor(ctx).Author,
 		// Notes-line separator is data, not source: painless string literals
 		// refuse "\n" at compile time (only \\ and \" escapes are valid).
 		"nsep": "\n",
@@ -1345,6 +1454,16 @@ func (c *Client) Patch(ctx context.Context, key string, p PatchFields) (PatchRes
 		params["confirmed_by"] = []model.Confirmer{c.resolveAuthor(ctx).confirmer(now)}
 	} else if statusChanged {
 		params["current_ref"] = currentRef
+	}
+	// The guard audit describes the stored text: a value change sets or clears
+	// the rows; a qualifier write drops the rows of the fields it overwrote and
+	// merges the new ones in.
+	if valueChanged || len(replacedFields) > 0 || len(qualifierRedactions) > 0 {
+		if len(effectiveRedactions) > 0 {
+			params["redactions"] = effectiveRedactions
+		} else {
+			params["redactions_clear"] = true
+		}
 	}
 	if resurrect {
 		params["observed_at"] = now.Format(time.RFC3339)

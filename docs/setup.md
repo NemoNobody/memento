@@ -5,7 +5,7 @@
 - **OpenSearch** — you provide it: `memento` connects to an existing cluster and
   does not embed a store. Install and configure it per the official
   documentation (see [section 1](#1-opensearch)).
-- **Go 1.26.8+** — only if you build `memento` from source (`go build -o memento .`).
+- **Go 1.26+** — only if you build `memento` from source (`go build -o memento .`).
 
 `memento` talks to OpenSearch over HTTPS with basic auth; the tested version
 matrix is 2.19.7, 3.0.0, 3.3.2, 3.8.0 and 3.9.0 (see [section 1](#1-opensearch)).
@@ -504,7 +504,9 @@ Stored docs also drop image references aimed at internal hosts (the
 drop sets `truncated`; `fetch_allow_private` keeps them for self-hosted
 documentation).
 
-Fetch honesty limits, stated plainly: `robots.txt` gates the REQUESTED URL
+Fetch honesty limits, stated plainly: `robots.txt` is honored by default
+(`fetch_respect_robots`; one config line turns it off for a site that blocks
+the agent — the rude default would buy nothing) and gates the REQUESTED URL
 (the rules honor RFC 9309 path wildcards `*` and end-anchor `$`; a redirect
 to a different host is checked by the allowlist/SSRF wall, not by a re-read
 robots file); response bodies are treated as UTF-8 — a server declaring
@@ -539,10 +541,13 @@ set their own tool timeouts).
 ## Security notes
 
 - **Secrets do not belong in facts** (passwords, tokens, private keys): the index
-  is plaintext. The write paths scan for credential-like text and refuse it —
-  `secret_guard` in the config: `reject` (default), `ask` (confirm a false
-  positive with `--allow-secret` / `confirm_secret: true`), `allow` (scanning
-  off). Detection is best effort: the rule is still the first line of defense.
+  is plaintext. The write paths scan for credential-like text — `secret_guard`
+  in the config: `reject` (default), `ask` (confirm a false positive with
+  `--allow-secret` / `confirm_secret: true`), `allow` (scanning off). A real
+  credential refuses the write; a heuristic hit (a long hash, base64) is
+  replaced with `[memento-redacted:pattern]` and listed in `redactions`, so the
+  stored value ends up shorter than what was written. Detection is best effort:
+  the rule is still the first line of defense.
 - The OpenSearch password lives in the OS keyring (`memento creds set`), not in
   the config file: `allow_plaintext` is off by default, so a file password is
   refused. `memento creds status` shows the source; neither command prints the

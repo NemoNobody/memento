@@ -35,7 +35,7 @@ security off and binds to loopback only — never expose it.
 
 Useful suites:
 
-- `hack/cli-smoke.sh` — 23 live checks against one store (safe on any store you
+- `hack/cli-smoke.sh` — 28 live checks against one store (safe on any store you
   allow a few KB of throwaway keys in);
 - `hack/version-matrix.sh` — the same smoke across the verified OpenSearch
   version matrix;
@@ -52,5 +52,24 @@ Useful suites:
 - Breaking changes to the stored schema or the MCP tool surface are acceptable
   pre-1.0 but must be called out in the PR and the changelog (with a migration
   note when one is needed).
+
+## Releases
+
+`make release VERSION=vX.Y.Z` is the only supported path: it runs the tests,
+requires no modified or staged tracked changes, creates an annotated tag and
+pushes it. The `Release` workflow then builds the binaries for every supported
+platform and publishes them as a GitHub release whose notes come from the
+matching `CHANGELOG.md` section of that tag (`## vX.Y.Z — ...`). Do not create
+the release by hand.
+
+Repair path: if a release exists without binaries, or a publish run failed,
+re-run the workflow by hand (`Actions → Release → Run workflow`) with the tag
+as `version` (it must look like `vX.Y.Z`, or `vX.Y.Z-suffix` for a
+pre-release, which is published as a pre-release). The job reuses the existing
+release, refreshes its notes from the tag's changelog and re-uploads the
+binaries. `dist/checksums.txt` is authoritative for what was built; an asset
+left over from an older run is not covered by it.
+
+## License
 
 License note: the project is GPL-3.0; contributions fall under the same license.

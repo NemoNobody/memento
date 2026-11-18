@@ -18,10 +18,12 @@ what was run live against real clusters.
 
 ## Live CLI smoke — `hack/cli-smoke.sh`
 
-23 checks against one live store (throwaway `smoke:<runid>:` keys): status,
+28 checks against one live store (throwaway `smoke:<runid>:` keys): status,
 add/correction/get, journal writes, history-info, list/keys/search, obsolete,
-secret-guard rejection, prune dry-run + `--yes`, migrate-history, docs search
-on a missing index. Exit 0 only when everything passes.
+secret-guard rejection AND redaction (a high-confidence credential refuses the
+write, a heuristic hit is stored with a marker + audit), prune dry-run +
+`--yes`, migrate-history, docs search on a missing index. Exit 0 only when
+everything passes.
 
 ## Version matrix — `hack/version-matrix.sh` (2026-11-11)
 
@@ -35,6 +37,10 @@ full infra-creation path runs) and executes the smoke above against it.
 | 3.3.2 | PASS 23/23 |
 | 3.8.0 (production) | PASS 23/23 |
 | 3.9.0 | PASS 23/23 |
+
+The run predates the guard's redaction path: the suite had 23 checks then and
+has 28 now (`hack/cli-smoke.sh` is the live count). The matrix was not re-run
+after that change.
 
 Run it yourself: `hack/version-matrix.sh` (sequential; needs docker/podman).
 The images can also be pinned for everyday dev via `OPENSEARCH_IMAGE` in

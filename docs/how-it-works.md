@@ -402,9 +402,30 @@ such as `password = someVarName`):
 
 | Level | Behavior |
 |-------|----------|
-| `reject` (default) | credential-like text is never stored; there is no confirmation flag |
-| `ask` | the write is refused until the caller confirms the finding is a false positive: `--allow-secret` (CLI) / `confirm_secret: true` (MCP) — an agent must show the finding to the user first |
+| `reject` (default) | a high-confidence credential refuses the write; a medium-confidence heuristic hit in a TEXT field (`value`, `notes`, `summary`, `notes_append`, `reason`) is replaced in place — the write proceeds and the answer lists `redactions`; a hit in an IDENTITY field (`key`, `project`, `source`, `keywords`) refuses, because a rewritten key would silently become a different fact; there is no confirmation flag |
+| `ask` | the same, except an explicit confirmation stores the text as written: `--allow-secret` (CLI) / `confirm_secret: true` (MCP) — an agent must show the masked finding to the user first |
 | `allow` | scanning is off; a deliberate opt-out for shared stores |
+
+Why the split: the high-confidence shapes are deterministic vendor prefixes and
+key blocks — near-certainly a real credential, and storing a marker in its
+place would let a writer believe the token was saved. The medium shapes are
+heuristics that fire on ordinary, legitimate content (a commit hash, a
+checksum, a config name); refusing those made a perfectly good fact
+unstorable at `reject` with no escape, so the flagged span is replaced and the
+loss is stated. The same asymmetry does NOT apply to fetched pages: there the
+medium leniency is route-based (documentation vs API payload), because page
+content is not authored by the writer.
+
+A redaction is never silent: the fact carries `redactions` (field, pattern,
+size — never the text, so the removed span cannot leak back through a read),
+the journal entry of the accepted value carries the same rows, and the write
+answer repeats them. The rows reach every read shape (`memento_get`,
+`memento_search`, `memento_list`, `memento_journal`, CLI `get`), so a value
+that quietly shrank never reads as a complete claim. The rows follow the text
+they describe: a field the write overwrites drops its stored row even when the
+new text is clean, appending a line accumulates (the earlier line is still in
+`notes`) while replacing `notes` clears the rows of the lines folded into it,
+and only a value change replaces the whole set (a clean value clears it).
 
 Guarantees and limits:
 
@@ -415,8 +436,12 @@ Guarantees and limits:
   context. Echoing it would leak the secret a second time.
 - Detection is regex-based best effort: a secret without a recognizable shape
   passes. A false positive is possible too — an unnamed 40-character hex
-  string in notes matches `long-hex` (medium); at `ask` the confirmation flag
-  is the escape hatch. A generic token shape that sits next to a word that
+  string in notes matches `long-hex` (medium); on fact writes it is replaced
+  rather than fatal, and at `ask` the confirmation flag stores the text as
+  written. A text field that is nothing but a flagged span is refused: a fact
+  whose value is a bare marker would read as a complete claim, so store it
+  under `allow` if it is genuinely a hash. A generic token shape that sits
+  next to a word that
   NAMES it (`sha256:`, `revision`, `commit`, `checksum`, SRI `=sha384,…`) is
   a content fingerprint, not a credential: the three generic shapes
   (long-hex/long-base64/long-opaque) are skipped inside such a hash context

@@ -1,8 +1,10 @@
 package client
 
-// robots.txt handling (RFC 9309). robots is a crawler protocol: it governs
-// automated browsers hammering sites, not a user-initiated single fetch of a
-// document, so honoring it is opt-in (fetch_respect_robots). When enabled:
+// robots.txt handling (RFC 9309). robots is a crawler protocol, and a single
+// user-initiated fetch is not crawling — but this store fetches on behalf of
+// many sessions, so robots.txt is honored by DEFAULT
+// (fetch_respect_robots). The operator who hits a blocked page turns it off;
+// the polite default costs nobody anything else. When enabled:
 // robots.txt is fetched once per host and cached in-process for 24h; 404 and
 // fetch/parse failures fail open (allow) — a robots outage must not break
 // document access.

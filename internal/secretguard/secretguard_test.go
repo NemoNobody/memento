@@ -348,3 +348,113 @@ func TestInHashContextNoFabricatedBoundaries(t *testing.T) {
 		t.Error("'git' inside 'gitignore' must not count as a hint")
 	}
 }
+
+// TestRedactAllDeterministicOnSharedStart pins the fold contract for spans that
+// begin at the same byte: the wider match wins, so the marker covers the whole
+// token and the applied audit row describes the span that really went away.
+func TestRedactAllDeterministicOnSharedStart(t *testing.T) {
+	// 47 hex chars + '=': long-base64 matches the whole 48 (it requires a
+	// trailing '='), long-hex matches the leading 47 (every 'A' is a hex
+	// digit). Same start, different end; the wide span must win on every run.
+	token := strings.Repeat("A", 47) + "="
+	out, findings := RedactAll("value", "value "+token)
+	if len(findings) != 1 {
+		t.Fatalf("findings = %+v, want one folded span", findings)
+	}
+	if strings.Contains(out, strings.Repeat("A", 8)) {
+		t.Errorf("the token survived the redaction: %q", out)
+	}
+	if findings[0].Length != len(token) {
+		t.Errorf("applied %d chars, want the wide span %d", findings[0].Length, len(token))
+	}
+}
+
+// TestOpaqueTokenExemptsIdentifierPaths pins the fix for the 2026-11-17 false
+// positive: a slash-joined list of CamelCase identifiers (a setting path / enum
+// group) matched long-opaque-token only because '/' is in the base64 alphabet,
+// and a legitimate fact was refused (or, at 0.8.1, silently shortened) over it.
+// The exemption must stay narrow: a lowercase word list is a passphrase, an
+// empty inner segment is not a name, and a digit keeps the token shape.
+func TestOpaqueTokenExemptsIdentifierPaths(t *testing.T) {
+	cases := []struct {
+		name    string
+		text    string
+		want    int
+		pattern string // asserted when want == 1
+	}{
+		{
+			// The exact repro: 57 characters, no digits.
+			name: "identifier path",
+			text: "settings: contrastControl/colorControl/sharpnessControl/tintControl",
+			want: 0,
+		},
+		{
+			name: "absolute path",
+			text: "settings: /contrastControl/colorControl/sharpnessControl/tintControl",
+			want: 0,
+		},
+		{
+			name: "leading double slash",
+			text: "settings: //contrastControl/colorControl/sharpnessControl/tintControl",
+			want: 0,
+		},
+		{
+			// A lowercase-only segment does not disqualify the path: the camelCase
+			// evidence may live in any segment.
+			name: "lowercase prefix segment",
+			text: "settings/contrastControl/colorControl/sharpnessControl/tintControl",
+			want: 0,
+		},
+		{
+			name: "trailing slash",
+			text: "settings: contrastControl/colorControl/sharpnessControl/tintControl/",
+			want: 0,
+		},
+		{
+			// A TitleCase word list is a passphrase, not a path: it has no
+			// lowercase→uppercase transition inside any segment.
+			name:    "titlecase words",
+			text:    "value Contrast/Control/Sharpness/Tint/Brightness/Color",
+			want:    1,
+			pattern: "long-opaque-token",
+		},
+		{
+			// Lowercase words joined by '/' are a passphrase, not a path: the
+			// exemption requires at least one camelCase transition (a lowercase
+			// letter followed by an uppercase one) somewhere in the span.
+			name:    "lowercase words",
+			text:    "value abcdefgh/abcdefgh/abcdefgh/abcdefgh/abcdefgh/abcdefgh",
+			want:    1,
+			pattern: "long-opaque-token",
+		},
+		{
+			name:    "empty inner segment",
+			text:    "value contrastControl//colorControl/sharpnessControl/tintControl",
+			want:    1,
+			pattern: "long-opaque-token",
+		},
+		{
+			// A digit makes it token-shaped again.
+			name:    "path with a digit",
+			text:    "value contrastControl/colorControl/sharpnessControl/tintControl9",
+			want:    1,
+			pattern: "long-opaque-token",
+		},
+		{
+			name:    "opaque token",
+			text:    "value k9Lm3Pq7Rt1Vx5Za8Bc2De4Fg6Hi0Jk3Lm5Np7Qr9St9Uv1Wx3Yz5",
+			want:    1,
+			pattern: "long-opaque-token",
+		},
+	}
+	for _, tc := range cases {
+		findings := Scan("value", tc.text)
+		if len(findings) != tc.want {
+			t.Errorf("%s: findings = %d, want %d (%q)", tc.name, len(findings), tc.want, tc.text)
+			continue
+		}
+		if tc.want == 1 && findings[0].Pattern != tc.pattern {
+			t.Errorf("%s: pattern = %q, want %q", tc.name, findings[0].Pattern, tc.pattern)
+		}
+	}
+}

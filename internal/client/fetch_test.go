@@ -694,6 +694,8 @@ func TestFetchPageEmptyContentTypeIsHTML(t *testing.T) {
 
 	cfg := config.DefaultConfig()
 	cfg.FetchAllowPrivate = true
+	// The raw listener answers exactly one request; robots is not under test here.
+	cfg.FetchRespectRobots = false
 	doc, err := FetchPage(context.Background(), cfg, "http://"+ln.Addr().String()+"/noct", nil)
 	if err != nil {
 		t.Fatalf("empty Content-Type fetch: %v", err)
@@ -756,6 +758,8 @@ func TestFetchPageUndeclaredJSONIsRefused(t *testing.T) {
 
 	cfg := config.DefaultConfig()
 	cfg.FetchAllowPrivate = true
+	// The raw listener answers exactly one request; robots is not under test here.
+	cfg.FetchRespectRobots = false
 	_, err = FetchPage(context.Background(), cfg, "http://"+ln.Addr().String()+"/api", nil)
 	if err == nil {
 		t.Fatal("undeclared JSON body must be refused, not doc-parsed")

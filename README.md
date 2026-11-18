@@ -38,8 +38,11 @@ Each fact carries evidence, not verdicts:
   exact-match filterable — cross-project slices (`perf`, `security`, `infra`)
   without a graph backlog, and recipes/rules stay findable by topic;
 - **secret guard**: writes scan for credential-like text (the index is
-  plaintext) — `reject` by default, `ask` needs an explicit confirmation,
-  `allow` opts out;
+  plaintext) — a real credential refuses the write, a hit in an identity field
+  (key, project, source, keywords) also refuses, while a heuristic hit (a long
+  hash, a base64 blob, an opaque token, a weak assignment) is replaced in
+  place and the answer lists what was cut; `reject` by default, `ask` lets a
+  human confirm a false positive, `allow` opts out;
 - **staleness**: reads compute `age_days` and `stale` from `observed_at` and a
   per-category TTL (`config`/`endpoint` 14 days, `location`/`behavior` 30 days,
   `rule` 90, `recipe` 180, `context_map` never). A writer
@@ -58,6 +61,21 @@ are write-once; every later write moves `updated_by`. The journal carries the
 same per-entry, so a shared store shows who saw what when. Labels are
 self-reported — a client can set any `author`; the field supports review and
 attribution, not trust.
+
+## Non-goals
+
+Deliberate, and worth knowing before filing an issue:
+
+- **semantic / vector search** — the LLM already does semantics over a summary
+  and an outline; embeddings inside the store are complexity without a reader;
+- **storing secrets** — the index is plaintext, and the guard is a safety net,
+  not a vault;
+- **authentication of its own** — a shared store runs on OpenSearch's security
+  plugin (per-user accounts and roles, document-level security; the recipes are
+  in [docs/setup.md](docs/setup.md));
+- **deciding for you** — a fact is evidence with an age, never a verdict;
+- **another storage backend behind the same tools** — the queries are
+  OpenSearch's (see [Storage](#storage)).
 
 ## Quick start
 
@@ -174,7 +192,7 @@ memento docs "example"
 | `memento migrate-history [--project <p>] [--yes]` | Move pre-journal in-doc history arrays into the journal (one-time; plan first, `--yes` to write) |
 | `memento obsolete <key> [reason] [--allow-secret]` | Mark a fact obsolete because its subject is gone (reason appended to notes) |
 | `memento status [--conf <path>]` | Check connectivity and show the effective configuration (env overrides are listed by name, never values) |
-| `memento creds set\|status\|rm [--url <u>]` | Manage the OpenSearch password in the OS keyring: `set` reads a hidden prompt (piped stdin for scripts), `status` shows only the source (`env\|keyring\|file\|none`), `rm` deletes the entry; the stored value is never printed |
+| `memento creds set\|get\|status\|rm [--url <u>]` | Manage the OpenSearch password in the OS keyring: `set` reads a hidden prompt (piped stdin for scripts), `get` prints the stored password (for scripts that need it), `status` shows only the source (`env\|keyring\|file\|none`), `rm` deletes the entry |
 | `memento fetch <url> [--refresh] [-p <p>] [--allow-secret]` | Fetch a page into the docs index and print its outline: cache-aware, section text is read on demand; github URLs that match a local clone print the file path |
 | `memento doc <hash> [n\|--section N] [--full]` | Read a stored document: the outline (default), section `n`, or every section with `--full` |
 | `memento docs <query> [--limit N] [-p <p>]` | BM25 search over stored documents (the extracted sections, never the raw page) |
@@ -193,7 +211,7 @@ same value updates notes only and leaves the journal untouched.
 
 `memento mcp` speaks MCP over stdio, so agents (VS Code, others) call
 `memento_status`, `memento_search`, `memento_get`, `memento_add`,
-`memento_add_batch`, `memento_patch`, `memento_list`,
+`memento_add_batch`, `memento_patch`, `memento_patch_batch`, `memento_list`,
 `memento_keys`, `memento_journal`, `memento_history_info`, `memento_prune`,
 `memento_obsolete`, `memento_fetch_doc`, `memento_get_doc` and
 `memento_search_docs` directly. Reads omit
@@ -212,8 +230,11 @@ troubleshooting: [docs/mcp.md](docs/mcp.md).
 
 An importable rule lives in [rules/memento.md](rules/memento.md): copy it — or
 just its compact block — into `AGENTS.md`, `.github/copilot-instructions.md`,
-`.cursor/rules/`, or your editor's always-on instructions. It tells the agent
-when to consult and update memory, and how to keep it honest.
+`.cursor/rules/`, or your editor's always-on instructions (drop the YAML
+frontmatter when pasting into a rule file). The file is also shaped as a skill:
+put it at `<skills-dir>/memento-memory/SKILL.md` to have an agent load it on
+demand. It tells the agent when to consult and update memory, and how to keep it
+honest.
 
 ## Dashboards
 
@@ -261,8 +282,15 @@ OpenSearch snapshot API): [docs/backup.md](docs/backup.md).
 
 **Secrets do not belong in facts** (passwords, tokens, private keys) — a rule for
 agents and humans, not a guarantee: the store is plaintext, and the
-best-effort secret guard (default `reject`) scans writes for credential-like
-text, but a secret with no known shape passes. The rule stays the first line
+best-effort secret guard (default `reject`) scans writes. A high-confidence
+credential refuses the write; a heuristic hit (an unnamed 40-character hash, a
+base64 blob, an opaque token, a weak assignment) is replaced with
+`[memento-redacted:pattern]` before the fact is stored and listed in the
+answer's `redactions`, so a legitimate fact is not lost to a false positive —
+but the stored value is then shorter than the one written; a hit in an identity
+field (`key`, `project`, `source`, `keywords`) refuses, because a rewritten key
+is a different fact. A secret with no
+known shape passes. The rule stays the first line
 of defense. Fetched pages get the same guard: high-confidence credential
 shapes are redacted out of the stored snapshot; on documentation pages the
 unnamed token shapes are ordinary content and are kept (counted in the
@@ -300,8 +328,8 @@ docs/setup.md §8 for the full egress and SSRF model.
 
 v1 limits, stated plainly: the dump mode does not report the post-redirect
 URL, so a rendered doc stores `final_url` = the requested URL; the renderer
-is serialized (one render at a time); `robots.txt` (when
-`fetch_respect_robots` is on) gates both the plain and the render path; the
+is serialized (one render at a time); `robots.txt` (honored by default via
+`fetch_respect_robots`) gates both the plain and the render path; the
 URL is visible in the renderer's argv (`/proc`) — pages fetched with secrets
 in query strings stay a plain-fetch concern.
 

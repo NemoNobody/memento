@@ -29,6 +29,50 @@ type Redaction struct {
 	Chars   int    `json:"chars" jsonschema:"length of the redacted span"`
 }
 
+// AppendRedactionFields are the fields whose text APPENDS to another one
+// (notes_append and a retire reason become new notes lines): a row for them
+// describes a span that is still in the stored notes, so repeated appends
+// accumulate rows instead of replacing each other.
+func isAppendRedactionField(field string) bool {
+	return field == "notes_append" || field == "reason"
+}
+
+// MergeRedactions combines the stored audit with the rows of a write.
+//
+// replacedFields names the fields this write OVERWRITES: their stored rows are
+// dropped first, whether or not the new text lost anything — a field rewritten
+// cleanly must not keep a row claiming a loss that no longer exists. Rows of
+// untouched fields survive, and rows of APPEND fields (notes_append, reason)
+// accumulate: the earlier text is still in the notes — unless the write
+// overwrites notes itself, which erases every appended line folded into it.
+// The new rows are added last, so a row for a replaced field describes the text
+// that is stored now.
+func MergeRedactions(stored []Redaction, replacedFields []string, add []Redaction) []Redaction {
+	drop := make(map[string]bool, len(replacedFields)+len(add))
+	for _, f := range replacedFields {
+		drop[f] = true
+	}
+	// Appended lines and retire reasons are folded INTO notes: replacing notes
+	// removes their text, so their rows go with it.
+	if drop["notes"] {
+		drop["notes_append"] = true
+		drop["reason"] = true
+	}
+	for _, a := range add {
+		if !isAppendRedactionField(a.Field) {
+			drop[a.Field] = true
+		}
+	}
+	out := make([]Redaction, 0, len(stored)+len(add))
+	for _, r := range stored {
+		if drop[r.Field] {
+			continue
+		}
+		out = append(out, r)
+	}
+	return append(out, add...)
+}
+
 // Doc is one fetched web page snapshot: the raw body plus extracted,
 // section-split text.
 //

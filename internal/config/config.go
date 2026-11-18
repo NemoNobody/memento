@@ -116,12 +116,13 @@ type Config struct {
 	// a fingerprint: no cookies, no headers beyond Accept/UA.
 	FetchUserAgent string `json:"fetch_user_agent"`
 
-	// FetchRespectRobots turns on polite crawler mode: robots.txt of the
-	// target host is consulted before fetching, matched by the
-	// fetch_user_agent token. Off by default: v1 fetches single
-	// user-initiated pages (browser semantics); on is the courteous setting
-	// for public/shared infrastructure. The robots verdict gates the whole
-	// fetch: the plain path AND the browser render (one contract).
+	// FetchRespectRobots consults robots.txt of the target host before
+	// fetching, matched by the fetch_user_agent token. On by default: the
+	// store fetches pages on behalf of many sessions, and being polite costs
+	// one config line for the rare site that blocks the agent — so there is no
+	// reason to ship the rude default. robots.txt is fetched once per host and
+	// cached in-process; 404 and fetch/parse failures fail open. The verdict
+	// gates the whole fetch: the plain path AND the browser render.
 	FetchRespectRobots bool `json:"fetch_respect_robots"`
 
 	// FetchProxyURL routes fetches through a proxy (http/socks5). Empty means
@@ -232,6 +233,10 @@ func DefaultConfig() *Config {
 		// A browser-shaped UA by default: several documentation sites 403
 		// known bot strings. The fetch still identifies itself honestly in
 		// robots handling; this is a UA, not a fingerprint.
+		// Politeness by default: robots.txt is honored unless the operator opts
+		// out. A per-site exception is one config line, so the rude default
+		// buys nothing — and the store fetches on behalf of every session.
+		FetchRespectRobots:  true,
 		FetchUserAgent:      DefaultFetchUserAgent,
 		FetchRender:         RenderOff,
 		FetchObscuraPath:    "obscura",

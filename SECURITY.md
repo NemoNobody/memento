@@ -12,10 +12,13 @@ response within a few days.
 ## Scope and notes
 
 - `memento` stores facts in **plaintext by design**. A best-effort secret
-  guard (default mode `reject`) scans writes and refuses credential-shaped
-  values, but it is not protection: "Never store secrets" remains a rule for
-  agents (see the README). Reports about the store not being encrypted are by
-  design.
+  guard (default mode `reject`) scans writes: a high-confidence credential
+  shape refuses the write, while a medium-confidence heuristic hit (long
+  hex/base64, a weak assignment) is replaced with
+  `[memento-redacted:pattern]` before the fact is stored — the answer lists
+  `redactions`, so a stored value can be visibly shorter than the one written.
+  It is not protection: "Never store secrets" remains a rule for agents (see
+  the README). Reports about the store not being encrypted are by design.
 - Relevant areas: credential handling (`memento.conf`, environment variables),
   the MCP server (stdio), request construction to OpenSearch, and anything that
   could leak a secret into logs or outputs.

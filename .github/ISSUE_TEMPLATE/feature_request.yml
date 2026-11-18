@@ -11,8 +11,8 @@ body:
         useful — it tells where the tool actually sits in a workflow.
 
         Scope note: memento is verified memory over OpenSearch (facts + provenance +
-        journal + a fetched-docs cache). Storage backends other than OpenSearch and
-        secret storage are out of scope; see README "Design posture".
+        journal + a fetched-docs cache). See README "Non-goals" before proposing a
+        different storage backend, semantic search or secret storage.
   - type: textarea
     id: problem
     attributes:
@@ -55,5 +55,5 @@ body:
     attributes:
       label: Before submitting
       options:
-        - label: I checked the roadmap/docs for this being a deliberate non-goal (e.g. semantic search is intentionally out of scope).
+        - label: I checked README "Non-goals" and this is not one of the deliberate non-goals listed there.
           required: false

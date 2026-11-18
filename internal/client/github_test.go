@@ -68,11 +68,15 @@ func TestNormalizeRemote(t *testing.T) {
 	}
 }
 
-func runGit(t *testing.T, dir string, args ...string) string {
+// runGit runs a git command for a throwaway repository. Signing is disabled
+// explicitly: a machine with commit.gpgsign/tag.gpgsign on would otherwise stop
+// at a pinentry prompt and hang the test run instead of failing.
+func runGit(t *testing.T, args ...string) string {
 	t.Helper()
-	out, err := exec.Command("git", args...).CombinedOutput()
+	full := append([]string{"-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"}, args...)
+	out, err := exec.Command("git", full...).CombinedOutput()
 	if err != nil {
-		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		t.Fatalf("git %s: %v\n%s", strings.Join(full, " "), err, out)
 	}
 	return string(out)
 }
@@ -84,8 +88,8 @@ func newLocalRepo(t *testing.T, dir, branch, remote string, files ...string) str
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	runGit(t, dir, "init", "-q", "-b", branch, dir)
-	runGit(t, dir, "-C", dir, "remote", "add", "origin", remote)
+	runGit(t, "init", "-q", "-b", branch, dir)
+	runGit(t, "-C", dir, "remote", "add", "origin", remote)
 	for _, f := range files {
 		p := filepath.Join(dir, f)
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
@@ -95,11 +99,11 @@ func newLocalRepo(t *testing.T, dir, branch, remote string, files ...string) str
 			t.Fatal(err)
 		}
 	}
-	runGit(t, dir, "-c", "user.email=t@t", "-c", "user.name=t",
+	runGit(t, "-c", "user.email=t@t", "-c", "user.name=t",
 		"-C", dir, "add", "-A")
-	runGit(t, dir, "-c", "user.email=t@t", "-c", "user.name=t",
+	runGit(t, "-c", "user.email=t@t", "-c", "user.name=t",
 		"-C", dir, "commit", "-q", "-m", "init")
-	return strings.TrimSpace(runGit(t, dir, "-C", dir, "rev-parse", "HEAD"))
+	return strings.TrimSpace(runGit(t, "-C", dir, "rev-parse", "HEAD"))
 }
 
 func TestGitHubLocal(t *testing.T) {

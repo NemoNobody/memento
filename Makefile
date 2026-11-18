@@ -4,7 +4,7 @@
 # Working tree version carries the next-release number with a -dev suffix; the
 # real (suffix-less) number is set only when cutting a tag:
 # make release VERSION=v0.8.0. Tag builds stamp the tag name via release.yml.
-VERSION ?= 0.8.0
+VERSION ?= 0.8.1
 # Commit stamps the exact tree into the binary (memento_status reports it).
 # `?=` + shell fallback: local builds get the live HEAD; CI can pass it explicitly.
 COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null)
@@ -136,7 +136,8 @@ clean:
 # release.yml builds the binaries and publishes the GitHub release.
 # Requires a clean tree; usage: make release VERSION=v0.1.0
 release: test
-	@case "$(VERSION)" in v[0-9]*) ;; *) echo "usage: make release VERSION=v0.1.0"; exit 2 ;; esac
+	@printf '%s' "$(VERSION)" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$$' || { echo "usage: make release VERSION=v0.1.0"; exit 2; }
 	git diff --exit-code
+	git diff --cached --exit-code
 	git tag -a $(VERSION) -m "release $(VERSION)"
 	git push origin HEAD --follow-tags

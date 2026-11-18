@@ -47,8 +47,12 @@ type JournalEntry struct {
 	// Keywords is the tag set as of this accepted value. Tags themselves are a
 	// stored qualifier (a tag-only change is a touch, not a journal entry), so
 	// the previous set stays recoverable from the entry that carried it.
-	Keywords  []string  `json:"keywords,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	Keywords []string `json:"keywords,omitempty"`
+	// Redactions carries the write-time secret-guard audit into the journal: an
+	// entry states the accepted value, so «this value was stored with a span
+	// replaced» is part of that state, not a side note.
+	Redactions []Redaction `json:"redactions,omitempty"`
+	CreatedAt  time.Time   `json:"created_at"`
 
 	// Authorship of this entry: who appended it (self-reported labels, see
 	// model.Fact). Each entry names its own writer — the journal is a log,
