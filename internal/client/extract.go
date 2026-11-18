@@ -3,6 +3,7 @@ package client
 import (
 	"html"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/NemoNobody/memento/internal/model"
@@ -22,7 +23,10 @@ const (
 // dropTags are removed together with everything inside them: they carry
 // scripts and styling, not readable text. head is dropped: its title is
 // taken separately (ExtractTitle), the rest (meta, link, style) is noise.
-var dropTags = []string{"script", "style", "noscript", "template", "svg", "select", "option", "head"}
+// nav/aside/footer are page chrome — a link rail is not documentation; a page
+// whose main content is not marked up keeps its text through the chrome
+// filter's fallback (see buildSections).
+var dropTags = []string{"script", "style", "noscript", "template", "svg", "select", "option", "head", "nav", "aside", "footer"}
 
 // blockTags end a text line in the extraction, approximating block layout.
 var blockTags = map[string]bool{
@@ -88,28 +92,161 @@ func ExtractTitle(body string) string {
 // ExtractSections splits page HTML into heading-delimited text sections and
 // collects referenced images (url+alt+title; binaries are never stored). It
 // reports whether the limits truncated the content.
+//
+// The extraction prefers the page's main-content container when the markup
+// names one (<main>, role="main", <article>): sidebar links and footers are
+// not documentation, and a rail that comes first in the source would eat the
+// document budget before the article starts.
 func ExtractSections(body string) (sections []model.Section, images []model.ImageRef, truncated bool) {
-	lower := lowerASCII(body)
-	body = stripElements(lower, body)
-	lower = lowerASCII(body)
+	clean := stripElements(lowerASCII(body), body)
+	lower := lowerASCII(clean)
+	if rl, rb, ok := contentRoot(lower, clean); ok {
+		if secs, imgs, tr := extractFrom(lower[rl:rb], clean[rl:rb]); len(secs) > 0 {
+			return secs, imgs, tr
+		}
+	}
+	return extractFrom(lower, clean)
+}
+
+// contentRoot returns the offsets of the page's main-content element when the
+// markup names one. lower and body must share offsets (lowerASCII preserves
+// the byte length).
+func contentRoot(lower, body string) (int, int, bool) {
+	matches := []func(name, tag string) bool{
+		func(name, _ string) bool { return name == "main" },
+		func(_, tag string) bool {
+			return strings.Contains(tag, `role="main"`) || strings.Contains(tag, `role='main'`) || strings.Contains(tag, "role=main")
+		},
+		func(name, _ string) bool { return name == "article" },
+	}
+	for _, match := range matches {
+		if start, end, ok := findElement(lower, body, match); ok {
+			return start, end, true
+		}
+	}
+	return 0, 0, false
+}
+
+// findElement finds the first element whose open tag satisfies match and
+// returns the span covering its content (open tag through matching close).
+func findElement(lower, body string, match func(name, tag string) bool) (int, int, bool) {
+	for i := 0; i < len(lower); {
+		lt := strings.IndexByte(lower[i:], '<')
+		if lt < 0 {
+			break
+		}
+		start := i + lt
+		name, tagEnd, isClose := parseTag(body, lower, start)
+		if tagEnd <= start {
+			i = start + 1
+			continue
+		}
+		if name != "" && !isClose && match(name, lower[start:tagEnd]) {
+			if s, e, ok := elementSpan(lower, body, start); ok {
+				return s, e, true
+			}
+		}
+		i = tagEnd
+	}
+	return 0, 0, false
+}
+
+// elementSpan returns the span from an element's open tag through its matching
+// close tag, counting nesting of the same name. A self-closed or unclosed
+// element yields false: slicing a tail would silently cut real content.
+func elementSpan(lower, body string, open int) (int, int, bool) {
+	name, tagEnd, isClose := parseTag(body, lower, open)
+	if name == "" || isClose || isSelfClosing(body[open:tagEnd]) {
+		return 0, 0, false
+	}
+	depth := 1
+	for i := tagEnd; i < len(lower); {
+		lt := strings.IndexByte(lower[i:], '<')
+		if lt < 0 {
+			break
+		}
+		p := i + lt
+		n, e, closed := parseTag(body, lower, p)
+		if e <= p {
+			i = p + 1
+			continue
+		}
+		if n == name {
+			switch {
+			case closed:
+				depth--
+				if depth == 0 {
+					return open, e, true
+				}
+			case !isSelfClosing(body[p:e]):
+				depth++
+			}
+		}
+		i = e
+	}
+	return 0, 0, false
+}
+
+func isSelfClosing(tag string) bool {
+	return strings.HasSuffix(strings.TrimSpace(tag), "/>")
+}
+
+// rawSection is one heading-delimited chunk of text plus the number of its
+// visible (non-whitespace) runes that sat inside links — the signal for a
+// navigation block. Whitespace is excluded on both sides of the ratio: block
+// tags inject newlines that no author typed, and counting them would dilute a
+// rail of links down to innocent-looking prose.
+type rawSection struct {
+	text      string
+	linkRunes int
+}
+
+// visibleRunes counts runes that are not whitespace.
+func visibleRunes(s string) int {
+	n := 0
+	for _, r := range s {
+		if !unicode.IsSpace(r) {
+			n++
+		}
+	}
+	return n
+}
+
+// extractFrom is the actual splitter: it runs over one HTML span (the content
+// root when the page has one), already stripped of dropTags by the caller. The
+// two arguments are the same bytes, the second one ASCII-lowercased; that is
+// what lets the scan search a lowercased copy while slicing the original.
+func extractFrom(lower, body string) (sections []model.Section, images []model.ImageRef, truncated bool) {
 
 	// Pass 1: linear scan. Tag names drive structure; text accumulates into
 	// the current raw section.
-	var raw []string
+	var raw []rawSection
 	var cur strings.Builder
+	linkRunes := 0
+	inLink := false
 	flush := func() {
 		if cur.Len() > 0 {
-			raw = append(raw, cur.String())
+			raw = append(raw, rawSection{text: cur.String(), linkRunes: linkRunes})
 			cur.Reset()
+			linkRunes = 0
+		}
+	}
+	writeText := func(s string) {
+		if s == "" {
+			return
+		}
+		cur.WriteString(s)
+		if inLink {
+			linkRunes += visibleRunes(s)
 		}
 	}
 	for i := 0; i < len(body); {
 		lt := strings.IndexByte(body[i:], '<')
 		if lt < 0 {
-			cur.WriteString(body[i:])
+			writeText(body[i:])
 			break
 		}
-		cur.WriteString(body[i : i+lt])
+		writeText(body[i : i+lt])
 		tagStart := i + lt
 		if strings.HasPrefix(lower[tagStart:], "<!--") {
 			// Comments are author notes, not readable content.
@@ -133,7 +270,7 @@ func ExtractSections(body string) (sections []model.Section, images []model.Imag
 		name, tagEnd, isClose := parseTag(body, lower, tagStart)
 		if name == "" {
 			// Not a real tag ("<" in prose); keep it as text.
-			cur.WriteByte('<')
+			writeText("<")
 			i = tagStart + 1
 			continue
 		}
@@ -146,6 +283,10 @@ func ExtractSections(body string) (sections []model.Section, images []model.Imag
 					truncated = true // a usable img beyond the cap: the drop must be visible
 				}
 			}
+		case !isClose && name == "a":
+			inLink = true
+		case isClose && name == "a":
+			inLink = false
 		case !isClose && headingTags[name]:
 			flush()
 		case blockTags[name]:
@@ -155,11 +296,27 @@ func ExtractSections(body string) (sections []model.Section, images []model.Imag
 	}
 	flush()
 
-	// Pass 2: normalise. The first non-empty line of a raw section is its
-	// heading when short (that is what a heading tag yields); the rest is body.
+	sections, truncated = buildSections(raw, true, truncated)
+	if len(sections) == 0 && len(raw) > 0 {
+		// A page that is nothing but link blocks is still a page: dropping
+		// every section would store an empty document and hide the loss.
+		sections, truncated = buildSections(raw, false, truncated)
+	}
+	return sections, images, truncated
+}
+
+// chromeSectionMaxRunes bounds the chrome heuristic: a short block that is
+// mostly links is site navigation, not documentation. Longer link-heavy
+// sections (an index page, a link list with prose around it) are kept.
+const chromeSectionMaxRunes = 400
+
+// buildSections is pass 2: it normalises raw chunks into sections, applies the
+// limits and (optionally) drops short link-dominated blocks.
+func buildSections(raw []rawSection, filterChrome bool, truncated bool) ([]model.Section, bool) {
+	var sections []model.Section
 	total := 0
 	for _, r := range raw {
-		lines := contentLines(r)
+		lines := contentLines(r.text)
 		if len(lines) == 0 {
 			continue
 		}
@@ -175,11 +332,19 @@ func ExtractSections(body string) (sections []model.Section, images []model.Imag
 			continue // a heading alone carries no quotable text
 		}
 		text := strings.Join(lines, "\n")
-		if utf8.RuneCountInString(text) > MaxSectionChars {
+		runes := utf8.RuneCountInString(text)
+		if filterChrome && sec.Heading != "Top" && runes <= chromeSectionMaxRunes {
+			// A short block that is mostly anchor text is a link rail.
+			if all := visibleRunes(r.text); all > 0 && r.linkRunes*5 >= all*3 {
+				continue
+			}
+		}
+		if runes > MaxSectionChars {
 			text = capRunes(text, MaxSectionChars)
+			runes = utf8.RuneCountInString(text)
 			truncated = true
 		}
-		if total+utf8.RuneCountInString(text) > MaxDocChars {
+		if total+runes > MaxDocChars {
 			text = capRunes(text, MaxDocChars-total)
 			truncated = true
 			if text != "" {
@@ -188,7 +353,7 @@ func ExtractSections(body string) (sections []model.Section, images []model.Imag
 			}
 			break
 		}
-		total += utf8.RuneCountInString(text)
+		total += runes
 		sec.Text = text
 		sections = append(sections, sec)
 		if len(sections) >= MaxSections {
@@ -196,7 +361,7 @@ func ExtractSections(body string) (sections []model.Section, images []model.Imag
 			break
 		}
 	}
-	return sections, images, truncated
+	return sections, truncated
 }
 
 // maxImages caps image references per doc: a page with hundreds of tracking

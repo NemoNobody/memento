@@ -33,6 +33,13 @@ only escape was to turn the guard off globally.
 - `ask` with confirmation stores the text as written (a human judged the
   finding a false positive); `reject` still has no confirmation flag.
 
+Extraction stores the article, not the site around it. A page that names its
+content container (`<main>`, `role="main"`, `<article>`) is read from there;
+`nav`/`aside`/`footer` are dropped; a short block that is mostly anchor text is
+treated as a link rail (whitespace is excluded from the ratio, so the newlines
+block tags inject cannot pad a rail into prose). A page that is nothing but
+links keeps its sections instead of storing an empty document.
+
 Docs fetching honors `robots.txt` by default (`fetch_respect_robots: true`):
 the store fetches on behalf of every session, a per-site opt-out is one config
 line, so there is no reason to ship the rude default. The User-Agent stays a

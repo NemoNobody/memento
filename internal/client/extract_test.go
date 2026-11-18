@@ -271,3 +271,101 @@ func TestContentLinesKeepsCJK(t *testing.T) {
 		}
 	}
 }
+
+// TestExtractPrefersMainContent pins the content-root rule: when the markup
+// names the article (<main>, role="main", <article>), the link rail in front of
+// it is neither extracted nor counted against the document budget.
+func TestExtractPrefersMainContent(t *testing.T) {
+	page := `<html><body>
+<nav><h2>Menu</h2><p><a href="/a">Alpha</a> <a href="/b">Beta</a></p></nav>
+<main><h1>Guide</h1><p>The real content of the page.</p>
+<h2>Details</h2><p>More detail here.</p></main>
+<footer><h2>Footer</h2><p><a href="/x">X</a></p></footer>
+</body></html>`
+	secs, _, _ := ExtractSections(page)
+	var headings []string
+	for _, s := range secs {
+		headings = append(headings, s.Heading)
+	}
+	if strings.Join(headings, ",") != "Guide,Details" {
+		t.Errorf("headings = %v, want the main content only (Guide, Details)", headings)
+	}
+}
+
+// TestExtractPrefersRoleMainNested covers a main container that is a plain div
+// with nested divs: the span must follow the matching close tag, not the first
+// </div> in sight.
+func TestExtractPrefersRoleMainNested(t *testing.T) {
+	page := `<html><body>
+<div class="sidebar"><h2>Nav</h2><p><a href="/a">A</a></p></div>
+<div role="main"><div class="wrap"><h2>Article</h2>
+<p>Body text that matters and is long enough to keep.</p></div>
+<div class="pager"><p><a href="/next">Next</a></p></div></div>
+</body></html>`
+	secs, _, _ := ExtractSections(page)
+	if len(secs) != 1 || secs[0].Heading != "Article" {
+		t.Fatalf("sections = %+v, want just the Article section", secs)
+	}
+	if !strings.Contains(secs[0].Text, "Body text that matters") {
+		t.Errorf("article text missing: %q", secs[0].Text)
+	}
+}
+
+// TestExtractDropsShortLinkChrome: without a content root, a short block that
+// is mostly anchor text is a rail, not documentation.
+func TestExtractDropsShortLinkChrome(t *testing.T) {
+	page := `<html><body>
+<div><h2>Home</h2><p><a href="/">Home</a> <a href="/docs">Docs</a> <a href="/news">News</a></p></div>
+<div><h2>Tutorial</h2><p>` + strings.Repeat("real documentation text ", 20) + `</p></div>
+</body></html>`
+	secs, _, _ := ExtractSections(page)
+	if len(secs) != 1 || secs[0].Heading != "Tutorial" {
+		t.Fatalf("sections = %+v, want only the Tutorial section", secs)
+	}
+}
+
+// TestExtractLinkRatioIgnoresWhitespace pins the denominator of the chrome
+// ratio: block tags inject a newline per element, and counting those padded the
+// block until a rail of links looked like prose.
+func TestExtractLinkRatioIgnoresWhitespace(t *testing.T) {
+	page := `<html><body>
+<div><h2>Chapters</h2><p><a href="/a">Alpha</a></p><p><a href="/b">Beta</a></p><p><a href="/c">Gamma</a></p></div>
+<div><h2>Body</h2><p>` + strings.Repeat("substantive text ", 20) + `</p></div>
+</body></html>`
+	secs, _, _ := ExtractSections(page)
+	if len(secs) != 1 || secs[0].Heading != "Body" {
+		t.Fatalf("sections = %+v, want only the Body section", secs)
+	}
+}
+
+// TestExtractKeepsChromeWhenEverythingIsChrome: a page that is nothing but
+// links is still a page — dropping every section would store an empty document.
+func TestExtractKeepsChromeWhenEverythingIsChrome(t *testing.T) {
+	page := `<html><body><div><h2>Index</h2><p><a href="/a">Alpha</a> <a href="/b">Beta</a></p></div></body></html>`
+	secs, _, _ := ExtractSections(page)
+	if len(secs) == 0 {
+		t.Fatal("an all-link page must keep its sections")
+	}
+}
+
+// TestExtractStripsNavAsideFooter pins that the chrome elements are removed
+// even when the page has no content root to prefer.
+func TestExtractStripsNavAsideFooter(t *testing.T) {
+	page := `<html><body>
+<nav><h2>Menu</h2><p>nav text</p></nav>
+<aside><p>related reading</p></aside>
+<h2>Body</h2><p>the article</p>
+<footer><p>copyright</p></footer>
+</body></html>`
+	secs, _, _ := ExtractSections(page)
+	if len(secs) != 1 || secs[0].Heading != "Body" {
+		t.Fatalf("sections = %+v, want only Body", secs)
+	}
+	for _, s := range secs {
+		for _, bad := range []string{"nav text", "related reading", "copyright"} {
+			if strings.Contains(s.Text, bad) {
+				t.Errorf("chrome %q survived: %+v", bad, s)
+			}
+		}
+	}
+}
