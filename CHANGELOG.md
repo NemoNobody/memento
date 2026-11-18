@@ -3,6 +3,29 @@
 Notable changes per release tag. v0.8.0 is the first public release: it folds
 the pre-publication hardening into one baseline (earlier private tags are gone).
 
+## v0.8.2 — 2026-11-18
+
+Extraction stores the article, not the site around it.
+
+A fetched documentation page kept its sidebar as the first sections: the markup
+that says "this is the article" was ignored, so a link rail that comes first in
+the source ate the section and character budgets before the real text started,
+and the outline read as navigation.
+
+- a page that names its content container (`<main>`, `role="main"`,
+  `<article>`) is read from there, falling back to the whole page when there is
+  none or when it yields nothing;
+- `nav`, `aside` and `footer` are dropped with the other non-text elements;
+- a short block that is mostly anchor text is treated as a link rail. The ratio
+  is computed over non-whitespace runes: block tags inject a newline per
+  element, and counting those padded a rail until it read as prose;
+- a page that is nothing but link blocks keeps its sections — an empty document
+  would hide the loss instead of showing it.
+
+Checked against the Python, Go and PostgreSQL documentation: no navigation
+sections, and a page with a content container is no longer truncated by its own
+sidebar.
+
 ## v0.8.1 — 2026-11-18
 
 Secret guard: a heuristic hit no longer costs the whole write.
@@ -32,13 +55,6 @@ only escape was to turn the guard off globally.
   and `/` still passes, which is why "never store secrets" remains the rule;
 - `ask` with confirmation stores the text as written (a human judged the
   finding a false positive); `reject` still has no confirmation flag.
-
-Extraction stores the article, not the site around it. A page that names its
-content container (`<main>`, `role="main"`, `<article>`) is read from there;
-`nav`/`aside`/`footer` are dropped; a short block that is mostly anchor text is
-treated as a link rail (whitespace is excluded from the ratio, so the newlines
-block tags inject cannot pad a rail into prose). A page that is nothing but
-links keeps its sections instead of storing an empty document.
 
 Docs fetching honors `robots.txt` by default (`fetch_respect_robots: true`):
 the store fetches on behalf of every session, a per-site opt-out is one config
