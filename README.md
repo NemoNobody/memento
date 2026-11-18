@@ -163,15 +163,18 @@ memento get demo:api:port
 memento search "api port"
 ```
 
-Fetch a web page into the docs index and read it back section by section
-(`example.com` is just a placeholder that always resolves — use the docs you
-actually read):
+Fetch a web page into the docs index and read it back section by section:
 
 ```
-memento fetch https://example.com/
-memento doc <hash-from-output> 0
-memento docs "example"
+memento fetch https://www.postgresql.org/docs/current/tutorial.html
+memento doc <hash-from-output> 1      # the "Part I. Tutorial" section
+memento docs "tutorial"
 ```
+
+The extractor splits a page on its headings (scripts and styles are dropped);
+sections are cheap to read, so open the one you want instead of the whole
+document. A site's navigation is page text too, so the first sections of a
+navigation-heavy page belong to the site chrome.
 
 ## Commands
 
