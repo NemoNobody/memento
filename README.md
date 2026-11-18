@@ -4,6 +4,11 @@
 
 Persistent, provenance-carrying memory for AI agents (and humans).
 
+> **Before the name misleads you:** this is not a memory that recalls what you
+> cannot name. It is a catalogue of facts a session has already verified —
+> found by text (BM25) or by key, and read in pieces. Matching meaning is the
+> job of the model holding the context, not of the store.
+
 ## What it is
 
 `memento` stores **facts you or an agent have verified** about your projects —
@@ -74,6 +79,16 @@ same per-entry, so a shared store shows who saw what when. Labels are
 self-reported — a client can set any `author`; the field supports review and
 attribution, not trust.
 
+## Reading is selective
+
+A session pays only for what it reads. `memento_list` and `memento_search`
+return compact rows — key, summary, category, status, age — and the full value
+is one `memento_get` away; a body over `summary_min_len` must ship a summary,
+so a listing stays skimmable; a fetched page is stored as sections and read one
+at a time. The store never decides to push a document into the context: that is
+what lets it work from a small window — a local model with a modest budget —
+without dragging whole pages along.
+
 ## Non-goals
 
 Deliberate, and worth knowing before filing an issue:
@@ -116,7 +131,7 @@ cloned, `scripts/install.sh` picks it, verifies the sha256 and puts it in
 
 You also need a reachable OpenSearch (a single local node is enough). Quickest:
 `make dev-opensearch` runs one in a container (localhost-only, security plugin
-off, named volume — [docs/setup.md](docs/setup.md) §2). A system install follows
+off, 512 MB heap, named volume — [docs/setup.md](docs/setup.md) §2). A system install follows
 the [official documentation](https://docs.opensearch.org/latest/install-and-configure/install-opensearch/index/);
 [docs/setup.md](docs/setup.md) covers what `memento` expects.
 
