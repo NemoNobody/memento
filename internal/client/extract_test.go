@@ -1,6 +1,7 @@
 package client
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -273,11 +274,13 @@ func TestContentLinesKeepsCJK(t *testing.T) {
 }
 
 // TestExtractPrefersMainContent pins the content-root rule: when the markup
-// names the article (<main>, role="main", <article>), the link rail in front of
-// it is neither extracted nor counted against the document budget.
+// names the article (<main>, role="main", <article>), the link rail and the
+// sidebar prose in front of it are neither extracted nor counted against the
+// document budget. The sidebar is a plain div on purpose: elements dropped by
+// dropTags would disappear even without the content root.
 func TestExtractPrefersMainContent(t *testing.T) {
 	page := `<html><body>
-<nav><h2>Menu</h2><p><a href="/a">Alpha</a> <a href="/b">Beta</a></p></nav>
+<div class="sidebar"><h2>Menu</h2><p>Sidebar prose that is not a link at all.</p></div>
 <main><h1>Guide</h1><p>The real content of the page.</p>
 <h2>Details</h2><p>More detail here.</p></main>
 <footer><h2>Footer</h2><p><a href="/x">X</a></p></footer>
@@ -294,17 +297,23 @@ func TestExtractPrefersMainContent(t *testing.T) {
 
 // TestExtractPrefersRoleMainNested covers a main container that is a plain div
 // with nested divs: the span must follow the matching close tag, not the first
-// </div> in sight.
+// </div> in sight — the section after the nested div is inside the root and
+// must survive.
 func TestExtractPrefersRoleMainNested(t *testing.T) {
 	page := `<html><body>
 <div class="sidebar"><h2>Nav</h2><p><a href="/a">A</a></p></div>
 <div role="main"><div class="wrap"><h2>Article</h2>
 <p>Body text that matters and is long enough to keep.</p></div>
-<div class="pager"><p><a href="/next">Next</a></p></div></div>
+<div class="pager"><p><a href="/next">Next</a></p></div>
+<h2>After</h2><p>Text after the nested div must survive the span.</p></div>
 </body></html>`
 	secs, _, _ := ExtractSections(page)
-	if len(secs) != 1 || secs[0].Heading != "Article" {
-		t.Fatalf("sections = %+v, want just the Article section", secs)
+	var headings []string
+	for _, s := range secs {
+		headings = append(headings, s.Heading)
+	}
+	if strings.Join(headings, ",") != "Article,After" {
+		t.Fatalf("headings = %v, want Article,After", headings)
 	}
 	if !strings.Contains(secs[0].Text, "Body text that matters") {
 		t.Errorf("article text missing: %q", secs[0].Text)
@@ -367,5 +376,154 @@ func TestExtractStripsNavAsideFooter(t *testing.T) {
 				t.Errorf("chrome %q survived: %+v", bad, s)
 			}
 		}
+	}
+}
+
+// TestExtractAnchorTargetDoesNotPoisonSections: <a id="x"/> is an anchor
+// target, not an opener. Counting it as one turned every following block into
+// a "link rail" and dropped real sections without a truncation flag.
+func TestExtractAnchorTargetDoesNotPoisonSections(t *testing.T) {
+	page := `<html><body>
+<h2>Install</h2><p>Run the installer and point it at the archive.<a id="after-install"/></p>
+<h2>Verify</h2><p>Check that status reports the version.</p>
+<h2>Usage</h2><p>Fetch a page and read the stored sections.</p>
+</body></html>`
+	secs, _, _ := ExtractSections(page)
+	if len(secs) != 3 {
+		t.Fatalf("sections = %+v, want Install, Verify and Usage", secs)
+	}
+	if secs[1].Heading != "Verify" || secs[2].Heading != "Usage" {
+		t.Errorf("headings = %q, %q; want Verify, Usage", secs[1].Heading, secs[2].Heading)
+	}
+}
+
+// TestExtractUnclosedAnchorStopsAtSection pins the blast radius of a broken
+// anchor: hand-written HTML leaves <a> unclosed, and one such tag must not
+// reach past the section it sits in.
+func TestExtractUnclosedAnchorStopsAtSection(t *testing.T) {
+	page := `<html><body>
+<h2>Install</h2><p>Unclosed anchor follows.<a href="/docs">Docs
+<h2>Verify</h2><p>Check that status reports the version.</p>
+</body></html>`
+	secs, _, _ := ExtractSections(page)
+	if len(secs) != 2 || secs[1].Heading != "Verify" {
+		t.Fatalf("sections = %+v, want Install and Verify", secs)
+	}
+}
+
+// TestExtractIgnoresCommentedCloseTag: a commented-out </main> is markup prose
+// inside a comment, not the end of the article.
+func TestExtractIgnoresCommentedCloseTag(t *testing.T) {
+	page := `<html><body><main>
+<h2>First</h2><p>First paragraph with enough text to keep.</p>
+<!-- </main> -->
+<h2>Second</h2><p>Second paragraph that must survive extraction.</p></main></body></html>`
+	secs, _, _ := ExtractSections(page)
+	if len(secs) != 2 || secs[1].Heading != "Second" {
+		t.Fatalf("sections = %+v, want First and Second", secs)
+	}
+}
+
+// TestExtractRoleMainVariants: role is an attribute with a token list — spacing
+// around '=' and an extra token are still the main landmark, and data-role is a
+// different attribute that must not capture the root.
+func TestExtractRoleMainVariants(t *testing.T) {
+	sidebar := `<div class="sidebar"><h2>Side</h2><p>Sidebar prose that is not a link at all.</p></div>`
+	for _, tc := range []struct {
+		name  string
+		inner string
+		want  string
+	}{
+		{"spaced equals", `<div role = "main"><h2>Article</h2><p>Article text here.</p></div>`, "Article"},
+		{"token list", `<div role="main navigation"><h2>Article</h2><p>Article text here.</p></div>`, "Article"},
+		{"data-role is not role", `<div data-role="main"><h2>Wrapper</h2><p>Wrapper prose here.</p></div>`, "Side,Wrapper"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			secs, _, _ := ExtractSections(`<html><body>` + sidebar + tc.inner + `</body></html>`)
+			var headings []string
+			for _, s := range secs {
+				headings = append(headings, s.Heading)
+			}
+			if got := strings.Join(headings, ","); got != tc.want {
+				t.Errorf("headings = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestExtractSeveralArticlesMeanListing: an index page has one <article> per
+// teaser; extracting the first one would store a single teaser as the document.
+// A lone <article> is still the article.
+func TestExtractSeveralArticlesMeanListing(t *testing.T) {
+	sidebar := `<div class="sidebar"><h2>Side</h2><p>Sidebar prose that is not a link at all.</p></div>`
+	three := `<article><h2>Article one</h2><p>First teaser text.</p></article>` +
+		`<article><h2>Article two</h2><p>Second teaser text.</p></article>` +
+		`<article><h2>Article three</h2><p>Third teaser text.</p></article>`
+	secs, _, _ := ExtractSections(`<html><body>` + sidebar + three + `</body></html>`)
+	if len(secs) != 4 {
+		t.Fatalf("sections = %+v, want the listing (Side and three teasers)", secs)
+	}
+
+	one := `<div><h2>Comments</h2><p>Reader comments area.</p></div>` +
+		`<article><h2>Post</h2><p>Post body text.</p></article>`
+	secs, _, _ = ExtractSections(`<html><body>` + sidebar + one + `</body></html>`)
+	if len(secs) != 1 || secs[0].Heading != "Post" {
+		t.Fatalf("sections = %+v, want just Post", secs)
+	}
+}
+
+// TestExtractDroppedChromeIsNotTruncation: the flag means "text was cut", not
+// "blocks were dropped" — a stored document that lost nothing must not claim
+// it is a prefix.
+func TestExtractDroppedChromeIsNotTruncation(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("<html><body>")
+	for i := 0; i < MaxSections; i++ {
+		b.WriteString(`<div><h2>Rail</h2><p><a href="/x">Alpha</a> <a href="/y">Beta</a></p></div>`)
+		fmt.Fprintf(&b, `<div><h2>Section %d</h2><p>%s</p></div>`, i, strings.Repeat("real text ", 10))
+	}
+	b.WriteString("</body></html>")
+	secs, _, truncated := ExtractSections(b.String())
+	if len(secs) != MaxSections {
+		t.Fatalf("sections = %d, want %d", len(secs), MaxSections)
+	}
+	if truncated {
+		t.Error("nothing was cut: the dropped blocks were rails, not text")
+	}
+}
+
+// TestExtractSectionCapReportsTruncation is the other side of the same flag: a
+// section past the cap is a real loss.
+func TestExtractSectionCapReportsTruncation(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("<html><body>")
+	for i := 0; i < MaxSections+2; i++ {
+		fmt.Fprintf(&b, `<div><h2>Section %d</h2><p>%s</p></div>`, i, strings.Repeat("real text ", 10))
+	}
+	b.WriteString("</body></html>")
+	secs, _, truncated := ExtractSections(b.String())
+	if len(secs) != MaxSections {
+		t.Fatalf("sections = %d, want %d", len(secs), MaxSections)
+	}
+	if !truncated {
+		t.Error("two real sections were cut and the flag must say so")
+	}
+}
+
+// TestExtractMainSoupLinear guards the content-root scan: a page of repeated
+// unclosed <main> once made one nesting-aware scan per candidate (measured
+// quadratic — 240 KB cost 35 s).
+func TestExtractMainSoupLinear(t *testing.T) {
+	const n = 100000
+	page := strings.Repeat("<main>", n)
+	done := make(chan struct{}, 1)
+	go func() {
+		ExtractSections(page)
+		done <- struct{}{}
+	}()
+	select {
+	case <-done:
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("ExtractSections on a '<main>' soup is not linear")
 	}
 }

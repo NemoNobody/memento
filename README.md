@@ -178,8 +178,8 @@ article (`<main>`, `role="main"`, `<article>`) only that container is read,
 `nav`/`aside`/`footer` elements are removed, and a short block that is mostly
 anchor text is treated as a link rail. A page that is nothing but links keeps
 its sections — an empty document would hide the loss. Prose that lives outside
-any of these markers can still carry a rail or a banner; truncation is always
-reported rather than silent.
+any of these markers can still carry a rail or a banner; truncation by the
+size limits is reported rather than silent.
 
 ## Commands
 

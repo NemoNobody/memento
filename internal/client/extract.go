@@ -29,13 +29,15 @@ const (
 var dropTags = []string{"script", "style", "noscript", "template", "svg", "select", "option", "head", "nav", "aside", "footer"}
 
 // blockTags end a text line in the extraction, approximating block layout.
+// Chrome elements (nav, aside, footer) are absent: dropTags removes them before
+// this pass ever sees them.
 var blockTags = map[string]bool{
 	"p": true, "br": true, "div": true, "li": true, "ul": true, "ol": true,
 	"table": true, "tr": true, "td": true, "th": true, "pre": true,
 	"blockquote": true, "section": true, "article": true, "header": true,
-	"footer": true, "nav": true, "aside": true, "h1": true, "h2": true,
-	"h3": true, "h4": true, "h5": true, "h6": true, "dd": true, "dt": true,
-	"form": true, "figure": true, "figcaption": true, "hr": true,
+	"h1": true, "h2": true, "h3": true, "h4": true, "h5": true, "h6": true,
+	"dd": true, "dt": true, "form": true, "figure": true, "figcaption": true,
+	"hr": true,
 }
 
 // headingTags open a new section. Deep headings (h5/h6) are treated as plain
@@ -108,83 +110,127 @@ func ExtractSections(body string) (sections []model.Section, images []model.Imag
 	return extractFrom(lower, clean)
 }
 
-// contentRoot returns the offsets of the page's main-content element when the
-// markup names one. lower and body must share offsets (lowerASCII preserves
-// the byte length).
+// contentRoot returns the span of the page's main-content element, when the
+// markup names one: <main> first, then role="main", then a lone <article>.
+//
+// The scan is one pass over a stack of open elements. The obvious shape — try
+// every candidate with a nesting-aware scan for its close tag — is quadratic:
+// a 240 KB page of repeated unclosed <main> cost 35 seconds of CPU (measured),
+// and fetch_max_bytes allows 2 MB.
+//
+// Only the outermost candidate is taken: an inner element that closes first
+// must not cut the article it sits in. An element that never closes falls back
+// to the whole page — the safe direction, since the fallback keeps content and
+// only loses the chrome filtering.
 func contentRoot(lower, body string) (int, int, bool) {
-	matches := []func(name, tag string) bool{
-		func(name, _ string) bool { return name == "main" },
-		func(_, tag string) bool {
-			return strings.Contains(tag, `role="main"`) || strings.Contains(tag, `role='main'`) || strings.Contains(tag, "role=main")
-		},
-		func(name, _ string) bool { return name == "article" },
+	const (
+		classMain = iota
+		classRole
+		classArticle
+		classCount
+	)
+	type openElement struct {
+		name  string
+		pos   int
+		class int
 	}
-	for _, match := range matches {
-		if start, end, ok := findElement(lower, body, match); ok {
-			return start, end, true
-		}
-	}
-	return 0, 0, false
-}
+	var found [classCount]span
+	var have [classCount]bool
+	var stack []openElement
+	articles := 0
 
-// findElement finds the first element whose open tag satisfies match and
-// returns the span covering its content (open tag through matching close).
-func findElement(lower, body string, match func(name, tag string) bool) (int, int, bool) {
+	// accept records the span of a candidate that just closed, unless an outer
+	// candidate is still open (that one is the content root) or this class is
+	// already answered.
+	accept := func(idx, end int) {
+		cl := stack[idx].class
+		if cl < 0 || have[cl] {
+			return
+		}
+		for k := 0; k < idx; k++ {
+			if stack[k].class >= 0 {
+				return
+			}
+		}
+		found[cl] = span{stack[idx].pos, end}
+		have[cl] = true
+	}
+
 	for i := 0; i < len(lower); {
 		lt := strings.IndexByte(lower[i:], '<')
 		if lt < 0 {
 			break
 		}
-		start := i + lt
-		name, tagEnd, isClose := parseTag(body, lower, start)
-		if tagEnd <= start {
-			i = start + 1
+		p := i + lt
+		if strings.HasPrefix(lower[p:], "<!--") {
+			// A commented-out "</main>" is not the end of the article.
+			j := strings.Index(lower[p+4:], "-->")
+			if j < 0 {
+				break
+			}
+			i = p + 4 + j + 3
 			continue
 		}
-		if name != "" && !isClose && match(name, lower[start:tagEnd]) {
-			if s, e, ok := elementSpan(lower, body, start); ok {
-				return s, e, true
-			}
+		name, tagEnd, isClose := parseTag(body, lower, p)
+		if tagEnd <= p {
+			i = p + 1
+			continue
 		}
 		i = tagEnd
+		if name == "" {
+			continue
+		}
+		if isClose {
+			for k := len(stack) - 1; k >= 0; k-- {
+				if stack[k].name == name {
+					accept(k, tagEnd)
+					stack = stack[:k]
+					break
+				}
+			}
+			continue
+		}
+		if isSelfClosing(body[p:tagEnd]) {
+			continue
+		}
+		cl := -1
+		switch {
+		case name == "main":
+			cl = classMain
+		case roleHasMain(body[p:tagEnd]):
+			cl = classRole
+		case name == "article":
+			cl = classArticle
+			articles++
+		}
+		stack = append(stack, openElement{name: name, pos: p, class: cl})
+	}
+
+	for cl := classMain; cl <= classArticle; cl++ {
+		// Several <article> elements mean a listing page, not an article: one
+		// teaser is not the document.
+		if !have[cl] || (cl == classArticle && articles > 1) {
+			continue
+		}
+		return found[cl].start, found[cl].end, true
 	}
 	return 0, 0, false
 }
 
-// elementSpan returns the span from an element's open tag through its matching
-// close tag, counting nesting of the same name. A self-closed or unclosed
-// element yields false: slicing a tail would silently cut real content.
-func elementSpan(lower, body string, open int) (int, int, bool) {
-	name, tagEnd, isClose := parseTag(body, lower, open)
-	if name == "" || isClose || isSelfClosing(body[open:tagEnd]) {
-		return 0, 0, false
+// span is a byte range in a page.
+type span struct{ start, end int }
+
+// roleHasMain reports whether the tag carries the ARIA main landmark role. The
+// attribute is parsed, not substring-matched: "data-role=main" is a different
+// attribute and "role=mainnav" a different role, and a quoted token list
+// ("main navigation") is still the main landmark.
+func roleHasMain(tag string) bool {
+	for _, tok := range strings.Fields(htmlAttrs(tag)["role"]) {
+		if strings.EqualFold(tok, "main") {
+			return true
+		}
 	}
-	depth := 1
-	for i := tagEnd; i < len(lower); {
-		lt := strings.IndexByte(lower[i:], '<')
-		if lt < 0 {
-			break
-		}
-		p := i + lt
-		n, e, closed := parseTag(body, lower, p)
-		if e <= p {
-			i = p + 1
-			continue
-		}
-		if n == name {
-			switch {
-			case closed:
-				depth--
-				if depth == 0 {
-					return open, e, true
-				}
-			case !isSelfClosing(body[p:e]):
-				depth++
-			}
-		}
-		i = e
-	}
-	return 0, 0, false
+	return false
 }
 
 func isSelfClosing(tag string) bool {
@@ -230,6 +276,9 @@ func extractFrom(lower, body string) (sections []model.Section, images []model.I
 			cur.Reset()
 			linkRunes = 0
 		}
+		// An unclosed <a> must not poison the next section: one broken anchor
+		// would otherwise make every later block look like a rail.
+		inLink = false
 	}
 	writeText := func(s string) {
 		if s == "" {
@@ -284,7 +333,9 @@ func extractFrom(lower, body string) (sections []model.Section, images []model.I
 				}
 			}
 		case !isClose && name == "a":
-			inLink = true
+			// <a id="anchor"/> is an anchor target, not an opener: taking it as
+			// one would count the rest of the block as link text.
+			inLink = !isSelfClosing(body[tagStart:tagEnd])
 		case isClose && name == "a":
 			inLink = false
 		case !isClose && headingTags[name]:
@@ -315,6 +366,7 @@ const chromeSectionMaxRunes = 400
 func buildSections(raw []rawSection, filterChrome bool, truncated bool) ([]model.Section, bool) {
 	var sections []model.Section
 	total := 0
+	full := false // the section cap is reached
 	for _, r := range raw {
 		lines := contentLines(r.text)
 		if len(lines) == 0 {
@@ -339,6 +391,13 @@ func buildSections(raw []rawSection, filterChrome bool, truncated bool) ([]model
 				continue
 			}
 		}
+		if full {
+			// Past the cap: a block that would have been stored is a real loss.
+			// Blocks this loop drops (junk, a rail) are not, so the flag is set
+			// here rather than from a raw-versus-stored count.
+			truncated = true
+			continue
+		}
 		if runes > MaxSectionChars {
 			text = capRunes(text, MaxSectionChars)
 			runes = utf8.RuneCountInString(text)
@@ -357,8 +416,7 @@ func buildSections(raw []rawSection, filterChrome bool, truncated bool) ([]model
 		sec.Text = text
 		sections = append(sections, sec)
 		if len(sections) >= MaxSections {
-			truncated = truncated || len(raw) > len(sections)
-			break
+			full = true
 		}
 	}
 	return sections, truncated
@@ -419,6 +477,9 @@ func htmlAttrs(tag string) map[string]string {
 			continue
 		}
 		j++ // past '='
+		for j < len(rest) && (rest[j] == ' ' || rest[j] == '\t' || rest[j] == '\n') {
+			j++ // role = "main" is valid HTML
+		}
 		var val string
 		switch {
 		case j < len(rest) && (rest[j] == '"' || rest[j] == '\''):
