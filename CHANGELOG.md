@@ -9,6 +9,44 @@ Nothing yet. A change lands here while it is in review; the release commit
 moves the section under its version number (`.github/workflows/release.yml`
 reads that heading to build the release notes).
 
+## v0.8.3 — 2026-11-19
+
+Extraction runs on the HTML5 parser, and code blocks survive it.
+
+The hand-written scanner that grew out of the first `fetch` had produced a
+steady stream of bug classes — tags inside comments, quotes inside attributes,
+`<` in prose, CRLF separators, unclosed elements — each one a silent difference
+from what a reader sees. The page is now parsed with `golang.org/x/net/html`
+(BSD-3) and read as a tree. One dependency replaces four hundred lines of
+almost-HTML.
+
+- `<pre>` text is stored verbatim: newlines and indentation are the content of a
+  code block, and the old line filter used to delete every `}`;
+- inline elements no longer split a sentence: text nodes are joined before a
+  line is folded, so `In Go a simple <code>if</code> looks like this:` reads as
+  written instead of losing short words to the junk filter;
+- sections take their heading from the heading element, not from the first line
+  of text (`If`, not "In Go a simple if looks like this:");
+- the chrome filter tells a menu from prose by the letters outside the links: a
+  block of two or more links with no word outside them is a rail and is dropped;
+  any word outside a link makes it prose and it stays. The rule is deliberately
+  strict — a labelled menu (a version picker, a "Help improve" block) survives,
+  because cutting a paragraph to remove a menu is the worse mistake. A link that
+  wraps block content is formatting, not a menu label;
+- a content root that yields nothing falls through to the next candidate
+  (`<main>` → `role="main"` → a lone `<article>` → the page);
+- markup nested deeper than the parser's 512-element stack cap takes a
+  tokenizer fallback: the text is kept in one section, headings are lost.
+
+Accepted, and visible in tests: an unclosed `<nav>`/`<aside>`/`<footer>` owns
+the rest of the page in the tree (browsers agree), so its content is treated as
+chrome, and a page that is nothing but chrome still keeps its sections.
+
+Checked against the Python, Go, PostgreSQL, MDN and Kubernetes documentation:
+code examples keep their braces and indentation, headings are the real headings,
+and no prose section is dropped — a labelled picker or footer line may now be
+stored where a looser rule would have removed it.
+
 ## v0.8.2 — 2026-11-19
 
 Extraction stores the article, not the site around it.
