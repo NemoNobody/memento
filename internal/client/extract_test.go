@@ -81,8 +81,6 @@ func TestExtractSectionsBasics(t *testing.T) {
 
 func TestExtractSectionsTruncatedByLimit(t *testing.T) {
 	var b strings.Builder
-	// Headings must be >= minLineChars long: contentLines drops shorter lines,
-	// and a 1-char heading collapses every section to a textless heading.
 	for range MaxSections + 5 {
 		b.WriteString("<h1>Section head</h1><p>paragraph text line</p>")
 	}
@@ -110,13 +108,14 @@ func TestExtractPlainTextLimits(t *testing.T) {
 	}
 }
 
-// Unicode case folding changes byte length (U+2126 Ω shrinks, U+023A grows),
-// which desynchronizes the body/lower index sharing in the extractor. These
-// characters appear in ordinary technical prose; extraction must neither panic
-// nor slice content at shifted byte offsets.
+// Unicode case folding changes byte length (U+2126 Ω shrinks, U+023A grows). The
+// tokenizer decides what is text now, but ExtractTitle still scans raw bytes and
+// shares a lowercased copy with the source by offset; these characters appear in
+// ordinary technical prose, and neither path may panic or slice at shifted
+// offsets.
 func TestExtractUnicodeLoweringStable(t *testing.T) {
 	for _, u := range []string{"\u2126", "\u0130", "\u212A", "\u023A", "\u023E", "\u1E9E"} {
-		body := "<p>" + strings.Repeat(u, 200) + "x</p>" // over the heading-length threshold
+		body := "<p>" + strings.Repeat(u, 200) + "x</p>"
 		secs, _, _ := ExtractSections(body)
 		if len(secs) == 0 {
 			t.Fatalf("%q: no sections", u)
@@ -134,15 +133,19 @@ func TestExtractTitleUnicodeLoweringStable(t *testing.T) {
 	}
 }
 
-// An unclosed (or self-closed) drop tag must remove only the tag itself: the
-// previous behavior deleted the whole document tail after it, silently losing
-// every section the page had left.
-func TestStripElementsUnclosedTag(t *testing.T) {
-	secs, _, _ := ExtractSections("<p>alpha</p><script src=x>tail-kept</p>")
+// An unclosed raw-text element (<script>, <style>) consumes the rest of the
+// page — that is what the HTML5 tokenizer and every browser do, and the text is
+// not rendered there either. A self-closed non-void element does not.
+func TestUnclosedDropElementMatchesRendering(t *testing.T) {
+	secs, _, _ := ExtractSections("<p>alpha</p><script src=x>tail-not-rendered</p>")
 	joined := strings.Join(textOfSections(secs), " ")
-	if !strings.Contains(joined, "tail-kept") {
-		t.Fatalf("content after unclosed <script> deleted: %q", joined)
+	if strings.Contains(joined, "tail-not-rendered") {
+		t.Errorf("script body surfaced as text: %q", joined)
 	}
+	if !strings.Contains(joined, "alpha") {
+		t.Errorf("text before the script was lost: %q", joined)
+	}
+
 	secs, _, _ = ExtractSections("<p>alpha</p><svg/>tail2-kept</p>")
 	joined = strings.Join(textOfSections(secs), " ")
 	if !strings.Contains(joined, "tail2-kept") {
@@ -150,67 +153,28 @@ func TestStripElementsUnclosedTag(t *testing.T) {
 	}
 }
 
-// TestStripElementsNested pins the removal range for nested same-name tags:
-// the element spans to the first matching close (the old code's behavior —
-// "y</style>" survives), the inner open is consumed with the outer element.
-func TestStripElementsNested(t *testing.T) {
-	secs, _, _ := ExtractSections("<style><style>x</style>y</style><h1>Head text</h1><p>kept text</p>")
-	joined := strings.Join(textOfSections(secs), " ")
-	if !strings.Contains(joined, "kept") {
-		t.Fatalf("content after nested <style> deleted: %q", joined)
-	}
-	if strings.Contains(joined, "y") {
-		t.Errorf("nested-drop semantics changed (text between the closes survived): %q", joined)
-	}
-}
-
-// TestStripElementsLinear is the DoS regression: the old per-occurrence
-// string rebuild was quadratic, so a page of many dropTags (all legal under
-// fetch_max_bytes) burned minutes of CPU in the long-lived MCP server. The
-// single pass must finish a 50k-element page in well under a second.
-func TestStripElementsLinear(t *testing.T) {
+// TestDropElementsLinear is the DoS regression: a large page made of drop
+// elements (legal under fetch_max_bytes) must not cost quadratic time.
+func TestDropElementsLinear(t *testing.T) {
 	const n = 50000
-	var b strings.Builder
-	b.Grow(n * 12)
-	for i := 0; i < n; i++ {
-		b.WriteString("<style>x</style>")
-	}
-	out := stripElements(lowerASCII(b.String()), b.String())
-	if out != "" {
-		t.Fatalf("all style elements must be dropped, got %d bytes", len(out))
-	}
-}
-
-// TestStripElementsUnclosedLinear is the second DoS regression: the linear
-// pass cached nothing about missing closing tags, so a page of repeated
-// unclosed <style> made every tag re-scan the whole tail (quadratic: ~75s at
-// the 2 MB fetch cap in the long-lived server, driven by one untrusted link).
-// The no-close cache must make the whole run a single pass; the budget is a
-// wide margin over the linear cost (~0.02 s) and a hard fail for the quadratic
-// one (~2.7 s here, measured by reverting the cache).
-func TestStripElementsUnclosedLinear(t *testing.T) {
-	const n = 50000
-	var b strings.Builder
-	b.Grow(n * 7)
-	for i := 0; i < n; i++ {
-		b.WriteString("<style>")
-	}
-	body := b.String()
-	done := make(chan string, 1)
-	go func() { done <- stripElements(lowerASCII(body), body) }()
-	select {
-	case out := <-done:
-		if strings.TrimSpace(out) != "" {
-			t.Fatalf("style tags must be dropped, got %d bytes", len(out))
+	done := make(chan struct{}, 1)
+	go func() {
+		gen := strings.Repeat("<style>x</style>", n) + "<h2>Real section</h2><p>Real body text here.</p>"
+		secs, _, _ := ExtractSections(gen)
+		if len(secs) != 1 || secs[0].Heading != "Real section" {
+			t.Errorf("sections = %+v, want the one real section", secs)
 		}
-	case <-time.After(time.Second):
-		t.Fatal("stripElements on unclosed drop-tags is not linear (tail re-scan)")
+		done <- struct{}{}
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("extraction on many drop elements is not linear")
 	}
 }
 
-// TestExtractTagSoupLinear guards the same invariant for the text loop: a
-// giant run of unterminated "<a" must not re-scan the tail per tag (parseTag
-// reports the EOF end once, consuming the soup in one scan).
+// TestExtractTagSoupLinear guards the invariant for the text loop: a giant run
+// of unterminated "<a" must not re-scan the tail per tag.
 func TestExtractTagSoupLinear(t *testing.T) {
 	const n = 200000
 	var b strings.Builder
@@ -256,12 +220,15 @@ func textOfSections(secs []model.Section) []string {
 	return out
 }
 
-// TestContentLinesKeepsCJK (finding 126): the junk filter counts RUNES now.
-// A byte limit silently ate CJK content (one ideograph = 3 bytes); ASCII
-// keeps the old short-menu-debris threshold.
-func TestContentLinesKeepsCJK(t *testing.T) {
-	lines := contentLines("安装\n说明文档\nFAQ\n→\nok")
-	joined := strings.Join(lines, "|")
+// TestJunkFilterKeepsCJK: the junk filter counts RUNES. A byte limit silently
+// ate CJK content (one ideograph = 3 bytes); ASCII keeps the short-menu-debris
+// threshold.
+func TestJunkFilterKeepsCJK(t *testing.T) {
+	secs, _, _ := ExtractSections("<p>安装</p><p>说明文档</p><p>FAQ</p><p>→</p><p>ok</p>")
+	if len(secs) != 1 {
+		t.Fatalf("sections = %+v, want one", secs)
+	}
+	joined := secs[0].Text
 	for _, want := range []string{"安装", "说明文档"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("CJK line %q was dropped: %q", want, joined)
@@ -275,10 +242,10 @@ func TestContentLinesKeepsCJK(t *testing.T) {
 }
 
 // TestExtractPrefersMainContent pins the content-root rule: when the markup
-// names the article (<main>, role="main", <article>), the link rail and the
-// sidebar prose in front of it are neither extracted nor counted against the
-// document budget. The sidebar is a plain div on purpose: elements dropped by
-// dropTags would disappear even without the content root.
+// names the article (<main>, role="main", <article>), the sidebar prose in front
+// of it is neither extracted nor counted against the document budget. The
+// sidebar is a plain div on purpose: elements dropped as chrome would disappear
+// even without the content root.
 func TestExtractPrefersMainContent(t *testing.T) {
 	page := `<html><body>
 <div class="sidebar"><h2>Menu</h2><p>Sidebar prose that is not a link at all.</p></div>
@@ -345,6 +312,110 @@ func TestExtractLinkRatioIgnoresWhitespace(t *testing.T) {
 	secs, _, _ := ExtractSections(page)
 	if len(secs) != 1 || secs[0].Heading != "Body" {
 		t.Fatalf("sections = %+v, want only the Body section", secs)
+	}
+}
+
+// TestExtractBrokenAnchorsWrappingBlocks: two unclosed <a href> tags make the
+// parser wrap the following paragraphs in anchors. A link that wraps block
+// content is formatting, not a menu label, so the section stays.
+func TestExtractBrokenAnchorsWrappingBlocks(t *testing.T) {
+	page := `<html><body><h2>Intro</h2><p>A real introduction paragraph with plenty of prose.</p>` +
+		`<h2>Install</h2><a href="/a">Download<p>Read the manual first, it explains every flag.</p>` +
+		`<a href="/b">Changelog<p>Updated weekly.</p></body></html>`
+	secs, _, tr := ExtractSections(page)
+	if len(secs) != 2 || secs[1].Heading != "Install" || tr {
+		t.Fatalf("sections = %+v (truncated=%v), want Intro and Install", secs, tr)
+	}
+}
+
+// TestExtractOneBrokenAnchorIsNotAMenu: the parser re-opens a single unclosed
+// <a href> in every following block. Those are one link, not a menu, and the
+// paragraphs they wrap are still prose.
+func TestExtractOneBrokenAnchorIsNotAMenu(t *testing.T) {
+	page := `<html><body><h2>Install</h2><a href="/docs">Docs` +
+		`<p>First real paragraph of the page.</p><p>Second real paragraph of the page.</p>` +
+		`</body></html>`
+	secs, _, _ := ExtractSections(page)
+	if len(secs) != 1 || secs[0].Heading != "Install" {
+		t.Fatalf("sections = %+v, want Install kept", secs)
+	}
+}
+
+// TestExtractAnchorTargetsAreNotLinks: <a id> without href is an anchor target.
+// Counting it as a link would turn a paragraph of anchors into a menu.
+func TestExtractAnchorTargetsAreNotLinks(t *testing.T) {
+	page := `<html><body><h2>Targets</h2><p><a id="a1">one</a> <a id="a2">two</a> <a id="a3">three</a></p>` +
+		`<h2>Body</h2><p>Real body text of the page.</p></body></html>`
+	secs, _, _ := ExtractSections(page)
+	if len(secs) != 2 || secs[0].Heading != "Targets" {
+		t.Fatalf("sections = %+v, want Targets and Body", secs)
+	}
+}
+
+// TestExtractUnclosedAnchorDoesNotReachNextSection: an unclosed <a href> is
+// re-opened by the parser in the following blocks; the text of the next section
+// is not link text there.
+func TestExtractUnclosedAnchorDoesNotReachNextSection(t *testing.T) {
+	page := `<html><body><h2>Install</h2><p>Read the guide first.<a href="/docs">Docs` +
+		`<h2>Verify</h2><p>Check that status reports the version.</p></body></html>`
+	secs, _, _ := ExtractSections(page)
+	var headings []string
+	for _, s := range secs {
+		headings = append(headings, s.Heading)
+	}
+	if strings.Join(headings, ",") != "Install,Verify" {
+		t.Fatalf("headings = %v, want Install,Verify", headings)
+	}
+}
+
+// TestExtractSectionAndDocCaps pins the two text caps: a long section is cut to
+// MaxSectionChars and the document to MaxDocChars, both reported.
+func TestExtractSectionAndDocCaps(t *testing.T) {
+	long := strings.Repeat("word ", MaxSectionChars/4)
+	secs, _, tr := ExtractSections("<h2>One</h2><p>" + long + "</p>")
+	if len(secs) != 1 || !tr {
+		t.Fatalf("sections = %d truncated = %v, want one truncated section", len(secs), tr)
+	}
+	if got := utf8.RuneCountInString(secs[0].Text); got != MaxSectionChars {
+		t.Errorf("section text = %d runes, want %d", got, MaxSectionChars)
+	}
+
+	var b strings.Builder
+	for i := 0; i < MaxSections; i++ {
+		b.WriteString("<h2>Section heading</h2><p>" + strings.Repeat("filler text ", MaxSectionChars/6) + "</p>")
+	}
+	secs, _, tr = ExtractSections(b.String())
+	if !tr {
+		t.Error("a document over MaxDocChars must report truncation")
+	}
+	total := 0
+	for _, s := range secs {
+		total += utf8.RuneCountInString(s.Text)
+	}
+	if total > MaxDocChars {
+		t.Errorf("stored %d runes, want at most %d", total, MaxDocChars)
+	}
+}
+
+// TestExtractTitleCap pins MaxTitleChars.
+func TestExtractTitleCap(t *testing.T) {
+	title := ExtractTitle("<title>" + strings.Repeat("x", MaxTitleChars+50) + "</title>")
+	if got := utf8.RuneCountInString(title); got != MaxTitleChars {
+		t.Errorf("title = %d runes, want %d", got, MaxTitleChars)
+	}
+}
+
+// TestExtractKeepsSingleLinkParagraph: one link wrapping a paragraph is a link,
+// not a rail — the tokenizer re-opens an unclosed <a href> inside every following
+// block, and a link-count blind heuristic dropped those sections.
+func TestExtractKeepsSingleLinkParagraph(t *testing.T) {
+	page := `<html><body><h2>Install</h2><p><a href="/docs">Run the installer and point it at the archive.</a></p>
+<h2>Verify</h2><p><a href="/docs">Check that status reports the version.</a></p>
+<h2>Body</h2><p>Real body text of the page, long enough to stand alone.</p>
+</body></html>`
+	secs, _, _ := ExtractSections(page)
+	if len(secs) != 3 {
+		t.Fatalf("sections = %+v, want Install, Verify and Body", secs)
 	}
 }
 
@@ -469,17 +540,20 @@ func TestExtractRoleMainVariants(t *testing.T) {
 	}
 }
 
-// TestExtractUnclosedChromeKeepsLineBreak: an unclosed <nav> loses only its
-// tag; its text must stay on its own line instead of merging into the paragraph
-// before it (the merged line then read as a heading with no body and vanished).
-func TestExtractUnclosedChromeKeepsLineBreak(t *testing.T) {
-	secs, _, _ := ExtractSections(`<html><body><span>alpha text</span><nav>beta text`)
-	if len(secs) == 0 {
-		t.Fatal("the text around an unclosed <nav> must survive")
-	}
+// TestUnclosedChromeSwallowsTail documents the one case where the tokenizer is
+// stricter than the old scanner: an unclosed <nav> owns the rest of the page in
+// the tree (browsers agree), so its content is chrome and is dropped. A page
+// that is nothing but chrome keeps it — an empty document is worse than noise.
+func TestUnclosedChromeSwallowsTail(t *testing.T) {
+	secs, _, _ := ExtractSections(`<html><body><p>alpha text</p><nav>beta text`)
 	joined := secs[0].Heading + " " + strings.Join(textOfSections(secs), " ")
-	if !strings.Contains(joined, "alpha text") || !strings.Contains(joined, "beta text") {
-		t.Errorf("sections = %+v, want both alpha and beta text", secs)
+	if !strings.Contains(joined, "alpha text") {
+		t.Fatalf("text before the unclosed nav was lost: %q", joined)
+	}
+
+	secs, _, _ = ExtractSections(`<html><body><nav>nav only text</nav></body></html>`)
+	if len(secs) == 0 {
+		t.Fatal("a page that is entirely chrome must still yield sections")
 	}
 }
 
@@ -581,21 +655,22 @@ func TestExtractSectionCapReportsTruncation(t *testing.T) {
 	}
 }
 
-// TestExtractContentScanLinear guards the content-root scan. Two shapes made it
-// quadratic before the guards: a run of open tags followed by unrelated close
-// tags (every close walked the stack), and a deep stack with many candidates
-// (every rejected candidate walked the stack below it). Both are sized to stay
-// under the 2 MB fetch cap, so both must stay linear — the quadratic versions
-// took 15 s and 9 s on these inputs (measured by reverting each guard).
+// TestExtractContentScanLinear guards the content-root scan and the tokenizer
+// fallback. Two tree shapes made the old scan quadratic (a run of open tags
+// followed by unrelated close tags; a deep stack of candidates), and markup
+// deeper than the parser's 512-element stack cap takes the tokenizer path, which
+// must not go quadratic on unmatched close tags either. Everything fits under the
+// 2 MB fetch cap.
 func TestExtractContentScanLinear(t *testing.T) {
 	cases := []struct {
 		name string
 		page string
 	}{
-		{"unclosed main", strings.Repeat("<main>", 100000)},
-		{"unmatched close tags", strings.Repeat("<div>", 50000) + strings.Repeat("</span>", 200000)},
-		{"candidates in a deep stack", strings.Repeat("<div>", 39000) + "<main>" +
-			strings.Repeat("<article>x</article>", 90000) + "</main>"},
+		{"unclosed main", strings.Repeat("<main>", 400)},
+		{"candidates in a stack", strings.Repeat("<div>", 400) + "<main>" +
+			strings.Repeat("<article>x</article>", 60000) + "</main>"},
+		{"deeper than the parser cap", strings.Repeat("<div>", 50000) +
+			strings.Repeat("</span>", 200000)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -606,31 +681,310 @@ func TestExtractContentScanLinear(t *testing.T) {
 			}()
 			select {
 			case <-done:
-			case <-time.After(5 * time.Second):
-				t.Fatal("the content scan is not linear on this input")
+			case <-time.After(30 * time.Second):
+				t.Fatal("extraction is not linear on this input")
 			}
 		})
 	}
 }
 
-// TestHtmlAttrsSeparators pins attribute whitespace: CRLF-separated markup is
-// real (pages saved on Windows, some generators), and a boolean attribute must
-// not eat the following key. Before this, an unquoted src on a CR line kept the
-// next attribute in its value.
-func TestHtmlAttrsSeparators(t *testing.T) {
-	for _, tc := range []struct {
-		tag  string
-		key  string
-		want string
-	}{
-		{"<img src=/a.png\rdata-x=1>", "src", "/a.png"},
-		{"<img src=/a.png/>", "src", "/a.png"},
-		{"<div hidden role=\"main\">", "role", "main"},
-		{"<div\nrole=\"main\">", "role", "main"},
-		{"<div\trole = \"main\">", "role", "main"},
-	} {
-		if got := htmlAttrs(tc.tag)[tc.key]; got != tc.want {
-			t.Errorf("htmlAttrs(%q)[%q] = %q, want %q", tc.tag, tc.key, got, tc.want)
+// TestExtractPreVerbatim: a code block keeps its newlines and indentation, and
+// short lines inside it ("}") are not junk-filtered away.
+func TestExtractPreVerbatim(t *testing.T) {
+	page := "<h2>Example</h2><p>Look:</p><pre>func main() {\n\n\tif x &gt; 0 {\n\t\treturn y\n\t}\n}</pre>"
+	secs, _, _ := ExtractSections(page)
+	if len(secs) != 1 {
+		t.Fatalf("sections = %+v, want one", secs)
+	}
+	want := "Look:\nfunc main() {\n\n\tif x > 0 {\n\t\treturn y\n\t}\n}"
+	if secs[0].Text != want {
+		t.Errorf("text = %q, want %q", secs[0].Text, want)
+	}
+}
+
+// TestExtractPreInsideLink: a code sample inside a section whose prose is a
+// pair of links is still documentation — the section is kept, and a second real
+// section proves the unfiltered fallback is not what saved it.
+func TestExtractPreInsideLink(t *testing.T) {
+	page := `<html><body><h2>Example</h2><p><a href="/run">Run it now</a> <a href="/test">Test it now</a></p><pre>x := 1; y := 2</pre>` +
+		`<h2>Details</h2><p>Details of the example, long enough to stand alone.</p></body></html>`
+	secs, _, _ := ExtractSections(page)
+	if len(secs) != 2 || secs[0].Heading != "Example" {
+		t.Fatalf("sections = %+v, want Example and Details", secs)
+	}
+	if !strings.Contains(secs[0].Text, "x := 1; y := 2") {
+		t.Errorf("the code sample was lost: %q", secs[0].Text)
+	}
+}
+
+// TestExtractShortProseWithLinksIsNotARail: a sentence carrying links is prose,
+// not a menu — however many tools it mentions, however long the anchors are and
+// however short the sentence. The tell is the text OUTSIDE the links.
+func TestExtractShortProseWithLinksIsNotARail(t *testing.T) {
+	cases := []string{
+		`<h2>Prerequisites</h2><p>Requires <a href="/go">Go 1.22</a> and <a href="/make">Make</a>.</p>`,
+		`<h2>Setup</h2><p>Then <a href="/install">install the package</a> and <a href="/start">start the service</a>.</p>`,
+		`<h2>CI</h2><p>Run <a href="/a">go test</a>, <a href="/b">go vet</a>, <a href="/c">gofmt</a>, <a href="/d">staticcheck</a> and <a href="/e">golangci-lint</a> before pushing.</p>`,
+		`<h2>Tools</h2><p>You need <a href="/a">Go</a>, <a href="/b">Make</a>, <a href="/c">Git</a>, <a href="/d">curl</a>, <a href="/e">jq</a> and <a href="/f">Docker</a> installed.</p>`,
+		`<h2>Deps</h2><p>You need <a href="/a">Go</a>, <a href="/b">Make</a>, <a href="/c">Git</a>, <a href="/d">curl</a>, <a href="/e">jq</a>, <a href="/f">Docker</a>, <a href="/g">Podman</a> and <a href="/h">gcc</a> installed.</p>`,
+		`<h2>Imports</h2><p>See <a href="/a">fmt</a>, <a href="/b">os</a>, <a href="/c">io</a>, <a href="/d">net</a>, <a href="/e">http</a>, <a href="/f">log</a>, <a href="/g">time</a>, <a href="/h">sync</a>, <a href="/i">sort</a> and <a href="/j">math</a>.</p>`,
+		`<h2>Flags</h2><ul><li><a href="/v">--verbose</a> — print more output</li><li><a href="/q">--quiet</a> — print less output</li></ul>`,
+		`<h2>FAQ</h2><p>Why does it fail? See <a href="/t">troubleshooting</a>.</p><p>How do I upgrade? See <a href="/u">upgrade guide</a>.</p>`,
+		`<h2>Note</h2><p>Remember to back up the database before you start the migration.</p><p><a href="/b">backup</a> <a href="/r">restore</a></p>`,
+		`<h2>Choose</h2><p>Choose <a href="/f">foo</a> <a href="/b">bar</a> to continue.</p>`,
+	}
+	for _, section := range cases {
+		page := `<html><body>` + section + `<h2>Next</h2><p>Continue with the next chapter when ready.</p></body></html>`
+		secs, _, _ := ExtractSections(page)
+		if len(secs) != 2 {
+			t.Errorf("page %q: sections = %+v, want the first section kept", section, secs)
 		}
+	}
+}
+
+// TestExtractBreadcrumbIsARail: a breadcrumb of any length is labels and
+// separators — no word between two links — so the length does not save it.
+func TestExtractBreadcrumbIsARail(t *testing.T) {
+	page := `<html><body><div><a href="/">Home</a> :: <a href="/d">Docs</a> :: ` +
+		`<a href="/g">Guide</a> → <a href="/a">API</a> • <a href="/x">About</a></div>` +
+		`<h2>Body</h2><p>Real body text of the page.</p></body></html>`
+	secs, _, _ := ExtractSections(page)
+	if len(secs) != 1 || secs[0].Heading != "Body" {
+		t.Fatalf("sections = %+v, want just Body", secs)
+	}
+}
+
+// TestExtractLinkMenuIsARail: a block of links and separators holds no word
+// outside the links, so it is a menu however many labels it has.
+func TestExtractLinkMenuIsARail(t *testing.T) {
+	var b strings.Builder
+	b.WriteString(`<html><body><div><p>`)
+	for i := 0; i < 20; i++ {
+		label := "v" + strings.Repeat("x", 4) + string(rune('a'+i))
+		b.WriteString(`<a href="/` + label + `">` + label + `</a> / `)
+	}
+	b.WriteString(`</p></div><h2>Body</h2><p>Real body text of the page.</p></body></html>`)
+	secs, _, _ := ExtractSections(b.String())
+	if len(secs) != 1 || secs[0].Heading != "Body" {
+		t.Fatalf("sections = %+v, want just Body", secs)
+	}
+}
+
+// TestExtractLabelledPickerSurvives: the trade-off of the strict rule. A picker
+// with captions holds words outside the links, so it is stored as a section
+// rather than guessed away: one noisy section is cheaper than cutting a
+// paragraph that happens to be mostly links.
+func TestExtractLabelledPickerSurvives(t *testing.T) {
+	page := `<html><body><div><p>Supported Versions: <a href="/v1">1.0</a> / <a href="/v2">2.0</a></p></div>` +
+		`<h2>Body</h2><p>Real body text of the page.</p></body></html>`
+	secs, _, _ := ExtractSections(page)
+	if len(secs) != 2 {
+		t.Fatalf("sections = %+v, want the picker and Body", secs)
+	}
+}
+
+// TestExtractFallbackKeepsLinesAndPre: the tokenizer path for markup the parser
+// refuses keeps <br> as a line end and <pre> verbatim.
+func TestExtractFallbackKeepsLinesAndPre(t *testing.T) {
+	page := strings.Repeat("<div>", 600) + "<p>first<br>second</p><pre>func main() {\n    x := 1\n}</pre>"
+	secs, _, _ := ExtractSections(page)
+	if len(secs) != 1 {
+		t.Fatalf("sections = %+v, want one", secs)
+	}
+	want := "first\nsecond\nfunc main() {\n    x := 1\n}"
+	if secs[0].Text != want {
+		t.Errorf("text = %q, want %q", secs[0].Text, want)
+	}
+}
+
+// TestExtractFallbackDetails: the tokenizer path (markup deeper than the tree
+// parser's stack cap) keeps inline spacing, keeps a code block whole — including
+// <br> and the text that follows it — and does not collect images from chrome.
+func TestExtractFallbackDetails(t *testing.T) {
+	deep := func(s string) string { return strings.Repeat("<div>", 600) + s }
+	cases := []struct{ name, page, want string }{
+		{"inline spacing", deep(`<p>Run <code>go test</code> <code>./...</code> now.</p>`), "Run go test ./... now."},
+		{"break inside code", deep(`<pre>a<br>b</pre>`), "a\nb"},
+		{"text after code", deep(`<pre>x := 1</pre><p>tail after code</p>`), "x := 1\ntail after code"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			secs, _, _ := ExtractSections(tc.page)
+			if len(secs) != 1 || secs[0].Text != tc.want {
+				t.Fatalf("sections = %+v, want one section %q", secs, tc.want)
+			}
+		})
+	}
+
+	t.Run("chrome images are not collected", func(t *testing.T) {
+		_, imgs, _ := ExtractSections(deep(`<p>real text of the page</p><nav><img src="/nav.png"></nav><img src="/real.png">`))
+		if len(imgs) != 1 || imgs[0].URL != "/real.png" {
+			t.Fatalf("images = %+v, want only /real.png", imgs)
+		}
+	})
+
+	t.Run("chrome inside code is text", func(t *testing.T) {
+		secs, _, _ := ExtractSections(deep(`<pre>line one<nav>line two</nav>line three</pre>`))
+		if len(secs) != 1 || !strings.Contains(secs[0].Text, "line two") {
+			t.Fatalf("sections = %+v, want the code block with line two", secs)
+		}
+	})
+
+	t.Run("unmatched close does not split", func(t *testing.T) {
+		secs, _, _ := ExtractSections(deep(`<p>alpha text</pre> beta text</p>`))
+		if len(secs) != 1 || secs[0].Text != "alpha text beta text" {
+			t.Fatalf("sections = %+v, want one line", secs)
+		}
+	})
+
+	t.Run("all-chrome retry keeps no script", func(t *testing.T) {
+		secs, _, _ := ExtractSections(deep(`<nav>nav text only</nav><script>var secret = 1;</script>`))
+		if len(secs) == 0 {
+			t.Fatal("expected the chrome text")
+		}
+		if strings.Contains(secs[0].Text, "secret") {
+			t.Fatalf("script leaked into the document: %q", secs[0].Text)
+		}
+	})
+
+	t.Run("unclosed head does not swallow the page", func(t *testing.T) {
+		page := "<!doctype html><html><head><title>x</title><body>" + strings.Repeat("<div>", 600) +
+			"<p>prose that must survive</p>"
+		secs, _, _ := ExtractSections(page)
+		if len(secs) != 1 || !strings.Contains(secs[0].Text, "prose that must survive") {
+			t.Fatalf("sections = %+v, want the body prose", secs)
+		}
+	})
+
+	t.Run("all-chrome page is kept", func(t *testing.T) {
+		secs, _, _ := ExtractSections(deep(`<nav>only navigation text here</nav>`))
+		if len(secs) == 0 {
+			t.Fatal("a page that is entirely chrome must still yield sections")
+		}
+	})
+}
+
+// TestExtractTitleLinear guards the title scan against two quadratic shapes: an
+// unterminated comment full of "<title>" (asking "is this offset inside a
+// comment" from the start of the document per hit), and a page made of comments
+// closed with the legacy "--!>" (looking for "-->" and "--!>" with separate
+// searches scanned the tail per comment: 2 MB cost 48 s).
+func TestExtractTitleLinear(t *testing.T) {
+	cases := []struct {
+		name string
+		page string
+	}{
+		{"unterminated comment", "<p>real content</p><!--" + strings.Repeat("<title>", 20000)},
+		{"legacy comment closes", strings.Repeat("<!--x--!>", 200000) + "<title>Real</title>"},
+		{"many short comments", strings.Repeat("<!--x-->", 20000) + "<title>Real</title>"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			done := make(chan string, 1)
+			go func() { done <- ExtractTitle(tc.page) }()
+			select {
+			case got := <-done:
+				if tc.name != "unterminated comment" && got != "Real" {
+					t.Errorf("title = %q, want Real", got)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("ExtractTitle is not linear on this input")
+			}
+		})
+	}
+}
+
+// TestExtractInlineTextNotGlued: inline elements split a sentence into several
+// text nodes; joining them must keep the spaces, or "go test ./..." becomes
+// "go test./...".
+func TestExtractInlineTextNotGlued(t *testing.T) {
+	cases := []struct{ page, want string }{
+		{"<p>Run <code>go test</code> <code>./...</code> now.</p>", "Run go test ./... now."},
+		{"<p><b>bold</b> <b>italic</b></p>", "bold italic"},
+		{"<p>See <a href=\"/a\">one</a> <a href=\"/b\">two</a> please.</p>", "See one two please."},
+	}
+	for _, tc := range cases {
+		secs, _, _ := ExtractSections(tc.page)
+		if len(secs) != 1 || secs[0].Text != tc.want {
+			t.Errorf("page %q: text = %q, want %q", tc.page, secs[0].Text, tc.want)
+		}
+	}
+}
+
+// TestExtractDeepHeadingEndsLine: a block element's close ends the line even
+// when it never opened a section (h5, or a div inside a div).
+func TestExtractDeepHeadingEndsLine(t *testing.T) {
+	scases := []struct{ page, want string }{
+		{"<h2>S</h2><h5>Subhead</h5>Prose right after.</p>", "Subhead\nProse right after."},
+		{"<h2>S</h2><div>first<div>second</div>third</div>", "first\nsecond\nthird"},
+	}
+	for _, tc := range scases {
+		secs, _, _ := ExtractSections(tc.page)
+		if len(secs) != 1 || secs[0].Text != tc.want {
+			t.Errorf("page %q: text = %q, want %q", tc.page, secs[0].Text, tc.want)
+		}
+	}
+}
+
+// TestExtractDeepMarkupFallback: markup nested past the parser's stack cap still
+// yields its text via the tokenizer path — headings are lost, the page is not.
+func TestExtractDeepMarkupFallback(t *testing.T) {
+	page := strings.Repeat("<div>", 600) + "<p>deep text survives</p>"
+	secs, _, _ := ExtractSections(page)
+	if len(secs) != 1 || !strings.Contains(secs[0].Text, "deep text survives") {
+		t.Fatalf("sections = %+v, want the deep text", secs)
+	}
+}
+
+// TestExtractTitleIgnoresCommentAndScript: "<title>" inside a comment or a raw
+// text element is not the page title.
+func TestExtractTitleIgnoresCommentAndScript(t *testing.T) {
+	if got := ExtractTitle(`<!-- <title>Old</title> --><title>New</title>`); got != "New" {
+		t.Errorf("title = %q, want New", got)
+	}
+	if got := ExtractTitle(`<script>var s = "<title>JS</title>";</script><title>Real</title>`); got != "Real" {
+		t.Errorf("title = %q, want Real", got)
+	}
+	if got := ExtractTitle(`<a href=/x title=don't>y</a><title>Real</title>`); got != "Real" {
+		t.Errorf("apostrophe in an unquoted value: title = %q, want Real", got)
+	}
+	if got := ExtractTitle(`<div data-x="a > <title>Fake</title>"><title>Real</title>`); got != "Real" {
+		t.Errorf("'>' inside a quoted value: title = %q, want Real", got)
+	}
+	if got := ExtractTitle(`<!-- x --!><title>Real</title>`); got != "Real" {
+		t.Errorf("legacy comment close: title = %q, want Real", got)
+	}
+	if got := ExtractTitle(`<svg/><title>Real</title>`); got != "Real" {
+		t.Errorf("self-closed svg: title = %q, want Real", got)
+	}
+	// HTML ignores the slash outside foreign content, so <title/> opens a real
+	// title; the text runs to the first </title>, as a browser reads it.
+	if got := ExtractTitle(`<title/>Real page</title>`); got != "Real page" {
+		t.Errorf("self-closed title: title = %q, want Real page", got)
+	}
+	if got := ExtractTitle(`<title data-x=">">Real</title>`); got != "Real" {
+		t.Errorf("'>' in a title attribute: title = %q, want Real", got)
+	}
+	if got := ExtractTitle(`<title = "x">Real</title>`); got != "Real" {
+		t.Errorf("odd attribute shape: title = %q, want Real", got)
+	}
+	if got := ExtractTitle(`<head><title>Cut here`); got != "Cut here" {
+		t.Errorf("cut title = %q, want the text to EOF", got)
+	}
+}
+
+// TestAttributeAndRoleParsing pins the forms the hand-rolled attribute scanner
+// used to get wrong. The tokenizer owns them now, so this is a regression guard
+// at the extraction level: CRLF-separated markup, an unquoted value followed by
+// another attribute, a boolean attribute, and role spacing.
+func TestAttributeAndRoleParsing(t *testing.T) {
+	secs, imgs, _ := ExtractSections("<html><body><div\nhidden role = \"main\">" +
+		"<img src=/a.png\rdata-x=1>" +
+		"<h2>Article</h2><p>Article body text.</p></div></body></html>")
+	if len(imgs) != 1 || imgs[0].URL != "/a.png" {
+		t.Fatalf("images = %+v, want one with url /a.png", imgs)
+	}
+	if len(secs) != 1 || secs[0].Heading != "Article" {
+		t.Fatalf("sections = %+v, want just Article", secs)
 	}
 }

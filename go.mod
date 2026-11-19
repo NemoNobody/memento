@@ -9,6 +9,7 @@ require (
 	github.com/opensearch-project/opensearch-go/v4 v4.8.1
 	github.com/spf13/cobra v1.10.2
 	github.com/zalando/go-keyring v0.2.8
+	golang.org/x/net v0.63.0
 	golang.org/x/term v0.48.0
 )
 

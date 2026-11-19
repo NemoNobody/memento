@@ -196,15 +196,19 @@ memento doc <hash-from-output> 1      # the "Part I. Tutorial" section
 memento docs "tutorial"
 ```
 
-The extractor splits a page on its headings (scripts and styles are dropped);
-sections are cheap to read, so open the one you want instead of the whole
-document. Site chrome is filtered, not stored: when the markup names the
-article (`<main>`, `role="main"`, `<article>`) only that container is read,
-`nav`/`aside`/`footer` elements are removed, and a short block that is mostly
-anchor text is treated as a link rail. A page that is nothing but links keeps
-its sections — an empty document would hide the loss. Prose that lives outside
-any of these markers can still carry a rail or a banner; truncation by the
-size limits is reported rather than silent.
+The page is parsed with the HTML5 tokenizer (`golang.org/x/net/html`), then split
+on its headings; sections are cheap to read, so open the one you want instead of
+the whole document. Code blocks (`<pre>`) are stored with their newlines and
+indentation: a code sample whose braces are missing is not a code sample. Site
+chrome is filtered, not stored: when the markup names the article (`<main>`,
+`role="main"`, `<article>`) only that container is read, `nav`/`aside`/`footer`
+are removed, and a short block of at least two links with no letter outside them
+(a rail, a breadcrumb) is dropped. The rule is deliberately strict: one word outside the
+links makes the block prose, so a labelled menu survives — cutting a paragraph to
+remove a menu is the worse mistake. A page that is nothing but
+links keeps its sections — an empty document would hide the loss. Prose outside
+any of these markers can still carry a banner; truncation by the size limits is
+reported rather than silent.
 
 ## Commands
 
