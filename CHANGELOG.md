@@ -30,11 +30,12 @@ heading to build the release notes).
 - keyring: the session-bus connection is never closed. `dbus.SessionBus`
   returns a process-wide connection, so closing it after one call broke every
   later call in the same process (an MCP server reads the password repeatedly).
-- client: the additive mapping reconcile, the journal infrastructure install
-  and the journal index pipeline pinning run once per store per process
-  instead of once per client. The MCP server builds a client per tool call,
-  so every call paid a `PUT _mapping` and every append paid two or three
-  extra requests. Concurrent callers wait for the first pass rather than
+- client: the additive mapping reconcile, the journal infrastructure install,
+  the journal index pipeline pinning and the writer-label probe
+  (`GET /_security/authinfo`) run once per store per process instead of once
+  per client. The MCP server builds a client per tool call, so every call paid
+  a `PUT _mapping`, every append paid two or three extra requests and every
+  write re-probed the label. Concurrent callers wait for the first pass rather than
   skipping it (a write racing the old code could pin a field with the dynamic
   mapping, or write a journal entry before the ingest pipeline was pinned).
   The work is assumed stable for the process lifetime: restart after a cluster
