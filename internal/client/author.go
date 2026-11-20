@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/user"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -53,41 +54,63 @@ const authorRetryBackoff = 5 * time.Minute
 // model is a local/trusted contour, not an opponent with store access).
 // With the security plugin off — the common single-node case — authinfo is
 // unavailable and the chain falls to config/OS silently.
-func (c *Client) resolveAuthor(ctx context.Context) AuthorInfo {
-	c.authorMu.Lock()
-	now := time.Now()
-	if c.authorResolved &&
-		(c.author.AuthorSource == AuthorSourceSecurity || now.Before(c.authorRetryAt)) {
-		c.authorMu.Unlock()
-		return c.author
+// authorCache is the per-store writer-label cache. It lives in the process, not
+// on the Client: the MCP server builds a client per tool call, and a per-client
+// cache would probe GET /_security/authinfo on every write.
+type authorCache struct {
+	mu       sync.Mutex
+	resolved bool
+	retryAt  time.Time
+	info     AuthorInfo
+}
+
+// authorCaches holds one cache per store URL.
+var authorCaches sync.Map
+
+func authorCacheFor(storeURL string) *authorCache {
+	if v, ok := authorCaches.Load(storeURL); ok {
+		return v.(*authorCache)
 	}
-	c.authorMu.Unlock()
+	v, _ := authorCaches.LoadOrStore(storeURL, &authorCache{})
+	return v.(*authorCache)
+}
+
+func (c *Client) resolveAuthor(ctx context.Context) AuthorInfo {
+	cache := authorCacheFor(c.cfg.OpenSearchURL)
+	cache.mu.Lock()
+	now := time.Now()
+	if cache.resolved &&
+		(cache.info.AuthorSource == AuthorSourceSecurity || now.Before(cache.retryAt)) {
+		defer cache.mu.Unlock()
+		return cache.info
+	}
+	cache.mu.Unlock()
 	// The chain (including the security probe, up to its own 5 s deadline)
 	// runs OUTSIDE the mutex: holding it across a network round-trip would
-	// serialize every writer on the client for the probe's duration.
+	// serialize every writer for the probe's duration.
 	// Concurrent cold starts may each pay one probe — a rare, harmless
 	// duplicate GET, and the double-check below keeps the better result.
 	info := c.buildAuthor(ctx)
 
-	c.authorMu.Lock()
-	defer c.authorMu.Unlock()
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
 	// Double-check: a concurrent resolve may have already produced a cached
 	// answer; if it found the security label, that beats our fallback chain.
-	if c.authorResolved && c.author.AuthorSource == AuthorSourceSecurity && info.AuthorSource != AuthorSourceSecurity {
-		return c.author
+	if cache.resolved && cache.info.AuthorSource == AuthorSourceSecurity && info.AuthorSource != AuthorSourceSecurity {
+		return cache.info
 	}
-	c.author = info
-	c.authorResolved = true
+	cache.info = info
+	cache.resolved = true
 	if info.AuthorSource != AuthorSourceSecurity {
-		c.authorRetryAt = time.Now().Add(authorRetryBackoff)
+		cache.retryAt = time.Now().Add(authorRetryBackoff)
 		if ctx.Err() != nil {
 			// The probe died with the CALLER's context (an abandoned
 			// request), not with the plugin: do not punish the next healthy
 			// call with the full backoff.
-			c.authorRetryAt = time.Now()
+			cache.retryAt = time.Now()
 		}
 	}
-	return c.author
+	return cache.info
 }
 
 // buildAuthor walks the authorship chain (security probe → config → OS

@@ -52,6 +52,10 @@ func resetProcessCaches() {
 		reconciledStores.Delete(key)
 		return true
 	})
+	authorCaches.Range(func(key, _ any) bool {
+		authorCaches.Delete(key)
+		return true
+	})
 	infraGatesMu.Lock()
 	infraGates = map[string]*installGate{}
 	infraGatesMu.Unlock()

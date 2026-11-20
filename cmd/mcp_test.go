@@ -10,7 +10,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1166,5 +1168,45 @@ func TestMCPGetKeysEmptyPreValidated(t *testing.T) {
 	}
 	if strings.Contains(text, "store") {
 		t.Errorf("the call touched the store before validating: %s", text)
+	}
+}
+
+// TestMCPAddBatchEnsuresIndexOnce: the batch reuses one client, so the index
+// check (and the mapping/infra passes behind it) happens once for the whole
+// batch. Before the batch shared a client it was one check per item.
+func TestMCPAddBatchEnsuresIndexOnce(t *testing.T) {
+	var heads atomic.Int64
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodHead && r.URL.Path == "/memento":
+			heads.Add(1)
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/memento/_doc/"):
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, `{"error":{"type":"document_missing_exception","reason":"no such document"},"status":404}`)
+		default:
+			_, _ = io.WriteString(w, `{"_index":"memento","_id":"k","_version":1,"_seq_no":0,"_primary_term":1,"result":"created"}`)
+		}
+	}))
+	t.Cleanup(fake.Close)
+
+	session := connectTestServer(t, "OPENSEARCH_URL="+fake.URL)
+	items := make([]any, 0, 6)
+	for i := 0; i < 6; i++ {
+		items = append(items, map[string]any{"key": "k" + strconv.Itoa(i), "value": "v", "category": "config"})
+	}
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "memento_add_batch",
+		Arguments: map[string]any{"items": items},
+	})
+	if err != nil {
+		t.Fatalf("CallTool(memento_add_batch): %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("tool reported an error: %v", res.Content)
+	}
+	if got := heads.Load(); got != 1 {
+		t.Fatalf("index checks = %d, want 1 (one client per batch)", got)
 	}
 }

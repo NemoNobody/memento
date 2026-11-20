@@ -146,11 +146,18 @@ type installGate struct {
 func infraGate(key string) *installGate {
 	infraGatesMu.Lock()
 	defer infraGatesMu.Unlock()
-	gate, ok := infraGates[key]
-	if !ok {
-		gate = &installGate{}
-		infraGates[key] = gate
+	if gate, ok := infraGates[key]; ok {
+		return gate
 	}
+	if len(infraGates) >= maxInfraGates {
+		// Bounded: a day-period journal adds one pipeline key per day. Dropping
+		// the claims only repeats idempotent work (an index the template already
+		// prepared stays prepared), and a caller still holding a dropped gate
+		// finishes its own pass harmlessly.
+		infraGates = map[string]*installGate{}
+	}
+	gate := &installGate{}
+	infraGates[key] = gate
 	return gate
 }
 
@@ -158,6 +165,10 @@ var (
 	infraGatesMu sync.Mutex
 	infraGates   = map[string]*installGate{}
 )
+
+// maxInfraGates bounds the per-key claims. A day-period journal adds one
+// pipeline key per day; dropping the map only repeats idempotent work.
+const maxInfraGates = 512
 
 // ensureJournalInfra installs the journal pipeline and index template.
 // PUT pipeline and the template existence check are idempotent, and the

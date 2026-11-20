@@ -56,10 +56,9 @@ type Client struct {
 	api *opensearchapi.Client
 	cfg *config.Config
 
-	// journal infra, journal index pipeline pinning, the additive mapping
-	// reconcile and the replica reconcile are process-wide (see the gates in
-	// journal.go, mapping.go and replicas.go): the MCP server builds a fresh
-	// client per tool call, so per-client flags would repeat the work.
+	// Everything below is process-wide (see replicas.go, author.go, journal.go,
+	// mapping.go): the MCP server builds a fresh client per tool call, so
+	// per-client "already done" state would repeat the work on every call.
 
 	// replicasOnce/replicasVal cache the auto replica-count probe (see
 	// autoReplicas): the topology does not change within one process run.
@@ -70,15 +69,6 @@ type Client struct {
 	replicasVal     int
 	replicasProbeOK bool
 	replicasFixOnce sync.Once
-
-	// authorMu guards the writer-label cache: a security-resolved identity
-	// lives for the client's lifetime (the MCP server builds one per tool call,
-	// so this is one probe per call, not per process); a degraded chain is
-	// re-probed with backoff (see resolveAuthor).
-	authorMu       sync.Mutex
-	authorResolved bool
-	authorRetryAt  time.Time
-	author         AuthorInfo
 }
 
 // NewClient creates a new OpenSearch client.
