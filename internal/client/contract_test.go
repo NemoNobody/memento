@@ -45,17 +45,15 @@ func newFakeClient(t *testing.T, respond func(r recordedRequest) (int, string)) 
 
 // newFakeClientCfg is newFakeClient with a hook to override config values
 // (e.g. HistoryLimit) after the defaults are applied.
-// resetProcessCaches clears the process-wide "already installed" claims. Tests
-// build several clients against the same store name, and the MCP server builds
-// one per tool call: without this, a claim made by one test would silently
-// disable the work another test asserts.
+// resetProcessCaches clears the process-wide "already installed" claims. The
+// fake stores are per-test, so the keys would not collide today; clearing them
+// keeps a future test that reuses a store name from inheriting a claim, and
+// keeps the tests safe if they ever run in parallel.
 func resetProcessCaches() {
-	for _, m := range []*sync.Map{&journalPipelines, &reconciledStores} {
-		m.Range(func(key, _ any) bool {
-			m.Delete(key)
-			return true
-		})
-	}
+	reconciledStores.Range(func(key, _ any) bool {
+		reconciledStores.Delete(key)
+		return true
+	})
 	infraGatesMu.Lock()
 	infraGates = map[string]*installGate{}
 	infraGatesMu.Unlock()

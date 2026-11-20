@@ -157,9 +157,6 @@ func infraGate(key string) *installGate {
 var (
 	infraGatesMu sync.Mutex
 	infraGates   = map[string]*installGate{}
-	// journalPipelines claims one default_pipeline pin per journal index per
-	// process, released on failure so a refused settings PUT retries.
-	journalPipelines sync.Map
 )
 
 // ensureJournalInfra installs the journal pipeline and index template.
@@ -231,10 +228,15 @@ func (c *Client) installJournalInfra(ctx context.Context) error {
 				IndexTemplate: tpl,
 				Body:          strings.NewReader(string(body)),
 			}); mkErr != nil {
-				// Best-effort: the template exists and appends work with it;
-				// a failed alignment (read-only store, permission gap) must not
-				// fail the write the caller asked for. The create branch above
-				// stays fatal — without a template the appends are broken.
+				// Best-effort: the template exists and appends work with it; a
+				// failed alignment (read-only store, permission gap) must not fail
+				// the write the caller asked for. The create branch above stays
+				// fatal — without a template the appends are broken.
+				//
+				// The drift check runs once per process: a cluster that grows
+				// afterwards keeps stamping new history indices with the count
+				// read here until the process restarts (the same assumption the
+				// replica reconcile makes).
 				_ = mkErr
 			}
 		}
@@ -324,8 +326,13 @@ func (c *Client) appendJournalID(ctx context.Context, e *model.JournalEntry, id 
 // template (which wires the pipeline), so nothing more is needed. One
 // idempotent settings PUT per index per process.
 func (c *Client) ensureJournalIndexPipeline(ctx context.Context, index string) error {
-	key := c.cfg.OpenSearchURL + "|" + c.cfg.IndexName + "|" + index
-	if _, loaded := journalPipelines.LoadOrStore(key, struct{}{}); loaded {
+	gate := infraGate("pipeline|" + c.cfg.OpenSearchURL + "|" + c.cfg.IndexName + "|" + index)
+	// Wait, do not skip: an append that proceeds before the pipeline is pinned
+	// writes an entry without ingest_at, which sorts last and becomes the first
+	// prune victim.
+	gate.mu.Lock()
+	defer gate.mu.Unlock()
+	if gate.done {
 		return nil
 	}
 	body, _ := json.Marshal(map[string]interface{}{
@@ -339,11 +346,11 @@ func (c *Client) ensureJournalIndexPipeline(ctx context.Context, index string) e
 	// A 403 means the role deliberately cannot manage index settings — the
 	// shared-store recipe where a service account owns the infra: skip the pin,
 	// the externally-managed index already carries the pipeline. Only a genuine
-	// transport/server error fails the append.
+	// transport/server error fails the append and leaves the gate open.
 	if err != nil && !isNotFound(err) && !statusIs(err, 403) {
-		journalPipelines.Delete(key)
 		return wrapWriteError("journal index pipeline", err)
 	}
+	gate.done = true
 	return nil
 }
 

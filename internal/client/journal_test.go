@@ -1484,3 +1484,38 @@ func TestJournalInfraFailureIsReleasedForTheNextClient(t *testing.T) {
 		t.Fatalf("pipeline probes = %d, want 2 (a failed pass must not claim the store)", probes)
 	}
 }
+
+// TestJournalIndexPipelineFailureIsReleasedForTheNextClient: a failed settings
+// PUT must leave the pin claim open, or a legacy index keeps writing entries
+// without ingest_at for the rest of the process.
+func TestJournalIndexPipelineFailureIsReleasedForTheNextClient(t *testing.T) {
+	const index = "memento-history-2026.11"
+	broken := func(r recordedRequest) (int, string) {
+		if r.Method == http.MethodPut && strings.HasSuffix(r.Path, "/_settings") {
+			return http.StatusInternalServerError, `{"error":"boom"}`
+		}
+		return journalInfraOK(r)
+	}
+	c1, fake := newFakeClientCfg(t, nil, broken)
+	if err := c1.ensureJournalIndexPipeline(context.Background(), index); err == nil {
+		t.Fatal("first pin must fail")
+	}
+	c2, err := NewClient(c1.cfg)
+	if err != nil {
+		t.Fatalf("second NewClient: %v", err)
+	}
+	if err := c2.ensureJournalIndexPipeline(context.Background(), index); err == nil {
+		t.Fatal("the second client must retry and fail too")
+	}
+	puts := 0
+	fake.mu.Lock()
+	for _, r := range fake.requests {
+		if r.Method == http.MethodPut && strings.HasSuffix(r.Path, "/_settings") {
+			puts++
+		}
+	}
+	fake.mu.Unlock()
+	if puts != 2 {
+		t.Fatalf("settings puts = %d, want 2 (a failed pin must not claim the index)", puts)
+	}
+}
