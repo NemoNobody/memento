@@ -17,6 +17,8 @@
   "docs_ttl_days": 90,
   "fetch_timeout_seconds": 30,
   "fetch_max_bytes": 2000000,
+  "fetch_block_chars": 8000,
+  "fetch_doc_chars": 100000,
   "fetch_allow_hosts": [],
   "fetch_user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
   "fetch_proxy_url": "",

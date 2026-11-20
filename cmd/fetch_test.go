@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -85,6 +86,52 @@ func TestPrintDocFullAndSection(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "first section text") {
 		t.Errorf("section body missing:\n%s", buf.String())
+	}
+}
+
+func TestPrintDocOutlineCapsRows(t *testing.T) {
+	var buf bytes.Buffer
+	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+	d := testDoc()
+	d.Sections = nil
+	for i := 0; i < outlineRows+5; i++ {
+		d.Sections = append(d.Sections, model.Section{
+			Order:   i,
+			Heading: "Section " + strconv.Itoa(i),
+			Text:    "body",
+		})
+	}
+	if err := printDocOutline(&buf, d, false, false, now); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "  [0] Section 0") {
+		t.Errorf("outline lacks the first row:\n%s", out)
+	}
+	if strings.Contains(out, "  ["+strconv.Itoa(outlineRows)+"] ") {
+		t.Errorf("outline listed a row past the cap:\n%s", out)
+	}
+	if !strings.Contains(out, "more 5 blocks, orders 60..64") {
+		t.Errorf("outline lacks the hidden-block summary:\n%s", out)
+	}
+}
+
+func TestPrintDocOutlineTextVolume(t *testing.T) {
+	var buf bytes.Buffer
+	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+	d := testDoc()
+	d.Size = 120
+	d.FullChars = 400
+	d.Truncated = true
+	if err := printDocOutline(&buf, d, false, false, now); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "text: 120 of 400 chars stored") {
+		t.Errorf("outline lacks the stored/total volume:\n%s", out)
+	}
+	if !strings.Contains(out, "store the whole page with --max-chars 0") {
+		t.Errorf("truncated outline lacks the whole-page hint:\n%s", out)
 	}
 }
 

@@ -238,8 +238,12 @@ func runMCPServer(confPath string) error {
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "memento_fetch_doc",
-		Description: "Fetch a web page, store its full snapshot in the docs index, " +
-			"and return the outline (hash, title, sections). A second fetch of the " +
+		Description: "Fetch a web page, store its snapshot in the docs index as " +
+			"blocks (headings/sections), and return the outline (hash, title, " +
+			"sections). max_chars caps the stored text in runes (0 = the whole " +
+			"page; default fetch_doc_chars), block_chars sets the target block size " +
+			"(1000..64000; default fetch_block_chars); the budget drops whole " +
+			"blocks, never cuts one. A second fetch of the " +
 			"same URL returns the stored snapshot (cached=true) until its TTL " +
 			"expires; refresh=true forces a new download. Section text is read with " +
 			"memento_get_doc; the raw page is never returned (context economy). " +
@@ -253,8 +257,11 @@ func runMCPServer(confPath string) error {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "memento_get_doc",
 		Description: "Read a stored document snapshot by hash: the outline by " +
-			"default, section=N for one section's text, full=true for every section " +
-			"(prefer one section: full bloats the context). Never touches the " +
+			"default, section=N for one block or a run of them (blocks=N, default " +
+			"1, max 10), full=true for every block. One answer is capped at " +
+			"32000 runes of block text; when the cap cuts the read, next names " +
+			"the section to continue from. Prefer one section: full bloats the " +
+			"context. Never touches the " +
 			"network: stale=true means the snapshot is past its TTL — refresh it " +
 			"with memento_fetch_doc before quoting.",
 	}, s.getDoc)
@@ -1562,6 +1569,12 @@ type fetchDocInput struct {
 	Project string `json:"project,omitempty" jsonschema:"tag the document with this project"`
 	Refresh bool   `json:"refresh,omitempty" jsonschema:"force a fresh download even when a stored snapshot exists"`
 
+	// MaxChars and BlockChars override the configured extraction limits for
+	// this call (fetch_doc_chars, fetch_block_chars). Pointers: 0 is a
+	// meaningful MaxChars (store the whole page).
+	MaxChars   *int `json:"max_chars,omitempty" jsonschema:"characters to store; 0 = the whole document; default: fetch_doc_chars"`
+	BlockChars *int `json:"block_chars,omitempty" jsonschema:"target block size in runes (1000..64000); default: fetch_block_chars"`
+
 	// ConfirmSecret bypasses a guard hit at secret_guard=ask, the same
 	// contract as memento_add: page text is untrusted and can quote
 	// credential-like strings.
@@ -1599,6 +1612,14 @@ type fetchDocOutput struct {
 	Truncated   bool                `json:"truncated,omitempty" jsonschema:"extraction hit a limit: the stored text is a prefix"`
 	Via         string              `json:"via,omitempty" jsonschema:"route that served the fetch when not direct: proxy | obscura (audit; obscura means the content was browser-rendered)"`
 	Sections    []docSectionOutline `json:"sections,omitempty" jsonschema:"outline: pull a section with memento_get_doc(hash, section)"`
+
+	// Chars is the stored text and CharsTotal the text extracted before the
+	// budget: N of M tells the agent how much of the page it has. The outline
+	// is capped at outlineRows lines; SectionsHidden counts the rest.
+	Chars          int    `json:"chars_stored,omitempty" jsonschema:"characters stored in this snapshot (runes)"`
+	CharsTotal     int    `json:"chars_total,omitempty" jsonschema:"characters extracted from the whole page before the storage budget (runes)"`
+	SectionsHidden int    `json:"sections_hidden,omitempty" jsonschema:"outline blocks beyond the listed ones (hint summarizes their range)"`
+	Hint           string `json:"hint,omitempty" jsonschema:"navigation advice: more blocks, or a truncated snapshot and how to store the rest"`
 
 	// Redactions: high-confidence credential spans edited out of the stored
 	// snapshot (pattern/field/size, no preview): the secret never entered the
@@ -1662,11 +1683,15 @@ func (s *mcpServer) fetchDoc(ctx context.Context, req *mcp.CallToolRequest, in f
 		guardField{Name: "project", Text: in.Project}); err != nil {
 		return nil, fetchDocOutput{}, err
 	}
+	limits, err := resolveExtractLimits(cfg, in.BlockChars, in.MaxChars)
+	if err != nil {
+		return nil, fetchDocOutput{}, err
+	}
 	c, err := client.NewClient(cfg) // FetchDoc ensures the docs index itself
 	if err != nil {
 		return nil, fetchDocOutput{}, storeError("memento_fetch_doc", err)
 	}
-	doc, cached, revalidated, err := c.FetchDoc(ctx, rawURL, in.Project, in.Refresh,
+	doc, cached, revalidated, err := c.FetchDocWithin(ctx, rawURL, in.Project, in.Refresh, limits,
 		func(d *model.Doc) ([]model.Redaction, error) {
 			// Guard after extraction, before the doc is finalized.
 			return guardFetch(d, cfg.SecretGuard, in.ConfirmSecret)
@@ -1674,20 +1699,40 @@ func (s *mcpServer) fetchDoc(ctx context.Context, req *mcp.CallToolRequest, in f
 	if err != nil {
 		return nil, fetchDocOutput{}, err
 	}
+	outline := newDocOutline(doc)
+	shown := len(outline)
+	if shown > outlineRows {
+		shown = outlineRows
+	}
+	hint := outlineSummary(doc, shown)
+	if doc.Truncated {
+		truncHint := "stored a prefix of the page; call again with max_chars=0 to store the whole page"
+		if doc.FullChars > 0 {
+			truncHint = fmt.Sprintf("stored the first %d of %d chars; call again with max_chars=0 to store the whole page", doc.Size, doc.FullChars)
+		}
+		if hint != "" {
+			hint += " "
+		}
+		hint += truncHint
+	}
 	now := time.Now().UTC()
 	out := fetchDocOutput{
-		Hash:        doc.URLHash,
-		URL:         doc.URL,
-		Title:       doc.Title,
-		Project:     doc.Project,
-		FetchedAt:   rfc3339OrEmpty(doc.FetchedAt),
-		ExpiresAt:   rfc3339OrEmpty(doc.ExpiresAt),
-		Stale:       doc.Stale(now),
-		Cached:      cached,
-		Revalidated: revalidated,
-		Truncated:   doc.Truncated,
-		Via:         viaOut(doc),
-		Sections:    newDocOutline(doc),
+		Hash:           doc.URLHash,
+		URL:            doc.URL,
+		Title:          doc.Title,
+		Project:        doc.Project,
+		FetchedAt:      rfc3339OrEmpty(doc.FetchedAt),
+		ExpiresAt:      rfc3339OrEmpty(doc.ExpiresAt),
+		Stale:          doc.Stale(now),
+		Cached:         cached,
+		Revalidated:    revalidated,
+		Truncated:      doc.Truncated,
+		Via:            viaOut(doc),
+		Sections:       outline[:shown],
+		Chars:          doc.Size,
+		CharsTotal:     doc.FullChars,
+		SectionsHidden: len(outline) - shown,
+		Hint:           hint,
 
 		GuardMediumIgnored: doc.GuardMediumIgnored,
 	}
@@ -1707,7 +1752,10 @@ type getDocInput struct {
 	// Section is a pointer: 0 is a valid section number, and its absence
 	// must mean "outline only".
 	Section *int `json:"section,omitempty" jsonschema:"section number to return in full (from the outline); omit for the outline only"`
-	Full    bool `json:"full,omitempty" jsonschema:"return every section (bloats the context; prefer one section)"`
+	// Blocks is how many consecutive blocks a section read returns: 1 keeps
+	// the answer small, more saves round-trips.
+	Blocks *int `json:"blocks,omitempty" jsonschema:"how many consecutive blocks to return (default 1, max 10)"`
+	Full   bool `json:"full,omitempty" jsonschema:"return every section (bloats the context; prefer one section)"`
 }
 
 type getDocOutput struct {
@@ -1724,7 +1772,12 @@ type getDocOutput struct {
 	Sections           []docSectionOutline `json:"sections,omitempty" jsonschema:"outline: heading + length per section"`
 
 	SectionText string `json:"section_text,omitempty" jsonschema:"the text of the requested section"`
-	FullText    string `json:"full_text,omitempty" jsonschema:"every section, delimited by headers (full=true)"`
+	// BlocksIncluded counts the blocks in SectionText; Next is where a capped
+	// read continues (absent when the read reached the end).
+	BlocksIncluded int    `json:"blocks_included,omitempty" jsonschema:"blocks returned in section_text"`
+	FullText       string `json:"full_text,omitempty" jsonschema:"every section, delimited by headers (full=true)"`
+	Next           *int   `json:"next,omitempty" jsonschema:"section to continue from when the read was capped"`
+	Hint           string `json:"hint,omitempty" jsonschema:"how to continue a capped read"`
 }
 
 func (s *mcpServer) getDoc(ctx context.Context, req *mcp.CallToolRequest, in getDocInput) (*mcp.CallToolResult, getDocOutput, error) {
@@ -1755,27 +1808,36 @@ func (s *mcpServer) getDoc(ctx context.Context, req *mcp.CallToolRequest, in get
 		Sections:           newDocOutline(doc),
 	}
 	if in.Full {
-		var b strings.Builder
-		for _, sec := range doc.Sections {
-			b.WriteString("--- [")
-			b.WriteString(strconv.Itoa(sec.Order))
-			b.WriteString("] ")
-			b.WriteString(sec.Heading)
-			b.WriteString(" ---\n")
-			b.WriteString(sec.Text)
-			b.WriteString("\n")
+		text, _, next := readDocBlocks(doc, 0, len(doc.Sections), docReadBudget)
+		out.FullText = text
+		if next >= 0 {
+			out.Next = &next
+			out.Hint = fmt.Sprintf("full text capped at %d runes; continue with section=%d", docReadBudget, next)
 		}
-		out.FullText = b.String()
 	}
 	if in.Section != nil {
-		for _, sec := range doc.Sections {
-			if sec.Order == *in.Section {
-				out.SectionText = sec.Text
-				return nil, out, nil
-			}
+		want := 1
+		if in.Blocks != nil {
+			want = *in.Blocks
 		}
-		return nil, getDocOutput{}, fmt.Errorf("memento_get_doc: doc %s has no section %d (the outline lists %d sections)",
-			doc.URLHash, *in.Section, len(doc.Sections))
+		if want < 1 {
+			want = 1
+		}
+		if want > maxReadBlocks {
+			want = maxReadBlocks
+		}
+		text, included, next := readDocBlocks(doc, *in.Section, want, docReadBudget)
+		if included == 0 {
+			return nil, getDocOutput{}, fmt.Errorf("memento_get_doc: doc %s has no section %d (the outline lists %d sections)",
+				doc.URLHash, *in.Section, len(doc.Sections))
+		}
+		out.SectionText = text
+		out.BlocksIncluded = included
+		if next >= 0 {
+			out.Next = &next
+			out.Hint = fmt.Sprintf("continue with section=%d", next)
+		}
+		return nil, out, nil
 	}
 	return nil, out, nil
 }

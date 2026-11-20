@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strconv"
@@ -21,6 +22,8 @@ var fetchFlags struct {
 	refresh     bool
 	project     string
 	allowSecret bool
+	maxChars    int
+	blockChars  int
 }
 
 // FetchCmd returns the `memento fetch` command: download a page, extract its
@@ -75,12 +78,17 @@ A host outside fetch_allow_hosts is rejected before the request is made.`,
 				guardField{Name: "project", Text: fetchFlags.project}); err != nil {
 				fatalErr(err)
 			}
+			limits, err := resolveExtractLimits(cfg,
+				optionalLimit(fetchFlags.blockChars), optionalLimit(fetchFlags.maxChars))
+			if err != nil {
+				fatalErr(err)
+			}
 			ctx := context.Background()
 			c, err := newClientFromConfig(cfg)
 			if err != nil {
 				fatalErr(err)
 			}
-			doc, cached, revalidated, err := c.FetchDoc(ctx, rawURL, fetchFlags.project, fetchFlags.refresh,
+			doc, cached, revalidated, err := c.FetchDocWithin(ctx, rawURL, fetchFlags.project, fetchFlags.refresh, limits,
 				func(d *model.Doc) ([]model.Redaction, error) {
 					// The guard runs after extraction, before the doc is finalized:
 					// page text is untrusted input and can carry credential-like
@@ -101,16 +109,30 @@ A host outside fetch_allow_hosts is rejected before the request is made.`,
 		"tag the document with this project")
 	cmd.Flags().BoolVar(&fetchFlags.allowSecret, "allow-secret", false,
 		"confirm a secret-guard finding is a false positive (secret_guard=ask only)")
+	cmd.Flags().IntVar(&fetchFlags.maxChars, "max-chars", -1,
+		"runes of extracted text to store (0 = the whole document; default: fetch_doc_chars)")
+	cmd.Flags().IntVar(&fetchFlags.blockChars, "block-chars", -1,
+		"target size of one stored block in runes (default: fetch_block_chars)")
 	return cmd
+}
+
+// optionalLimit maps the flag sentinel (-1: use the configured default) to a
+// nil override; every other value goes to resolveExtractLimits for validation.
+func optionalLimit(v int) *int {
+	if v == -1 {
+		return nil
+	}
+	return &v
 }
 
 var docFlags struct {
 	section int
+	blocks  int
 	full    bool
 }
 
-// DocCmd returns the `memento doc` command: read one section (or the whole
-// doc with --full) of a stored document by hash.
+// DocCmd returns the `memento doc` command: read a run of blocks (one by
+// default), or the whole doc with --full, of a stored document by hash.
 func DocCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "doc <hash> [section]",
@@ -133,6 +155,9 @@ func DocCmd() *cobra.Command {
 				}
 				section = n
 			}
+			if docFlags.blocks < 1 || docFlags.blocks > maxReadBlocks {
+				fatalErr(fmt.Errorf("--blocks must be between 1 and %d, got %d", maxReadBlocks, docFlags.blocks))
+			}
 			ctx := context.Background()
 			c, err := newClient()
 			if err != nil {
@@ -148,16 +173,21 @@ func DocCmd() *cobra.Command {
 					fatalErr(err)
 				}
 			case section >= 0:
-				for _, s := range doc.Sections {
-					if s.Order == section {
-						if err := writeSection(os.Stdout, doc, s, time.Now().UTC()); err != nil {
-							fatalErr(err)
-						}
-						return
-					}
+				text, included, next := readDocBlocks(doc, section, docFlags.blocks, docReadBudget)
+				if included == 0 {
+					fatalErr(errors.New("doc " + hash + " has no section " + strconv.Itoa(section) +
+						" (see the outline with 'memento doc " + hash + "')"))
 				}
-				fatalErr(errors.New("doc " + hash + " has no section " + strconv.Itoa(section) +
-					" (see the outline with 'memento doc " + hash + "')"))
+				if doc.Stale(time.Now().UTC()) {
+					text = "stale: fetched " + displayTime(doc.FetchedAt) + "; re-fetch before quoting\n" + text
+				}
+				if next >= 0 {
+					text += "next: continue with --section " + strconv.Itoa(next) + "\n"
+				}
+				if _, err := io.WriteString(os.Stdout, text); err != nil {
+					fatalErr(err)
+				}
+				return
 			default:
 				if err := printDocOutline(os.Stdout, doc, false, false, time.Now().UTC()); err != nil {
 					fatalErr(err)
@@ -166,6 +196,8 @@ func DocCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().IntVar(&docFlags.section, "section", -1, "section number to print (from the outline)")
+	cmd.Flags().IntVar(&docFlags.blocks, "blocks", 1,
+		"consecutive blocks to print from --section (max "+strconv.Itoa(maxReadBlocks)+")")
 	cmd.Flags().BoolVar(&docFlags.full, "full", false, "print every section (bloats the context; prefer one section)")
 	return cmd
 }
@@ -428,7 +460,16 @@ func printDocOutline(w io.Writer, doc *model.Doc, cached, revalidated bool, now 
 		b.WriteString("revalidated: true (origin answered 304 Not Modified; the snapshot is unchanged)\n")
 	}
 	if doc.Truncated {
-		b.WriteString("truncated: true (extraction hit a limit; the stored text is a prefix)\n")
+		b.WriteString("truncated: true (extraction hit a limit; the stored text is a prefix; store the whole page with --max-chars 0)\n")
+	}
+	if doc.FullChars > 0 {
+		// How much of the page the snapshot holds: the stored text vs the text
+		// extracted before the budget. N of M is the reader's loss signal.
+		b.WriteString("text: ")
+		b.WriteString(strconv.Itoa(doc.Size))
+		b.WriteString(" of ")
+		b.WriteString(strconv.Itoa(doc.FullChars))
+		b.WriteString(" chars stored\n")
 	}
 	if doc.GuardMediumIgnored > 0 {
 		b.WriteString("guard: ")
@@ -450,7 +491,11 @@ func printDocOutline(w io.Writer, doc *model.Doc, cached, revalidated bool, now 
 		}
 	}
 	b.WriteString("sections:\n")
-	for _, s := range doc.Sections {
+	shown := len(doc.Sections)
+	if shown > outlineRows {
+		shown = outlineRows
+	}
+	for _, s := range doc.Sections[:shown] {
 		b.WriteString("  [")
 		b.WriteString(strconv.Itoa(s.Order))
 		b.WriteString("] ")
@@ -458,6 +503,10 @@ func printDocOutline(w io.Writer, doc *model.Doc, cached, revalidated bool, now 
 		b.WriteString(" (")
 		b.WriteString(strconv.Itoa(len([]rune(s.Text))))
 		b.WriteString(" chars)\n")
+	}
+	if summary := outlineSummary(doc, shown); summary != "" {
+		b.WriteString(summary)
+		b.WriteString("\n")
 	}
 	b.WriteString("read a section: memento doc ")
 	b.WriteString(doc.URLHash)

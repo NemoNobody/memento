@@ -1,6 +1,7 @@
 package client
 
 import (
+	"fmt"
 	"html"
 	"strings"
 	"unicode"
@@ -11,16 +12,39 @@ import (
 	"github.com/NemoNobody/memento/internal/model"
 )
 
-// Extraction limits. A page is research input, not a target: the stored text
-// must fit in an agent's context, so extraction caps sections, section size,
-// and total size. Truncation is reported, never silent.
+// Extraction limits. A page is research input, not a target: the stored text is
+// split into blocks an agent reads one at a time, and the storage budget stays
+// under an explicit knob. A section longer than one block is split at a line
+// boundary, never truncated — a block is a unit of reading, not of storage.
 const (
-	MaxSections     = 16
-	MaxSectionChars = 4000
-	MaxDocChars     = 24000
 	MaxTitleChars   = 200
 	maxHeadingChars = 120
 )
+
+// ExtractLimits bounds stored page text. BlockChars is the target size of one
+// block in runes (a longer section is split, not cut); MaxChars caps the stored
+// text of one document (0 means the whole document, and the cut always lands on
+// a block boundary).
+type ExtractLimits struct {
+	BlockChars int
+	MaxChars   int
+}
+
+// DefaultExtractLimits mirrors the config defaults (fetch_block_chars,
+// fetch_doc_chars).
+var DefaultExtractLimits = ExtractLimits{BlockChars: 8000, MaxChars: 100000}
+
+// normalized replaces an unset block size and treats a negative budget as
+// "whole document".
+func (l ExtractLimits) normalized() ExtractLimits {
+	if l.BlockChars <= 0 {
+		l.BlockChars = DefaultExtractLimits.BlockChars
+	}
+	if l.MaxChars < 0 {
+		l.MaxChars = 0
+	}
+	return l
+}
 
 // The page is parsed with the HTML5 tokenizer (golang.org/x/net/html), the same
 // one the Go ecosystem and browsers agree on. A hand-rolled scanner was tried
@@ -99,15 +123,6 @@ func ExtractTitle(body string) string {
 			return ""
 		}
 		p := i + lt
-		if strings.HasPrefix(lower[p:], "<![cdata[") {
-			// In HTML content this is a bogus comment: it ends at the next '>'.
-			j := strings.IndexByte(lower[p:], '>')
-			if j < 0 {
-				return ""
-			}
-			i = p + j + 1
-			continue
-		}
 		if strings.HasPrefix(lower[p:], "<!--") {
 			rest := lower[p+4:]
 			switch {
@@ -127,6 +142,17 @@ func ExtractTitle(body string) string {
 			}
 			continue
 		}
+		if strings.HasPrefix(lower[p:], "<?") || strings.HasPrefix(lower[p:], "<!") {
+			// A processing instruction, a DOCTYPE or a CDATA block in HTML content
+			// is a bogus comment: it ends at the first '>', and markup inside it is
+			// not markup.
+			j := strings.IndexByte(lower[p:], '>')
+			if j < 0 {
+				return ""
+			}
+			i = p + j + 1
+			continue
+		}
 		name, isClose, end := tagName(lower, p)
 		if name == "" {
 			i = end
@@ -142,11 +168,11 @@ func ExtractTitle(body string) string {
 			}
 			return capRunes(cleanText(body[end:close]), MaxTitleChars)
 		case !isClose && opaqueElements[name] && !opaqueSelfClosing(name, lower[p:end]):
-			close := findTagStartFrom(lower, "/"+name, end)
+			close := opaqueEnd(lower, name, end)
 			if close < 0 {
 				return ""
 			}
-			i = close + len(name) + 2 // past "</name"
+			i = close
 			continue
 		}
 		i = end
@@ -156,29 +182,157 @@ func ExtractTitle(body string) string {
 
 // tagName reads the element name at pos, whether this is a closing tag, and the
 // offset just past '>' (or the end of the document). An empty name means the
-// "<" is not markup. Quoted attribute values are skipped: a ">" inside one does
-// not end the tag, and markup inside one is not markup.
+// "<" is not markup. The name runs to whitespace, '/' or '>': dashes, dots,
+// underscores and colons are part of it, so <title-x> is not <title>. Quoted
+// attribute values are skipped: a ">" inside one does not end the tag, and
+// markup inside one is not markup.
 func tagName(lower string, pos int) (name string, isClose bool, end int) {
 	k := pos + 1
 	if k < len(lower) && lower[k] == '/' {
 		isClose = true
 		k++
 	}
-	start := k
-	for k < len(lower) && (isAlpha(lower[k]) || isDigit(lower[k])) {
-		k++
-	}
-	if k == start {
+	if k >= len(lower) || !isAlpha(lower[k]) {
 		return "", false, pos + 1
+	}
+	start := k
+	for k < len(lower) && !tagNameDelimiter(lower[k]) {
+		k++
 	}
 	return lower[start:k], isClose, tagEnd(lower, k)
 }
 
+// tagNameDelimiter reports whether c ends a tag name in the HTML tokenizer.
+func tagNameDelimiter(c byte) bool {
+	switch c {
+	case ' ', '\t', '\n', '\f', '\r', '/', '>':
+		return true
+	}
+	return false
+}
+
+// opaqueEnd returns the offset just past the closing tag of an opaque container.
+// Raw-text elements end at the first close tag; plaintext never ends. Foreign and
+// inert containers (svg, template) nest, so the scan keeps a stack: an end tag
+// that does not match the innermost element still closes whatever it names
+// further down, the way the tree parser recovers from invalid nesting.
+func opaqueEnd(lower, name string, from int) int {
+	if name != "svg" && name != "template" {
+		if name == "plaintext" {
+			// plaintext runs to the end of the document: its close tag is text.
+			return -1
+		}
+		c := findTagStartFrom(lower, "/"+name, from)
+		if c < 0 {
+			return -1
+		}
+		return c + len(name) + 2
+	}
+	stack := []string{name}
+	counts := map[string]int{name: 1} // open counts: an unmatched close costs nothing
+	svgDepth := 0                     // open elements in the SVG namespace
+	if name == "svg" {
+		svgDepth = 1
+	}
+	for i := from; i < len(lower); {
+		lt := strings.IndexByte(lower[i:], '<')
+		if lt < 0 {
+			return -1
+		}
+		pos := i + lt
+		switch {
+		case strings.HasPrefix(lower[pos:], "<!--"):
+			rest := lower[pos+4:]
+			switch {
+			case strings.HasPrefix(rest, ">"):
+				i = pos + 5
+			case strings.HasPrefix(rest, "->"):
+				i = pos + 6
+			default:
+				end := commentEnd(lower, pos+4)
+				if end < 0 {
+					return -1
+				}
+				i = end
+			}
+			continue
+		case strings.HasPrefix(lower[pos:], "<!"), strings.HasPrefix(lower[pos:], "<?"):
+			if svgDepth > 0 && strings.HasPrefix(lower[pos:], "<![cdata[") {
+				// In foreign content this is a real CDATA section: it ends only at
+				// "]]>", and tags inside it do not nest.
+				const cdataOpen, cdataClose = "<![cdata[", "]]>"
+				j := strings.Index(lower[pos+len(cdataOpen):], cdataClose)
+				if j < 0 {
+					return -1
+				}
+				i = pos + len(cdataOpen) + j + len(cdataClose)
+				continue
+			}
+			// A bogus comment (CDATA in HTML content, conditional, processing
+			// instruction) ends at the first ">": tags inside it do not nest.
+			j := strings.IndexByte(lower[pos:], '>')
+			if j < 0 {
+				return -1
+			}
+			i = pos + j + 1
+			continue
+		}
+		n, isClose, end := tagName(lower, pos)
+		if end <= pos {
+			i = pos + 1
+			continue
+		}
+		i = end
+		// The slash is only honoured in foreign content: <svg/> or <path/> closes,
+		// <template/> opens (its raw text runs to </template>).
+		self := selfClosingTag(lower[pos:end]) && (svgDepth > 0 || n == "svg" || n == "math")
+		if !isClose && rawTextElements[n] && !self {
+			// Raw text: "</svg>" inside a script is not the end of the svg.
+			if c := findTagStartFrom(lower, "/"+n, end); c >= 0 {
+				i = c + len(n) + 2
+				continue
+			}
+			return -1
+		}
+		if !isClose {
+			if voidElements[n] || self {
+				continue
+			}
+			stack = append(stack, n)
+			counts[n]++
+			if n == "svg" {
+				svgDepth++
+			}
+			continue
+		}
+		if counts[n] == 0 {
+			continue // nothing by that name is open
+		}
+		k := len(stack) - 1
+		for stack[k] != n {
+			k--
+		}
+		if k == 0 {
+			return end // the container itself closes
+		}
+		for j := k; j < len(stack); j++ {
+			counts[stack[j]]--
+			if stack[j] == "svg" {
+				svgDepth--
+			}
+		}
+		stack = stack[:k]
+	}
+	return -1
+}
+
 // opaqueSelfClosing reports whether a self-closing slash closes an opaque
 // element. HTML ignores the slash outside foreign content, so <script/> is an
-// open script (and its raw text runs to </script>), while <svg/> is closed.
+// open script (and its raw text runs to </script>), while <svg/> is closed. svg is
+// the only opaque foreign container: a <title> inside MathML is an ordinary HTML
+// element, so math is scanned in document order.
 func opaqueSelfClosing(name, tag string) bool {
-	return (name == "svg" || name == "math") && selfClosingTag(tag)
+	return name == "svg" && selfClosingTag(tag)
 }
 
 // commentEnd returns the offset just past the terminator of the comment whose
@@ -205,35 +359,53 @@ func selfClosingTag(tag string) bool {
 	return strings.HasSuffix(strings.TrimSpace(tag), "/>")
 }
 
-// tagEnd returns the offset just past the '>' that ends a tag, ignoring '>'
-// inside quoted attribute values. A quote only opens a value right after '='
-// (with optional spaces): an apostrophe in an unquoted value ("title=don't")
-// is part of the value, not the start of a quoted one.
+// tagEnd returns the offset just past the '>' that ends a tag, ignoring '>' or
+// quotes inside attribute values. It follows the tokenizer's three states: a
+// quote opens a value only after '=' (with optional spaces), an unquoted value
+// runs to whitespace or '>' and takes quotes and '=' as plain characters.
 func tagEnd(lower string, from int) int {
+	const (
+		between   = iota // between attributes
+		wantValue        // an '=' was seen, the value has not started
+		unquoted         // inside an unquoted value
+	)
+	state := between
 	for i := from; i < len(lower); i++ {
 		switch c := lower[i]; c {
+		case '>':
+			return i + 1
 		case '"', '\'':
-			j := i - 1
-			for j >= from && (lower[j] == ' ' || lower[j] == '\t' || lower[j] == '\n' || lower[j] == '\r') {
-				j--
-			}
-			if j < from || lower[j] != '=' {
+			if state != wantValue {
+				state = unquoted
 				continue
 			}
+			state = between
 			end := strings.IndexByte(lower[i+1:], c)
 			if end < 0 {
 				return len(lower)
 			}
 			i += 1 + end
-		case '>':
-			return i + 1
+		case '=':
+			switch state {
+			case between:
+				state = wantValue
+			case wantValue:
+				state = unquoted // a second '=' is the value's first character
+			}
+		case ' ', '\t', '\n', '\f', '\r':
+			if state == unquoted {
+				state = between // a space ends an unquoted value
+			}
+		default:
+			if state == wantValue {
+				state = unquoted
+			}
 		}
 	}
 	return len(lower)
 }
 
 func isAlpha(b byte) bool { return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' }
-func isDigit(b byte) bool { return b >= '0' && b <= '9' }
 
 // ExtractSections splits page HTML into heading-delimited text sections and
 // collects referenced images (url+alt+title; binaries are never stored). It
@@ -245,17 +417,27 @@ func isDigit(b byte) bool { return b >= '0' && b <= '9' }
 // the document budget before the article starts. A container that yields
 // nothing falls through to the next candidate and finally to the whole page.
 func ExtractSections(body string) (sections []model.Section, images []model.ImageRef, truncated bool) {
+	sections, images, truncated, _ = ExtractSectionsWithin(body, DefaultExtractLimits)
+	return sections, images, truncated
+}
+
+// ExtractSectionsWithin is ExtractSections with explicit limits. full is the
+// extracted text of the whole page before the MaxChars budget: content_hash
+// describes the page, so it must not move when the budget or the block size
+// does.
+func ExtractSectionsWithin(body string, limits ExtractLimits) (sections []model.Section, images []model.ImageRef, truncated bool, full string) {
+	limits = limits.normalized()
 	doc, err := xhtml.Parse(strings.NewReader(body))
 	if err != nil {
 		// The tree parser refuses markup nested deeper than 512 open elements
 		// (its own stack cap). Text is still worth storing: sections are lost,
 		// the page is not. A page that is nothing but chrome is retried with the
 		// chrome kept, same as on the tree path.
-		secs, imgs, tr := extractTextOnly(body, false)
-		if len(secs) == 0 {
-			secs, imgs, tr = extractTextOnly(body, true)
+		sections, images, truncated, full = extractTextOnly(body, false, limits)
+		if len(sections) == 0 {
+			sections, images, truncated, full = extractTextOnly(body, true, limits)
 		}
-		return secs, imgs, tr
+		return sections, images, truncated, full
 	}
 	page := findNode(doc, func(n *xhtml.Node) bool { return n.Data == "body" })
 	if page == nil {
@@ -266,26 +448,26 @@ func ExtractSections(body string) (sections []model.Section, images []model.Imag
 		e := &extractor{keepChrome: keepChrome}
 		e.walk(root, nil)
 		e.flush()
-		secs, tr := buildSections(e.raw, true, e.truncated)
-		if len(secs) == 0 {
+		sections, truncated, full = buildSections(e.raw, true, e.truncated, limits)
+		if len(sections) == 0 {
 			// A root that is nothing but link blocks is not worth losing the page
 			// over: keep its sections, chrome filter off.
-			secs, tr = buildSections(e.raw, false, e.truncated)
+			sections, truncated, full = buildSections(e.raw, false, e.truncated, limits)
 		}
-		if len(secs) > 0 {
-			return secs, e.images, tr
+		if len(sections) > 0 {
+			return sections, e.images, truncated, full
 		}
 	}
 	e := &extractor{keepChrome: keepChrome}
 	e.walk(page, nil)
 	e.flush()
-	secs, tr := buildSections(e.raw, true, e.truncated)
-	if len(secs) == 0 && len(e.raw) > 0 {
+	sections, truncated, full = buildSections(e.raw, true, e.truncated, limits)
+	if len(sections) == 0 && len(e.raw) > 0 {
 		// A page that is nothing but link blocks is still a page: dropping every
 		// section would store an empty document and hide the loss.
-		secs, tr = buildSections(e.raw, false, e.truncated)
+		sections, truncated, full = buildSections(e.raw, false, e.truncated, limits)
 	}
-	return secs, e.images, tr
+	return sections, e.images, truncated, full
 }
 
 // piece is one run of section text: inline text is whitespace-collapsed and
@@ -519,21 +701,17 @@ const chromeSectionMaxRunes = 400
 
 // buildSections applies the chrome filter and the limits to the raw chunks.
 // The counters were taken while walking, so a <pre> block is excluded from the
-// link arithmetic, and a section carrying one is kept outright.
-func buildSections(raw []rawSection, filterChrome bool, truncated bool) ([]model.Section, bool) {
-	var sections []model.Section
-	total := 0
-	full := false // the section cap is reached
+// link arithmetic, and a section carrying one is kept outright. A section longer
+// than one block is split at a line boundary; the MaxChars budget drops whole
+// blocks from the end, so no block is ever cut. full is the text of every kept
+// section before the budget — content_hash describes the page, not the cut.
+func buildSections(raw []rawSection, filterChrome bool, truncated bool, limits ExtractLimits) ([]model.Section, bool, string) {
+	var kept []rawSection
 	for _, r := range raw {
 		if r.text == "" {
 			continue // a heading alone carries no quotable text
 		}
-		sec := model.Section{Order: len(sections), Heading: r.heading}
-		if sec.Heading == "" {
-			sec.Heading = "Top"
-		}
-		runes := utf8.RuneCountInString(r.text)
-		if filterChrome && runes <= chromeSectionMaxRunes && !r.hasPre {
+		if filterChrome && utf8.RuneCountInString(r.text) <= chromeSectionMaxRunes && !r.hasPre {
 			// A short block whose text outside links contains no letter at all is
 			// a rail — a breadcrumb above the title included, which is why a
 			// headingless block is not exempt (an all-link page is saved by the
@@ -547,35 +725,92 @@ func buildSections(raw []rawSection, filterChrome bool, truncated bool) ([]model
 				continue
 			}
 		}
-		if full {
-			// Past the cap: a block that would have been stored is a real loss.
-			// Blocks this loop drops (a rail) are not, so the flag is set here
-			// rather than from a raw-versus-stored count.
-			truncated = true
-			continue
+		kept = append(kept, r)
+	}
+	texts := make([]string, len(kept))
+	for i, r := range kept {
+		texts[i] = r.text
+	}
+	full := strings.Join(texts, "\n")
+
+	sections := make([]model.Section, 0, len(kept))
+	total := 0
+	for _, r := range kept {
+		heading := r.heading
+		if heading == "" {
+			heading = "Top"
 		}
-		if runes > MaxSectionChars {
-			r.text = capRunes(r.text, MaxSectionChars)
-			runes = utf8.RuneCountInString(r.text)
-			truncated = true
-		}
-		if total+runes > MaxDocChars {
-			r.text = capRunes(r.text, MaxDocChars-total)
-			truncated = true
-			if r.text != "" {
-				sec.Text = r.text
-				sections = append(sections, sec)
+		blocks := splitBlocks(r.text, limits.BlockChars)
+		for k, text := range blocks {
+			n := utf8.RuneCountInString(text)
+			if limits.MaxChars > 0 && total+n > limits.MaxChars {
+				truncated = true
+				if len(sections) == 0 {
+					// Never store nothing: the first block is kept whole even when it
+					// alone exceeds the budget. The budget is a target, and an empty
+					// document would hide the loss.
+					sections = append(sections, model.Section{
+						Order: 0, Heading: partHeading(heading, k, len(blocks)), Text: text,
+					})
+				}
+				return sections, truncated, full
 			}
-			break
-		}
-		total += runes
-		sec.Text = r.text
-		sections = append(sections, sec)
-		if len(sections) >= MaxSections {
-			full = true
+			sections = append(sections, model.Section{
+				Order: len(sections), Heading: partHeading(heading, k, len(blocks)), Text: text,
+			})
+			total += n
 		}
 	}
-	return sections, truncated
+	return sections, truncated, full
+}
+
+// partHeading labels a block with its position when the section was split.
+func partHeading(heading string, k, parts int) string {
+	if parts <= 1 {
+		return heading
+	}
+	return fmt.Sprintf("%s (%d/%d)", heading, k+1, parts)
+}
+
+// splitBlocks splits text into blocks of at most blockChars runes, preferring a
+// line break, then a space or punctuation, and cutting hard only when neither
+// exists. The cut lands just past that boundary (or exactly at blockChars), so
+// joining the blocks gives the text back unchanged: a split loses nothing.
+func splitBlocks(text string, blockChars int) []string {
+	runes := []rune(text)
+	if blockChars <= 0 || len(runes) <= blockChars {
+		return []string{text}
+	}
+	var blocks []string
+	for len(runes) > blockChars {
+		cut := blockChars
+		if i := lastRuneOf(runes[:blockChars], '\n'); i >= blockChars/2 {
+			cut = i + 1
+		} else if i := lastAnyRuneOf(runes[:blockChars], " ,;."); i >= blockChars/2 {
+			cut = i + 1
+		}
+		blocks = append(blocks, string(runes[:cut]))
+		runes = runes[cut:]
+	}
+	return append(blocks, string(runes))
+}
+
+func lastRuneOf(runes []rune, want rune) int {
+	for i := len(runes) - 1; i >= 0; i-- {
+		if runes[i] == want {
+			return i
+		}
+	}
+	return -1
+}
+
+func lastAnyRuneOf(runes []rune, set string) int {
+	for i := len(runes) - 1; i >= 0; i-- {
+		if strings.ContainsRune(set, runes[i]) {
+			return i
+		}
+	}
+	return -1
 }
 
 // lettersIn counts letter runes: the chrome heuristic asks whether a word sits
@@ -605,67 +840,74 @@ func visibleRunes(s string) int {
 // pixels does not get a hundred entries in the index.
 const maxImages = 64
 
-// ExtractPlainText turns a text/plain body into sections of paragraph blocks,
-// under the same limits as HTML extraction.
+// ExtractPlainText turns a text/plain body into paragraph blocks, under the same
+// limits as HTML extraction.
 func ExtractPlainText(body string) (sections []model.Section, truncated bool) {
-	paras := strings.FieldsFunc(body, func(r rune) bool { return r == '\n' || r == '\r' })
-	var chunks []string
-	var cur strings.Builder
-	for _, p := range paras {
-		if p = strings.TrimSpace(p); p == "" {
-			continue
+	sections, truncated, _ = ExtractPlainTextWithin(body, DefaultExtractLimits)
+	return sections, truncated
+}
+
+// ExtractPlainTextWithin is ExtractPlainText with explicit limits. full is the
+// whole text before the MaxChars budget (see ExtractSectionsWithin).
+func ExtractPlainTextWithin(body string, limits ExtractLimits) (sections []model.Section, truncated bool, full string) {
+	limits = limits.normalized()
+	var paras []string
+	for _, p := range strings.FieldsFunc(body, func(r rune) bool { return r == '\n' || r == '\r' }) {
+		if p = strings.TrimSpace(p); p != "" {
+			paras = append(paras, p)
 		}
-		if cur.Len() > 0 && cur.Len()+len(p)+1 > MaxSectionChars {
-			chunks = append(chunks, cur.String())
-			cur.Reset()
-		}
-		if cur.Len() > 0 {
-			cur.WriteByte('\n')
-		}
-		cur.WriteString(p)
 	}
-	if cur.Len() > 0 {
-		chunks = append(chunks, cur.String())
+	if len(paras) == 0 {
+		return nil, false, ""
 	}
+	full = strings.Join(paras, "\n")
+	blocks := splitBlocks(full, limits.BlockChars)
 	total := 0
-	for _, c := range chunks {
-		if total+utf8.RuneCountInString(c) > MaxDocChars {
-			c = capRunes(c, MaxDocChars-total)
+	for k, text := range blocks {
+		n := utf8.RuneCountInString(text)
+		if limits.MaxChars > 0 && total+n > limits.MaxChars {
 			truncated = true
-			if c == "" {
-				break
+			if len(sections) == 0 {
+				sections = append(sections, model.Section{
+					Order: 0, Heading: partHeading("Part", k, len(blocks)), Text: text,
+				})
 			}
-		}
-		if utf8.RuneCountInString(c) > MaxSectionChars {
-			c = capRunes(c, MaxSectionChars)
-			truncated = true
-		}
-		total += utf8.RuneCountInString(c)
-		sections = append(sections, model.Section{Order: len(sections), Heading: "Part", Text: c})
-		if len(sections) >= MaxSections {
-			truncated = truncated || len(chunks) > MaxSections
 			break
 		}
+		sections = append(sections, model.Section{
+			Order: len(sections), Heading: partHeading("Part", k, len(blocks)), Text: text,
+		})
+		total += n
 	}
-	return sections, truncated
+	return sections, truncated, full
 }
 
 // voidElements have no children in HTML: a self-closing slash on any other
 // element is noise the browser ignores, and so does the tree parser. svg and
 // math are foreign content, where the slash does close the element.
 var voidElements = map[string]bool{
-	"area": true, "base": true, "br": true, "col": true, "embed": true,
-	"hr": true, "img": true, "input": true, "link": true, "meta": true,
-	"param": true, "source": true, "track": true, "wbr": true,
+	"area": true, "base": true, "basefont": true, "bgsound": true, "br": true,
+	"col": true, "embed": true, "frame": true, "hr": true, "img": true,
+	"input": true, "keygen": true, "link": true, "meta": true, "param": true,
+	"source": true, "track": true, "wbr": true,
 }
 
 // opaqueElements are skipped whole by the title scan: their content is not page
 // markup (script/style text, raw-text elements, an SVG icon's own <title>, an
 // inert template).
 var opaqueElements = map[string]bool{
-	"script": true, "style": true, "svg": true, "math": true, "template": true,
+	"script": true, "style": true, "svg": true, "template": true,
 	"noscript": true, "textarea": true, "xmp": true, "iframe": true,
 	"noembed": true, "noframes": true, "plaintext": true,
+}
+
+// rawTextElements hold text, not markup: a "</svg>" inside one is not the end of
+// an enclosing svg. noscript is here because the tokenizer reads it as raw text
+// whenever scripting is on, which is how the tree parser is configured.
+var rawTextElements = map[string]bool{
+	"script": true, "style": true, "xmp": true, "iframe": true, "noembed": true,
+	"noframes": true, "plaintext": true, "textarea": true, "title": true,
+	"noscript": true,
 }
 
 // headElements may appear inside <head>; any other start tag closes it (HTML5
@@ -681,7 +923,7 @@ var headElements = map[string]bool{
 // Heading structure is lost — that is the price of not building a tree the
 // parser would not build — but the words are not, and an empty document would
 // hide the loss.
-func extractTextOnly(body string, keepChrome bool) ([]model.Section, []model.ImageRef, bool) {
+func extractTextOnly(body string, keepChrome bool, limits ExtractLimits) ([]model.Section, []model.ImageRef, bool, string) {
 	z := xhtml.NewTokenizer(strings.NewReader(body))
 	var out strings.Builder
 	var preBuf strings.Builder
@@ -695,6 +937,7 @@ func extractTextOnly(body string, keepChrome bool) ([]model.Section, []model.Ima
 		counted bool // this element incremented skipping
 	}
 	var stack []stackEntry
+	headAt := -1             // stack index of the open <head>, -1 when none
 	open := map[string]int{} // open counts: an unmatched close tag costs nothing
 	skipping := 0
 	emitLine := func() {
@@ -716,6 +959,34 @@ func extractTextOnly(body string, keepChrome bool) ([]model.Section, []model.Ima
 		pendingSpace = false
 		out.WriteString(s)
 	}
+	// closeHead ends an implicitly-ended <head>, unless inert content (a
+	// <template>) is open above it: template content must not leak into the page.
+	closeHead := func() {
+		if headAt < 0 {
+			return // O(1) on every token that cannot close a head
+		}
+		hi := headAt
+		for i := hi + 1; i < len(stack); i++ {
+			// Only void elements may sit above the head when it is closed
+			// implicitly: an open title, template or script is content that must
+			// not be swallowed (or leaked).
+			if !voidElements[stack[i].name] {
+				return
+			}
+		}
+		for j := hi; j < len(stack); j++ {
+			open[stack[j].name]--
+			if open[stack[j].name] <= 0 {
+				delete(open, stack[j].name)
+			}
+			if stack[j].counted {
+				skipping--
+			}
+		}
+		stack = stack[:hi]
+		headAt = -1
+	}
+
 	flushPre := func() {
 		if preBuf.Len() == 0 {
 			return
@@ -737,13 +1008,16 @@ func extractTextOnly(body string, keepChrome bool) ([]model.Section, []model.Ima
 		switch tt := z.Next(); tt {
 		case xhtml.ErrorToken:
 			flushPre()
-			secs, tr := buildSections([]rawSection{{text: strings.Trim(out.String(), " \n")}}, false, droppedImg)
-			return secs, images, tr
+			secs, tr, full := buildSections([]rawSection{{text: strings.Trim(out.String(), " \n")}}, false, droppedImg, limits)
+			return secs, images, tr, full
 		case xhtml.TextToken:
+			raw := string(z.Text())
+			if strings.TrimSpace(raw) != "" {
+				closeHead()
+			}
 			if skipping > 0 {
 				continue
 			}
-			raw := string(z.Text())
 			if preDepth > 0 {
 				// A code sample is one run of text: inline markup inside it must not
 				// split it, so the buffer is flushed on </pre>, not per node.
@@ -768,6 +1042,13 @@ func extractTextOnly(body string, keepChrome bool) ([]model.Section, []model.Ima
 			// A self-closing slash is only meaningful for void elements and
 			// foreign content; elsewhere the browser ignores it.
 			selfClosing := tt == xhtml.SelfClosingTagToken && (voidElements[n] || n == "svg" || n == "math")
+			// </head> is optional in HTML5: the first element that cannot live in
+			// the head closes it (body included, and text does too below). This
+			// runs before image collection, or an <img> right after the head would
+			// be skipped together with the head.
+			if n != "head" && !headElements[n] {
+				closeHead()
+			}
 			if n == "img" && skipping == 0 && preDepth == 0 {
 				if ref, ok := imageFromToken(z); ok {
 					if len(images) < maxImages {
@@ -792,29 +1073,17 @@ func extractTextOnly(body string, keepChrome bool) ([]model.Section, []model.Ima
 				}
 				continue
 			}
-			if open["head"] > 0 && n != "head" && !headElements[n] {
-				// </head> is optional in HTML5: the first element that cannot live
-				// in the head closes it (body included).
-				for i := len(stack) - 1; i >= 0; i-- {
-					if stack[i].name != "head" {
-						continue
-					}
-					for j := i; j < len(stack); j++ {
-						open[stack[j].name]--
-						if open[stack[j].name] <= 0 {
-							delete(open, stack[j].name)
-						}
-						if stack[j].counted {
-							skipping--
-						}
-					}
-					stack = stack[:i]
-					break
-				}
-			}
 			// Inside a <pre> everything is text, chrome included; script and style
 			// are still dropped there (the tree does the same).
 			counted := dropElements[n] || (preDepth == 0 && chromeElements[n] && !keepChrome)
+			if n == "head" {
+				if headAt >= 0 {
+					// A second <head> is a parse error the tree parser ignores: the
+					// first one is still implicitly open.
+					continue
+				}
+				headAt = len(stack)
+			}
 			stack = append(stack, stackEntry{name: n, counted: counted})
 			open[n]++
 			if counted {
@@ -839,6 +1108,11 @@ func extractTextOnly(body string, keepChrome bool) ([]model.Section, []model.Ima
 			}
 			for i := len(stack) - 1; i >= 0; i-- {
 				if stack[i].name != n {
+					if stack[i].name == "template" {
+						// Template content is inert: the parser ignores an end tag for
+						// an element below the template, so the text stays hidden.
+						break
+					}
 					continue
 				}
 				for j := i; j < len(stack); j++ {
@@ -854,6 +1128,9 @@ func extractTextOnly(body string, keepChrome bool) ([]model.Section, []model.Ima
 						preDepth--
 						flushPre()
 					}
+				}
+				if headAt >= i {
+					headAt = -1
 				}
 				stack = stack[:i]
 				break
@@ -1224,7 +1501,7 @@ func findTagStartFrom(lower, name string, from int) int {
 			return i
 		}
 		switch lower[next] {
-		case ' ', '\t', '\n', '\r', '>', '/':
+		case ' ', '\t', '\n', '\f', '\r', '>', '/':
 			return i
 		}
 		from = i + len(needle)

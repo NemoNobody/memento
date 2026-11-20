@@ -16,6 +16,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/NemoNobody/memento/internal/config"
 	"github.com/NemoNobody/memento/internal/model"
@@ -650,7 +651,14 @@ type fetchOutcome struct {
 // client only owns the timing).
 func FetchPage(ctx context.Context, cfg *config.Config, normalizedURL string,
 	hook func(*model.Doc) ([]model.Redaction, error)) (*model.Doc, error) {
-	doc, _, err := fetchPage(ctx, cfg, normalizedURL, fetchCondition{}, hook)
+	return FetchPageWithin(ctx, cfg, normalizedURL, DefaultExtractLimits, hook)
+}
+
+// FetchPageWithin is FetchPage with explicit extraction limits: the stored text
+// is split into blocks of BlockChars and capped at MaxChars (0 = whole page).
+func FetchPageWithin(ctx context.Context, cfg *config.Config, normalizedURL string, limits ExtractLimits,
+	hook func(*model.Doc) ([]model.Redaction, error)) (*model.Doc, error) {
+	doc, _, err := fetchPage(ctx, cfg, normalizedURL, fetchCondition{}, limits, hook)
 	return doc, err
 }
 
@@ -661,15 +669,21 @@ func FetchPage(ctx context.Context, cfg *config.Config, normalizedURL string,
 // not what the origin's validator covers), so it re-fetches in full.
 func RevalidatePage(ctx context.Context, cfg *config.Config, normalizedURL string, prior *model.Doc,
 	hook func(*model.Doc) ([]model.Redaction, error)) (*model.Doc, fetchMeta, error) {
+	return RevalidatePageWithin(ctx, cfg, normalizedURL, prior, DefaultExtractLimits, hook)
+}
+
+// RevalidatePageWithin is RevalidatePage with explicit extraction limits.
+func RevalidatePageWithin(ctx context.Context, cfg *config.Config, normalizedURL string, prior *model.Doc,
+	limits ExtractLimits, hook func(*model.Doc) ([]model.Redaction, error)) (*model.Doc, fetchMeta, error) {
 	cond := fetchCondition{}
 	if prior != nil && prior.Via != ViaObscura {
 		cond.etag, cond.lastModified = prior.ETag, prior.LastModified
 	}
-	return fetchPage(ctx, cfg, normalizedURL, cond, hook)
+	return fetchPage(ctx, cfg, normalizedURL, cond, limits, hook)
 }
 
 func fetchPage(ctx context.Context, cfg *config.Config, normalizedURL string,
-	cond fetchCondition, hook func(*model.Doc) ([]model.Redaction, error)) (*model.Doc, fetchMeta, error) {
+	cond fetchCondition, limits ExtractLimits, hook func(*model.Doc) ([]model.Redaction, error)) (*model.Doc, fetchMeta, error) {
 	if err := CheckRobots(ctx, cfg, normalizedURL); err != nil {
 		return nil, fetchMeta{}, err
 	}
@@ -700,6 +714,7 @@ func fetchPage(ctx context.Context, cfg *config.Config, normalizedURL string,
 	var sections []model.Section
 	var images []model.ImageRef
 	var truncated bool
+	var full string
 	switch media {
 	case "text/html", "application/xhtml+xml", "":
 		if media == "" && looksLikeJSON(body) {
@@ -709,9 +724,9 @@ func fetchPage(ctx context.Context, cfg *config.Config, normalizedURL string,
 			// the documentation leniency.
 			return nil, fetchMeta{}, fmt.Errorf("fetch: no content type declared and the body is JSON: only text/html, text/plain, text/markdown are stored")
 		}
-		sections, images, truncated = ExtractSections(string(body))
+		sections, images, truncated, full = ExtractSectionsWithin(string(body), limits)
 	case "text/plain", "text/markdown", "text/x-markdown":
-		sections, truncated = ExtractPlainText(string(body))
+		sections, truncated, full = ExtractPlainTextWithin(string(body), limits)
 	default:
 		return nil, fetchMeta{}, fmt.Errorf("fetch: content type %q is not supported (text/html, text/plain, text/markdown only)", media)
 	}
@@ -759,19 +774,19 @@ func fetchPage(ctx context.Context, cfg *config.Config, normalizedURL string,
 		doc.Redactions = redactions
 	}
 
-	// Finalize after the hook: size and content_hash describe the text that
-	// will actually be stored (a redacted span must not be counted as if it
-	// shipped whole).
+	// Finalize after the hook: size describes the stored text (a redacted span
+	// must not be counted as if it shipped whole). content_hash describes the
+	// page's full extracted text, so it does not move with the storage budget or
+	// the block size; full_chars records how much the page yielded.
 	size := 0
-	sum := sha256.New()
 	for i := range doc.Sections {
 		doc.Sections[i].Order = i
 		size += len([]rune(doc.Sections[i].Text))
-		sum.Write([]byte(doc.Sections[i].Text))
-		sum.Write([]byte{'\n'})
 	}
+	sum := sha256.Sum256([]byte(full))
 	doc.Size = size
-	doc.ContentHash = hex.EncodeToString(sum.Sum(nil))
+	doc.FullChars = utf8.RuneCountInString(full)
+	doc.ContentHash = hex.EncodeToString(sum[:])
 	if cfg.DocsTTLDays > 0 {
 		doc.ExpiresAt = now.AddDate(0, 0, cfg.DocsTTLDays)
 	}

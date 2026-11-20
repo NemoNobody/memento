@@ -592,8 +592,9 @@ func TestFetchPageMarkdown(t *testing.T) {
 }
 
 // TestFetchPageHook: the pre-store hook runs after extraction and BEFORE
-// finalization — size and content_hash describe the stored (redacted) text,
-// and a hook error rejects the page.
+// finalization — size describes the stored (redacted) text, content_hash the
+// page's full extracted text (a redaction or a storage budget must not change
+// the page's identity), and a hook error rejects the page.
 func TestFetchPageHook(t *testing.T) {
 	ft := newFetchTarget(t)
 	cfg := config.DefaultConfig()
@@ -613,9 +614,9 @@ func TestFetchPageHook(t *testing.T) {
 	if len(doc.Redactions) != 1 || doc.Redactions[0].Pattern != "aws-access-key" {
 		t.Errorf("redactions not carried: %+v", doc.Redactions)
 	}
-	sum := sha256.Sum256([]byte("red\nSecond paragraph.\n"))
+	sum := sha256.Sum256([]byte("First paragraph.\nSecond paragraph."))
 	if doc.ContentHash != hex.EncodeToString(sum[:]) {
-		t.Errorf("content_hash must be over the final text: %s", doc.ContentHash)
+		t.Errorf("content_hash must be over the full extracted text, not the redacted prefix: %s", doc.ContentHash)
 	}
 
 	reject := func(d *model.Doc) ([]model.Redaction, error) {
@@ -801,13 +802,13 @@ func TestFetchPageRefusesPrivateAddress(t *testing.T) {
 	}
 }
 
-// TestFetchPageTruncatesSections pins that extraction limits are loud: the
-// stored text is a prefix and doc.Truncated says so.
-func TestFetchPageTruncatesSections(t *testing.T) {
+// TestFetchPageSplitsLongSections pins that a long section becomes blocks, not
+// a truncated prefix: blocks are a unit of reading, not a storage cap.
+func TestFetchPageSplitsLongSections(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/huge", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		writeBody(t, w, "<html><body><h1>Big</h1><p>"+strings.Repeat("x", MaxSectionChars+500)+"</p></body></html>")
+		writeBody(t, w, "<html><body><h1>Big</h1><p>"+strings.Repeat("x", 20000)+"</p></body></html>")
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -818,11 +819,18 @@ func TestFetchPageTruncatesSections(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchPage: %v", err)
 	}
-	if !doc.Truncated {
-		t.Error("Truncated = false, want true (the section was capped)")
+	if doc.Truncated {
+		t.Error("Truncated = true; the section was split, nothing was cut")
 	}
-	if len(doc.Sections) == 0 || utf8RuneLen(doc.Sections[0].Text) != MaxSectionChars {
-		t.Errorf("section text length = %d, want capped at %d", len(doc.Sections[0].Text), MaxSectionChars)
+	if len(doc.Sections) < 2 {
+		t.Fatalf("sections = %d, want the long section split into blocks", len(doc.Sections))
+	}
+	total := 0
+	for _, s := range doc.Sections {
+		total += utf8RuneLen(s.Text)
+	}
+	if total != 20000 {
+		t.Errorf("stored %d runes, want all 20000", total)
 	}
 }
 

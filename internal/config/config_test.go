@@ -89,6 +89,8 @@ func clearEnv(t *testing.T) {
 		"MEMENTO_DOCS_TTL_DAYS",
 		"MEMENTO_FETCH_TIMEOUT",
 		"MEMENTO_FETCH_MAX_BYTES",
+		"MEMENTO_FETCH_BLOCK_CHARS",
+		"MEMENTO_FETCH_DOC_CHARS",
 		"MEMENTO_FETCH_ALLOW_PRIVATE",
 		"MEMENTO_FETCH_HOSTS",
 		"OPENSEARCH_INSECURE_SKIP_VERIFY",
@@ -199,6 +201,12 @@ func TestDefaultConfig(t *testing.T) {
 	}
 	if cfg.SecretGuard != GuardReject {
 		t.Errorf("SecretGuard = %q, want the safe default %q", cfg.SecretGuard, GuardReject)
+	}
+	if cfg.FetchBlockChars != 8000 {
+		t.Errorf("FetchBlockChars = %d, want default 8000", cfg.FetchBlockChars)
+	}
+	if cfg.FetchDocChars != 100_000 {
+		t.Errorf("FetchDocChars = %d, want default 100000", cfg.FetchDocChars)
 	}
 }
 
@@ -594,6 +602,118 @@ func TestLoadConfig_SummaryLimits(t *testing.T) {
 	t.Setenv("MEMENTO_SUMMARY_MIN_LEN", "-5")
 	if _, err := LoadConfig(); err == nil {
 		t.Error("LoadConfig() = nil error for MEMENTO_SUMMARY_MIN_LEN=-5, want error")
+	}
+}
+
+func TestLoadConfig_FetchBlocks(t *testing.T) {
+	dir := t.TempDir()
+	restore := chdir(t, dir)
+	defer restore()
+	clearEnv(t)
+	fc := filepath.Join(dir, "memento.conf")
+
+	// Defaults exist: 8000-rune blocks, whole docs up to 100k.
+	if err := os.WriteFile(fc, []byte(`{}`), 0644); err != nil {
+		t.Fatalf("write memento.conf: %v", err)
+	}
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.FetchBlockChars != 8000 || cfg.FetchDocChars != 100_000 {
+		t.Errorf("fetch block/doc defaults = %d/%d, want 8000/100000", cfg.FetchBlockChars, cfg.FetchDocChars)
+	}
+
+	// File values apply.
+	if err := os.WriteFile(fc, []byte(`{"fetch_block_chars": 4000, "fetch_doc_chars": 50000}`), 0644); err != nil {
+		t.Fatalf("write memento.conf: %v", err)
+	}
+	cfg, err = LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.FetchBlockChars != 4000 || cfg.FetchDocChars != 50000 {
+		t.Errorf("file fetch block/doc = %d/%d, want 4000/50000", cfg.FetchBlockChars, cfg.FetchDocChars)
+	}
+
+	// Env overrides both keys; MEMENTO_FETCH_DOC_CHARS=0 is the documented
+	// "store the whole document" value and must survive the override.
+	t.Setenv("MEMENTO_FETCH_BLOCK_CHARS", "6000")
+	t.Setenv("MEMENTO_FETCH_DOC_CHARS", "0")
+	cfg, err = LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.FetchBlockChars != 6000 || cfg.FetchDocChars != 0 {
+		t.Errorf("env fetch block/doc = %d/%d, want 6000/0", cfg.FetchBlockChars, cfg.FetchDocChars)
+	}
+
+	t.Setenv("MEMENTO_FETCH_DOC_CHARS", "not-a-number")
+	if _, err := LoadConfig(); err == nil {
+		t.Error("LoadConfig() = nil error for MEMENTO_FETCH_DOC_CHARS=not-a-number, want error")
+	}
+	t.Setenv("MEMENTO_FETCH_DOC_CHARS", "")
+	t.Setenv("MEMENTO_FETCH_BLOCK_CHARS", "not-a-number")
+	if _, err := LoadConfig(); err == nil {
+		t.Error("LoadConfig() = nil error for MEMENTO_FETCH_BLOCK_CHARS=not-a-number, want error")
+	}
+	t.Setenv("MEMENTO_FETCH_BLOCK_CHARS", "")
+
+	// Bounds. Block size is mandatory and clamped to 1000..64000 in both
+	// directions; doc chars accepts 0 but not negatives.
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{"fetch_block_chars below min", `{"fetch_block_chars": 999}`},
+		{"fetch_block_chars above max", `{"fetch_block_chars": 64001}`},
+		{"fetch_block_chars zero", `{"fetch_block_chars": 0}`},
+		{"fetch_doc_chars negative", `{"fetch_doc_chars": -1}`},
+	} {
+		if err := os.WriteFile(fc, []byte(tc.body), 0644); err != nil {
+			t.Fatalf("write memento.conf: %v", err)
+		}
+		if _, err := LoadConfig(); err == nil {
+			t.Errorf("LoadConfig() = nil error for %s, want error", tc.name)
+		}
+	}
+
+	// The boundary messages name the key and the accepted range: an operator
+	// reads them from a startup log.
+	if err := os.WriteFile(fc, []byte(`{"fetch_block_chars": 999}`), 0644); err != nil {
+		t.Fatalf("write memento.conf: %v", err)
+	}
+	if _, err := LoadConfig(); err == nil || !strings.Contains(err.Error(), "fetch_block_chars must be between 1000 and 64000") {
+		t.Errorf("LoadConfig() error = %v, want the fetch_block_chars range message", err)
+	}
+	if err := os.WriteFile(fc, []byte(`{"fetch_doc_chars": -1}`), 0644); err != nil {
+		t.Fatalf("write memento.conf: %v", err)
+	}
+	if _, err := LoadConfig(); err == nil || !strings.Contains(err.Error(), "fetch_doc_chars must be 0 or greater") {
+		t.Errorf("LoadConfig() error = %v, want the fetch_doc_chars bound message", err)
+	}
+
+	// Accepted boundaries, inclusive.
+	for _, tc := range []struct {
+		name  string
+		body  string
+		block int
+		doc   int
+	}{
+		{"fetch_block_chars min", `{"fetch_block_chars": 1000}`, 1000, 100_000},
+		{"fetch_block_chars max", `{"fetch_block_chars": 64000}`, 64000, 100_000},
+		{"fetch_doc_chars zero", `{"fetch_doc_chars": 0}`, 8000, 0},
+	} {
+		if err := os.WriteFile(fc, []byte(tc.body), 0644); err != nil {
+			t.Fatalf("write memento.conf: %v", err)
+		}
+		cfg, err := LoadConfig()
+		if err != nil {
+			t.Fatalf("LoadConfig(%s): %v", tc.name, err)
+		}
+		if cfg.FetchBlockChars != tc.block || cfg.FetchDocChars != tc.doc {
+			t.Errorf("%s: block/doc = %d/%d, want %d/%d", tc.name, cfg.FetchBlockChars, cfg.FetchDocChars, tc.block, tc.doc)
+		}
 	}
 }
 

@@ -96,6 +96,14 @@ type Config struct {
 	// and a runaway response must not exhaust the process.
 	FetchMaxBytes int `json:"fetch_max_bytes"`
 
+	// FetchBlockChars is the target size of one stored document block, in runes:
+	// a longer section is split at a line boundary, never truncated.
+	FetchBlockChars int `json:"fetch_block_chars"`
+
+	// FetchDocChars caps the stored text of one document, in runes. 0 stores the
+	// whole document; the cut always lands on a block boundary.
+	FetchDocChars int `json:"fetch_doc_chars"`
+
 	// DocsTTLDays is how long a fetched document is trusted before it must be
 	// re-fetched. 0 means the docs never expire.
 	DocsTTLDays int `json:"docs_ttl_days"`
@@ -229,6 +237,8 @@ func DefaultConfig() *Config {
 		IndexReplicas:       -1,
 		FetchTimeoutSeconds: 30,
 		FetchMaxBytes:       2_000_000,
+		FetchBlockChars:     8000,
+		FetchDocChars:       100_000,
 		DocsTTLDays:         90,
 		// A browser-shaped UA by default: several documentation sites 403
 		// known bot strings. The fetch still identifies itself honestly in
@@ -413,6 +423,20 @@ func loadConfig(explicitPath string, finder func() string) (*Config, error) {
 		}
 		cfg.FetchMaxBytes = n
 	}
+	if v := os.Getenv("MEMENTO_FETCH_BLOCK_CHARS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return nil, fmt.Errorf("MEMENTO_FETCH_BLOCK_CHARS: %w", err)
+		}
+		cfg.FetchBlockChars = n
+	}
+	if v := os.Getenv("MEMENTO_FETCH_DOC_CHARS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return nil, fmt.Errorf("MEMENTO_FETCH_DOC_CHARS: %w", err)
+		}
+		cfg.FetchDocChars = n
+	}
 	if v := os.Getenv("MEMENTO_DOCS_TTL_DAYS"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
@@ -515,6 +539,16 @@ func loadConfig(explicitPath string, finder func() string) (*Config, error) {
 	// docs never expire. Reject it at the edge, for file and env alike.
 	if cfg.DocsTTLDays < 0 {
 		return nil, fmt.Errorf("docs_ttl_days must be 0 or greater, got %d", cfg.DocsTTLDays)
+	}
+	// Block size is mandatory (0 would mean "no block"): the splitter needs a
+	// positive target, and a tiny one would shred the document into noise.
+	if cfg.FetchBlockChars < 1000 || cfg.FetchBlockChars > 64000 {
+		return nil, fmt.Errorf("fetch_block_chars must be between 1000 and 64000, got %d", cfg.FetchBlockChars)
+	}
+	// 0 is the documented "store the whole document" value; a negative cap
+	// would mean the opposite of the intended effect, so reject it here.
+	if cfg.FetchDocChars < 0 {
+		return nil, fmt.Errorf("fetch_doc_chars must be 0 or greater, got %d", cfg.FetchDocChars)
 	}
 	return cfg, nil
 }
@@ -637,6 +671,8 @@ type fileConfig struct {
 	IndexReplicas       *int     `json:"index_replicas"`
 	FetchTimeoutSeconds *int     `json:"fetch_timeout_seconds"`
 	FetchMaxBytes       *int     `json:"fetch_max_bytes"`
+	FetchBlockChars     *int     `json:"fetch_block_chars"`
+	FetchDocChars       *int     `json:"fetch_doc_chars"`
 	DocsTTLDays         *int     `json:"docs_ttl_days"`
 	FetchAllowHosts     []string `json:"fetch_allow_hosts"`
 	FetchUserAgent      string   `json:"fetch_user_agent"`
@@ -743,6 +779,12 @@ func loadFile(cfg *Config, path string) error {
 	}
 	if c.FetchMaxBytes != nil {
 		cfg.FetchMaxBytes = *c.FetchMaxBytes
+	}
+	if c.FetchBlockChars != nil {
+		cfg.FetchBlockChars = *c.FetchBlockChars
+	}
+	if c.FetchDocChars != nil {
+		cfg.FetchDocChars = *c.FetchDocChars
 	}
 	if c.DocsTTLDays != nil {
 		cfg.DocsTTLDays = *c.DocsTTLDays

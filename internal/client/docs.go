@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/NemoNobody/memento/internal/model"
 
@@ -50,6 +51,7 @@ func buildDocsIndexBody(replicas int) map[string]interface{} {
 				"expires_at":           map[string]interface{}{"type": "date"},
 				"size":                 map[string]interface{}{"type": "integer"},
 				"size_raw":             map[string]interface{}{"type": "integer"},
+				"full_chars":           map[string]interface{}{"type": "integer"},
 				"truncated":            map[string]interface{}{"type": "boolean"},
 				"guard_medium_ignored": map[string]interface{}{"type": "integer"},
 				"fetched_by":           map[string]interface{}{"type": "keyword"},
@@ -126,10 +128,21 @@ func (c *Client) PutDoc(ctx context.Context, doc *model.Doc) error {
 // stored a moment ago is visible immediately. html is excluded from the
 // response by design (context economy).
 func (c *Client) GetDocByHash(ctx context.Context, hash string) (*model.Doc, error) {
+	return c.getDocByHash(ctx, hash, false)
+}
+
+// getDocByHash reads a document, optionally with the stored raw html. Only the
+// re-extraction path asks for the body: it is not context, and it must not
+// travel with a normal read.
+func (c *Client) getDocByHash(ctx context.Context, hash string, withHTML bool) (*model.Doc, error) {
+	params := opensearchapi.DocumentGetParams{SourceExcludes: htmlExclude}
+	if withHTML {
+		params = opensearchapi.DocumentGetParams{}
+	}
 	resp, err := c.api.Document.Get(ctx, opensearchapi.DocumentGetReq{
 		Index:      c.cfg.DocsIndexName,
 		DocumentID: hash,
-		Params:     opensearchapi.DocumentGetParams{SourceExcludes: htmlExclude},
+		Params:     params,
 	})
 	if err != nil {
 		if isNotFound(err) {
@@ -286,6 +299,18 @@ func (c *Client) tagDocProject(ctx context.Context, hash, project string) error 
 // before the store is touched at all.
 func (c *Client) FetchDoc(ctx context.Context, rawURL, project string, refresh bool,
 	hook func(*model.Doc) ([]model.Redaction, error)) (doc *model.Doc, cached, revalidated bool, err error) {
+	return c.FetchDocWithin(ctx, rawURL, project, refresh, DefaultExtractLimits, hook)
+}
+
+// FetchDocWithin is FetchDoc with explicit extraction limits. Two rules keep a
+// shared snapshot from losing text: a stored copy is never shrunk while the page
+// is unchanged (two agents fetching one URL with different budgets would
+// otherwise race the larger copy away), and a truncated copy is re-extracted
+// from its stored html when the caller asks for more — no network, no second
+// guard pass.
+func (c *Client) FetchDocWithin(ctx context.Context, rawURL, project string, refresh bool, limits ExtractLimits,
+	hook func(*model.Doc) ([]model.Redaction, error)) (doc *model.Doc, cached, revalidated bool, err error) {
+	limits = limits.normalized()
 	if err := c.EnsureDocsIndex(ctx); err != nil {
 		return nil, false, false, err
 	}
@@ -306,6 +331,15 @@ func (c *Client) FetchDoc(ctx context.Context, rawURL, project string, refresh b
 				}
 				existing.Project = project
 			}
+			if existing.Truncated && (limits.MaxChars == 0 || limits.MaxChars > existing.Size) {
+				// The caller asks for more than the stored prefix: rebuild it from
+				// the raw html the snapshot keeps. A failure falls back to the
+				// stored copy — the fetch itself succeeded.
+				if grown, changed, gerr := c.ReextractDoc(ctx, hash, limits); gerr == nil && changed {
+					grown.HTML = ""
+					existing = grown
+				}
+			}
 			return existing, true, false, nil
 		case err != nil && !errors.Is(err, ErrNoDoc):
 			return nil, false, false, fmt.Errorf("fetch doc: %w", err)
@@ -321,7 +355,7 @@ func (c *Client) FetchDoc(ctx context.Context, rawURL, project string, refresh b
 	}
 	// The project tag is part of the doc the guard inspects: the hook must
 	// see it, and the hook runs before the doc is finalized (see FetchPage).
-	doc, meta, err := RevalidatePage(ctx, c.cfg, rawURL, prior, func(d *model.Doc) ([]model.Redaction, error) {
+	doc, meta, err := RevalidatePageWithin(ctx, c.cfg, rawURL, prior, limits, func(d *model.Doc) ([]model.Redaction, error) {
 		d.Project = project
 		if hook == nil {
 			return nil, nil
@@ -342,29 +376,115 @@ func (c *Client) FetchDoc(ctx context.Context, rawURL, project string, refresh b
 		// the copy was read with _source excludes (html is not loaded), and
 		// PutDoc would silently drop the raw body the snapshot stores for
 		// re-extraction.
-		now := time.Now().UTC()
-		var expires time.Time
-		if c.cfg.DocsTTLDays > 0 {
-			expires = now.AddDate(0, 0, c.cfg.DocsTTLDays)
-		}
-		if err := c.revalidateDoc(ctx, hash, now, expires, project, meta.etag, meta.lastModified); err != nil {
+		if err := c.touchDoc(ctx, hash, prior, project, meta); err != nil {
 			return nil, false, false, err
 		}
-		prior.FetchedAt = now
-		prior.ExpiresAt = expires
-		if meta.etag != "" {
-			prior.ETag = meta.etag
-		}
-		if meta.lastModified != "" {
-			prior.LastModified = meta.lastModified
-		}
-		if project != "" {
-			prior.Project = project
-		}
 		return prior, true, true, nil
+	}
+	if prior != nil && prior.ContentHash != "" && doc.ContentHash == prior.ContentHash && doc.Size < prior.Size {
+		// The page is unchanged and the requested budget is smaller than what
+		// is already stored: keep the larger copy. A fetch must never shrink a
+		// snapshot.
+		if err := c.touchDoc(ctx, hash, prior, project, meta); err != nil {
+			return nil, false, false, err
+		}
+		return prior, false, false, nil
 	}
 	if err := c.PutDoc(ctx, doc); err != nil {
 		return nil, false, false, err
 	}
 	return doc, false, false, nil
+}
+
+// touchDoc moves a stored snapshot's cache metadata after a revalidation or a
+// same-content fetch with a smaller budget: timestamps, validators and the
+// project tag. The content (html, sections, redactions, guard counters) is kept
+// as stored.
+func (c *Client) touchDoc(ctx context.Context, hash string, doc *model.Doc, project string, meta fetchMeta) error {
+	now := time.Now().UTC()
+	var expires time.Time
+	if c.cfg.DocsTTLDays > 0 {
+		expires = now.AddDate(0, 0, c.cfg.DocsTTLDays)
+	}
+	if err := c.revalidateDoc(ctx, hash, now, expires, project, meta.etag, meta.lastModified); err != nil {
+		return err
+	}
+	doc.FetchedAt = now
+	doc.ExpiresAt = expires
+	if meta.etag != "" {
+		doc.ETag = meta.etag
+	}
+	if meta.lastModified != "" {
+		doc.LastModified = meta.lastModified
+	}
+	if project != "" {
+		doc.Project = project
+	}
+	return nil
+}
+
+// ReextractDoc rebuilds a stored document's blocks from the raw html kept in the
+// snapshot, without touching the network. A snapshot is never shrunk: when the
+// stored text already holds at least as much as the new limits allow, it is
+// returned unchanged. redactions and guard_medium_ignored are preserved — the
+// guard is not re-run over the already-redacted body.
+func (c *Client) ReextractDoc(ctx context.Context, hash string, limits ExtractLimits) (*model.Doc, bool, error) {
+	limits = limits.normalized()
+	doc, err := c.getDocByHash(ctx, hash, true)
+	if err != nil {
+		return nil, false, err
+	}
+	if strings.TrimSpace(doc.HTML) == "" {
+		return nil, false, fmt.Errorf("doc %s carries no raw html: re-extraction needs a fresh fetch", hash)
+	}
+	var sections []model.Section
+	var truncated bool
+	var full string
+	switch doc.ContentType {
+	case "text/html", "application/xhtml+xml", "":
+		sections, _, truncated, full = ExtractSectionsWithin(doc.HTML, limits)
+	case "text/plain", "text/markdown", "text/x-markdown":
+		sections, truncated, full = ExtractPlainTextWithin(doc.HTML, limits)
+	default:
+		return nil, false, fmt.Errorf("doc %s has content type %q: re-extraction is not supported", hash, doc.ContentType)
+	}
+	if len(sections) == 0 {
+		return nil, false, fmt.Errorf("doc %s re-extracted to no readable text", hash)
+	}
+	size := 0
+	for i := range sections {
+		sections[i].Order = i
+		size += utf8.RuneCountInString(sections[i].Text)
+	}
+	fullChars := utf8.RuneCountInString(full)
+	if size <= doc.Size && fullChars <= doc.FullChars {
+		return doc, false, nil
+	}
+	if err := c.updateDocText(ctx, hash, sections, size, truncated, fullChars); err != nil {
+		return nil, false, err
+	}
+	doc.Sections, doc.Size, doc.Truncated, doc.FullChars = sections, size, truncated, fullChars
+	return doc, true, nil
+}
+
+// updateDocText replaces the stored blocks and their accounting, leaving the raw
+// html, the credentials audit and the cache metadata untouched.
+func (c *Client) updateDocText(ctx context.Context, hash string, sections []model.Section, size int, truncated bool, fullChars int) error {
+	fields := map[string]interface{}{
+		"sections":   sections,
+		"size":       size,
+		"full_chars": fullChars,
+		"truncated":  truncated,
+	}
+	body, _ := json.Marshal(map[string]interface{}{"doc": fields})
+	_, err := c.api.Update(ctx, opensearchapi.UpdateReq{
+		Index:      c.cfg.DocsIndexName,
+		DocumentID: hash,
+		Body:       bytes.NewReader(body),
+		Params:     opensearchapi.UpdateParams{Refresh: "wait_for"},
+	})
+	if err != nil {
+		return wrapWriteError("update doc text", err)
+	}
+	return nil
 }

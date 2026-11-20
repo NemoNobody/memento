@@ -79,32 +79,38 @@ func TestExtractSectionsBasics(t *testing.T) {
 	}
 }
 
-func TestExtractSectionsTruncatedByLimit(t *testing.T) {
+func TestExtractManySectionsAreKept(t *testing.T) {
 	var b strings.Builder
-	for range MaxSections + 5 {
-		b.WriteString("<h1>Section head</h1><p>paragraph text line</p>")
+	for i := range 40 {
+		fmt.Fprintf(&b, "<h1>Section %d</h1><p>paragraph text line</p>", i)
 	}
 	secs, _, trunc := ExtractSections(b.String())
-	if len(secs) != MaxSections {
-		t.Errorf("sections = %d, want cap %d", len(secs), MaxSections)
+	if len(secs) != 40 {
+		t.Errorf("sections = %d, want all 40 (a section count is not a limit)", len(secs))
 	}
-	if !trunc {
-		t.Error("truncated = false; limit hits must be reported, never silent")
+	if trunc {
+		t.Error("truncated = true; nothing was cut")
 	}
 }
 
-func TestExtractPlainTextLimits(t *testing.T) {
-	body := strings.Repeat("word ", 2000) // one huge paragraph
+func TestExtractPlainTextSplitsLongInput(t *testing.T) {
+	body := strings.Repeat("word ", 2000) // one huge paragraph, ~10k runes
 	secs, trunc := ExtractPlainText(body)
-	if len(secs) == 0 {
-		t.Fatal("no sections")
+	if len(secs) < 2 {
+		t.Fatalf("sections = %d, want the paragraph split into blocks", len(secs))
 	}
-	if utf8.RuneCountInString(secs[0].Text) > MaxSectionChars {
-		t.Errorf("section text %d runes, want cap %d",
-			utf8.RuneCountInString(secs[0].Text), MaxSectionChars)
+	if trunc {
+		t.Error("splitting must not report truncation")
 	}
-	if !trunc {
-		t.Error("oversized paragraph must mark truncated")
+	var got strings.Builder
+	for _, s := range secs {
+		got.WriteString(s.Text)
+	}
+	if want := collapseText(body); got.String() != want {
+		t.Errorf("blocks do not reconstruct the text: got %d runes, want %d", utf8.RuneCountInString(got.String()), utf8.RuneCountInString(want))
+	}
+	if secs[0].Heading != "Part (1/2)" {
+		t.Errorf("heading = %q, want a part label", secs[0].Heading)
 	}
 }
 
@@ -368,32 +374,44 @@ func TestExtractUnclosedAnchorDoesNotReachNextSection(t *testing.T) {
 	}
 }
 
-// TestExtractSectionAndDocCaps pins the two text caps: a long section is cut to
-// MaxSectionChars and the document to MaxDocChars, both reported.
-func TestExtractSectionAndDocCaps(t *testing.T) {
-	long := strings.Repeat("word ", MaxSectionChars/4)
-	secs, _, tr := ExtractSections("<h2>One</h2><p>" + long + "</p>")
-	if len(secs) != 1 || !tr {
-		t.Fatalf("sections = %d truncated = %v, want one truncated section", len(secs), tr)
-	}
-	if got := utf8.RuneCountInString(secs[0].Text); got != MaxSectionChars {
-		t.Errorf("section text = %d runes, want %d", got, MaxSectionChars)
-	}
-
+// TestExtractBudgetCutsOnBlockBoundary pins the storage budget: it drops whole
+// blocks from the end and reports the loss, never cutting a block in half.
+func TestExtractBudgetCutsOnBlockBoundary(t *testing.T) {
 	var b strings.Builder
-	for i := 0; i < MaxSections; i++ {
-		b.WriteString("<h2>Section heading</h2><p>" + strings.Repeat("filler text ", MaxSectionChars/6) + "</p>")
+	for i := range 10 {
+		fmt.Fprintf(&b, "<p>para %02d %s</p>", i, strings.Repeat("word ", 170))
 	}
-	secs, _, tr = ExtractSections(b.String())
+	secs, _, tr, _ := ExtractSectionsWithin("<h2>One</h2>"+b.String(),
+		ExtractLimits{BlockChars: 1000, MaxChars: 3000})
 	if !tr {
-		t.Error("a document over MaxDocChars must report truncation")
+		t.Fatal("a document over the budget must report truncation")
+	}
+	if len(secs) != 3 {
+		t.Fatalf("sections = %d, want 3 whole blocks within the budget", len(secs))
+	}
+	if !strings.HasPrefix(secs[0].Text, "para 00 ") || !strings.HasSuffix(secs[0].Heading, "(1/10)") {
+		t.Errorf("first block = %q heading %q, want a whole paragraph with a part label",
+			secs[0].Text[:min(len(secs[0].Text), 20)], secs[0].Heading)
 	}
 	total := 0
 	for _, s := range secs {
 		total += utf8.RuneCountInString(s.Text)
 	}
-	if total > MaxDocChars {
-		t.Errorf("stored %d runes, want at most %d", total, MaxDocChars)
+	if total > 3000 {
+		t.Errorf("stored %d runes, want at most the budget (whole blocks only)", total)
+	}
+}
+
+// TestExtractBudgetNeverStoresNothing: a budget smaller than one block still
+// stores that block: an empty document would hide the loss.
+func TestExtractBudgetNeverStoresNothing(t *testing.T) {
+	secs, _, tr, _ := ExtractSectionsWithin("<h2>One</h2><p>"+strings.Repeat("word ", 500)+"</p>",
+		ExtractLimits{BlockChars: 2000, MaxChars: 50})
+	if len(secs) != 1 || utf8.RuneCountInString(secs[0].Text) < 100 {
+		t.Fatalf("sections = %+v, want one whole block", secs)
+	}
+	if !tr {
+		t.Error("the budget was exceeded and the flag must say so")
 	}
 }
 
@@ -402,13 +420,75 @@ func TestExtractSectionAndDocCaps(t *testing.T) {
 func TestExtractTitleOpaqueContainers(t *testing.T) {
 	cases := []string{
 		`<noframes><title>Fake</title></noframes><title>Real</title>`,
-		`<math><title>Fake</title></math><title>Real</title>`,
 		`<![CDATA[<title>Fake</title>]]><title>Real</title>`,
+		`<template><template><title>Fake</title></template><title>Also fake</title></template><title>Real</title>`,
 	}
 	for _, page := range cases {
 		if got := ExtractTitle(page); got != "Real" {
 			t.Errorf("page %q: title = %q, want Real", page, got)
 		}
+	}
+
+	for _, page := range []string{
+		`<svg><!-- <svg> --></svg><title>Real</title>`,
+		`<svg><script>var s = "</svg>";</script><title>Fake</title></svg><title>Real</title>`,
+		`<svg><!-- a > <svg> --></svg><title>Real</title>`,
+		`<svg><!--></svg><title>Real</title>`,
+		`<svg><!---></svg><title>Real</title>`,
+		`<svg><script/></svg><title>Real</title>`,
+		`<svg><textarea><svg></textarea></svg><title>Real</title>`,
+		`<template><svg><template></svg></template><title>Real</title>`,
+		`<svg><![CDATA[<svg>]]></svg><title>Real</title>`,
+		// In foreign content a CDATA section ends only at "]]>", not at the first
+		// ">": the tags inside it are text.
+		`<svg><![CDATA[<b> </svg> <title>Fake</title> ]]></svg><title>Real</title>`,
+		// A mismatched close tag inside svg closes the elements it names, the way
+		// the tree parser recovers, so the svg ends where the browser ends it.
+		`<svg><g><svg></g></svg><title>Real</title>`,
+		// A dash is part of a tag name: these are custom elements, not title/script.
+		`<title-x>Fake</title-x><title>Real</title>`,
+		`<script-widget>x</script-widget><title>Real</title><script>y</script>`,
+		// A processing instruction ends at the first ">": a title inside the
+		// comment is not the page title.
+		`<?target <title>Fake</title> ?><title>Real</title>`,
+		// Form feed is whitespace in HTML, so it terminates a tag name.
+		`<title>Real</title` + "\f" + `><title>Lost</title>`,
+		// A quote inside an unquoted attribute value is a plain character: the tag
+		// ends at the first ">" and the title after it is real.
+		`<a href=/x?q="><title>Real</title>">x</a><title>Lost</title>`,
+	} {
+		if got := ExtractTitle(page); got != "Real" {
+			t.Errorf("page %q: title = %q, want Real", page, got)
+		}
+	}
+
+	// <template/> opens a template (HTML ignores the slash), so both titles sit
+	// inside the outer inert template: there is no page title.
+	if got := ExtractTitle(`<template><template/><title>Fake</title></template><title>Real</title>`); got != "" {
+		t.Errorf("nested template: title = %q, want empty", got)
+	}
+
+	// plaintext never ends, so everything after it is text: no title at all.
+	if got := ExtractTitle(`<plaintext><title>Fake</title></plaintext><title>Real</title>`); got != "" {
+		t.Errorf("plaintext: title = %q, want empty", got)
+	}
+
+	// noscript is raw text with scripting on: the "</template>" inside it is text,
+	// so the rest of the page stays inside the inert template.
+	if got := ExtractTitle(`<template><noscript></template><title>Real</title>`); got != "" {
+		t.Errorf("noscript in template: title = %q, want empty", got)
+	}
+
+	// A "<title>" inside an attribute value is text, so the first real title wins.
+	in := `<a href` + "\f" + `=` + "\f" + `"x><title>Hidden</title>" data-y=1><title>Real</title>`
+	if got := ExtractTitle(in); got != "Real" {
+		t.Errorf("addressed title: title = %q, want Real", got)
+	}
+
+	// A <title> inside MathML is an ordinary HTML element in document order, so
+	// the first one is the title — same answer the tree gives.
+	if got := ExtractTitle(`<math><title>Fake</title></math><title>Real</title>`); got != "Fake" {
+		t.Errorf("title inside math = %q, want the first title (Fake)", got)
 	}
 }
 
@@ -678,37 +758,42 @@ func TestExtractSeveralArticlesMeanListing(t *testing.T) {
 // "blocks were dropped" — a stored document that lost nothing must not claim
 // it is a prefix.
 func TestExtractDroppedChromeIsNotTruncation(t *testing.T) {
+	const sections = 40
 	var b strings.Builder
 	b.WriteString("<html><body>")
-	for i := 0; i < MaxSections; i++ {
+	for i := 0; i < sections; i++ {
 		b.WriteString(`<div><h2>Rail</h2><p><a href="/x">Alpha</a> <a href="/y">Beta</a></p></div>`)
 		fmt.Fprintf(&b, `<div><h2>Section %d</h2><p>%s</p></div>`, i, strings.Repeat("real text ", 10))
 	}
 	b.WriteString("</body></html>")
 	secs, _, truncated := ExtractSections(b.String())
-	if len(secs) != MaxSections {
-		t.Fatalf("sections = %d, want %d", len(secs), MaxSections)
+	if len(secs) != sections {
+		t.Fatalf("sections = %d, want %d", len(secs), sections)
 	}
 	if truncated {
 		t.Error("nothing was cut: the dropped blocks were rails, not text")
 	}
 }
 
-// TestExtractSectionCapReportsTruncation is the other side of the same flag: a
-// section past the cap is a real loss.
-func TestExtractSectionCapReportsTruncation(t *testing.T) {
+// TestExtractBudgetReportsTruncation is the other side of the same flag: a block
+// that does not fit the budget is a real loss.
+func TestExtractBudgetReportsTruncation(t *testing.T) {
 	var b strings.Builder
 	b.WriteString("<html><body>")
-	for i := 0; i < MaxSections+2; i++ {
+	for i := 0; i < 10; i++ {
 		fmt.Fprintf(&b, `<div><h2>Section %d</h2><p>%s</p></div>`, i, strings.Repeat("real text ", 10))
 	}
 	b.WriteString("</body></html>")
-	secs, _, truncated := ExtractSections(b.String())
-	if len(secs) != MaxSections {
-		t.Fatalf("sections = %d, want %d", len(secs), MaxSections)
-	}
+	secs, _, truncated, _ := ExtractSectionsWithin(b.String(), ExtractLimits{BlockChars: 8000, MaxChars: 300})
 	if !truncated {
-		t.Error("two real sections were cut and the flag must say so")
+		t.Error("sections past the budget were dropped and the flag must say so")
+	}
+	total := 0
+	for _, s := range secs {
+		total += utf8.RuneCountInString(s.Text)
+	}
+	if total > 300 {
+		t.Errorf("stored %d runes, want at most the budget", total)
 	}
 }
 
@@ -728,6 +813,8 @@ func TestExtractContentScanLinear(t *testing.T) {
 			strings.Repeat("<article>x</article>", 60000) + "</main>"},
 		{"deeper than the parser cap", strings.Repeat("<div>", 50000) +
 			strings.Repeat("</span>", 200000)},
+		{"open tags only", strings.Repeat("<div>", 300000)},
+		{"open tags under an open head", "<head><template>" + strings.Repeat("<div>", 300000)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -742,6 +829,75 @@ func TestExtractContentScanLinear(t *testing.T) {
 				t.Fatal("extraction is not linear on this input")
 			}
 		})
+	}
+}
+
+// TestSplitBlocks: splitting is lossless and prefers natural boundaries, so a
+// long section becomes readable blocks instead of one cut paragraph.
+func TestSplitBlocks(t *testing.T) {
+	text := strings.Join([]string{strings.Repeat("a", 900), strings.Repeat("b", 900), "tail"}, "\n")
+	blocks := splitBlocks(text, 1000)
+	if strings.Join(blocks, "") != text {
+		t.Fatal("blocks do not reconstruct the text")
+	}
+	if blocks[0] != strings.Repeat("a", 900)+"\n" {
+		t.Errorf("first block does not end at the line break: %d runes", utf8.RuneCountInString(blocks[0]))
+	}
+
+	// No line break: cut at a space, still lossless.
+	long := strings.Repeat("word ", 500)
+	blocks = splitBlocks(long, 1000)
+	if strings.Join(blocks, "") != long {
+		t.Fatal("space splitting lost text")
+	}
+	for _, b := range blocks {
+		if n := utf8.RuneCountInString(b); n > 1000 {
+			t.Errorf("block of %d runes exceeds the target", n)
+		}
+	}
+
+	// No boundary at all: the hard cut still keeps every byte.
+	min := strings.Repeat("x", 2500)
+	blocks = splitBlocks(min, 1000)
+	if strings.Join(blocks, "") != min {
+		t.Fatal("hard splitting lost text")
+	}
+
+	if got := splitBlocks("short", 1000); len(got) != 1 || got[0] != "short" {
+		t.Errorf("short text = %v, want one block", got)
+	}
+}
+
+// TestExtractSectionSplitAtBlock: a long section becomes several blocks joined
+// without loss, and nothing is flagged truncated.
+func TestExtractSectionSplitAtBlock(t *testing.T) {
+	para := func(i int) string { return fmt.Sprintf("paragraph %02d ", i) + strings.Repeat("word ", 170) }
+	var body strings.Builder
+	body.WriteString("<h2>Section</h2>")
+	paras := make([]string, 0, 12)
+	for i := 0; i < 12; i++ {
+		p := collapseText(para(i))
+		paras = append(paras, p)
+		body.WriteString("<p>")
+		body.WriteString(p)
+		body.WriteString("</p>")
+	}
+	secs, _, truncated := ExtractSections(body.String())
+	if truncated {
+		t.Fatal("splitting a section must not be reported as truncation")
+	}
+	if len(secs) < 2 {
+		t.Fatalf("sections = %d, want the section split into blocks", len(secs))
+	}
+	var got strings.Builder
+	for _, s := range secs {
+		got.WriteString(s.Text)
+	}
+	if want := strings.Join(paras, "\n"); got.String() != want {
+		t.Errorf("blocks do not reconstruct the section text")
+	}
+	if !strings.HasSuffix(secs[0].Heading, "(1/2)") && !strings.Contains(secs[0].Heading, "(1/") {
+		t.Errorf("heading = %q, want a part label", secs[0].Heading)
 	}
 }
 
@@ -918,6 +1074,113 @@ func TestExtractFallbackDetails(t *testing.T) {
 		secs, _, _ := ExtractSections(page)
 		if len(secs) != 1 || !strings.Contains(secs[0].Text, "prose that must survive") {
 			t.Fatalf("sections = %+v, want the prose", secs)
+		}
+	})
+
+	t.Run("text closes an implicit head", func(t *testing.T) {
+		page := "<html><head><title>t</title>VISIBLE" + strings.Repeat("<div>", 600) + "<p>MORE</p>"
+		secs, _, _ := ExtractSections(page)
+		joined := ""
+		for _, s := range secs {
+			joined += s.Text
+		}
+		if !strings.Contains(joined, "VISIBLE") || !strings.Contains(joined, "MORE") {
+			t.Fatalf("sections = %+v, want both VISIBLE and MORE", secs)
+		}
+	})
+
+	t.Run("a close tag inside a template does not reveal it", func(t *testing.T) {
+		// Template content is inert. A "</div>" for an element below the open
+		// template is ignored by the parser, so the template stays open and its
+		// text stays hidden until "</template>".
+		secs, _, _ := ExtractSections(deep(`<div><template></div><p>inert text</p></template>visible text`))
+		joined := ""
+		for _, s := range secs {
+			joined += s.Text
+		}
+		if strings.Contains(joined, "inert text") {
+			t.Errorf("template content leaked into the page: %q", joined)
+		}
+		if !strings.Contains(joined, "visible text") {
+			t.Errorf("page text lost: %q", joined)
+		}
+	})
+
+	t.Run("a second head start tag is ignored", func(t *testing.T) {
+		page := deep(`<head><title>t</title><head><p>VISIBLE`)
+		secs, _, _ := ExtractSections(page)
+		joined := ""
+		for _, s := range secs {
+			joined += s.Text
+		}
+		if !strings.Contains(joined, "VISIBLE") {
+			t.Fatalf("sections = %+v, want the text after the repeated head", secs)
+		}
+	})
+
+	t.Run("image after an implicit head is collected", func(t *testing.T) {
+		page := "<html><head><title>t</title>" + strings.Repeat("<div>", 600) +
+			`<p>text next to the image</p><img src="/after-head.png">`
+		_, imgs, _ := ExtractSections(page)
+		if len(imgs) != 1 || imgs[0].URL != "/after-head.png" {
+			t.Fatalf("images = %+v, want the image after the head", imgs)
+		}
+	})
+
+	t.Run("obsolete void head elements close the head", func(t *testing.T) {
+		for _, el := range []string{"<basefont color=red>", "<bgsound src=/x>"} {
+			page := "<html><head>" + el + strings.Repeat("<div>", 600) + "<p>visible prose</p>"
+			secs, _, _ := ExtractSections(page)
+			joined := ""
+			for _, s := range secs {
+				joined += s.Text
+			}
+			if !strings.Contains(joined, "visible prose") {
+				t.Errorf("%s: text lost: %+v", el, secs)
+			}
+		}
+	})
+
+	t.Run("image right after head elements is collected", func(t *testing.T) {
+		page := `<head><meta charset="utf-8"><img src="/after-meta.png">` + strings.Repeat("<div>", 600) +
+			`<p>text beside the image</p>`
+		_, imgs, _ := ExtractSections(page)
+		if len(imgs) != 1 || imgs[0].URL != "/after-meta.png" {
+			t.Fatalf("images = %+v, want the image after the head", imgs)
+		}
+	})
+
+	t.Run("unclosed title is not spilled as page text", func(t *testing.T) {
+		page := strings.Repeat("<div>", 600) + "<head><title>secret title text"
+		secs, _, _ := ExtractSections(page)
+		for _, s := range secs {
+			if strings.Contains(s.Text, "secret title text") {
+				t.Fatalf("title text leaked into the page: %+v", secs)
+			}
+		}
+	})
+
+	t.Run("template in head does not leak", func(t *testing.T) {
+		page := "<html><head><template><span>INERT</span></template></head>" +
+			strings.Repeat("<div>", 600) + "<p>page prose</p>"
+		secs, _, _ := ExtractSections(page)
+		joined := ""
+		for _, s := range secs {
+			joined += s.Text
+		}
+		if strings.Contains(joined, "INERT") {
+			t.Fatalf("template content leaked: %+v", secs)
+		}
+		if !strings.Contains(joined, "page prose") {
+			t.Fatalf("page prose lost: %+v", secs)
+		}
+	})
+
+	t.Run("image cap in the fallback reports truncation", func(t *testing.T) {
+		page := strings.Repeat("<div>", 600) + "<p>text</p>" + strings.Repeat(`<img src="/i.png">`, maxImages+1)
+		_, imgs, tr := ExtractSections(page)
+		if len(imgs) != maxImages || !tr {
+			t.Fatalf("images = %d truncated = %v, want %d and true", len(imgs), tr, maxImages)
 		}
 	})
 

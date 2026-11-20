@@ -87,8 +87,9 @@ type Doc struct {
 	URLHash string `json:"url_hash"`
 	// FinalURL records the URL after redirects: audit for "the link moved".
 	FinalURL string `json:"final_url,omitempty"`
-	// ContentHash is sha256 over the extracted text: dedup for the same
-	// content under different URLs (utm links, mirrors).
+	// ContentHash is sha256 over the full extracted text, before the storage
+	// budget is applied: the page's identity must not move when max_chars or the
+	// block size does (dedup for the same content under different URLs).
 	ContentHash string `json:"content_hash,omitempty"`
 	Title       string `json:"title"`
 	Project     string `json:"project,omitempty"`
@@ -111,8 +112,11 @@ type Doc struct {
 	// context); SizeRaw is the stored body in bytes (disk accounting).
 	Size    int `json:"size"`
 	SizeRaw int `json:"size_raw,omitempty"`
-	// Truncated marks a doc whose extraction hit a limit: the stored text is
-	// a prefix, never a silent one.
+	// FullChars is the length of the whole extracted text before the storage
+	// budget, so a reader can tell how much of the page was stored.
+	FullChars int `json:"full_chars,omitempty"`
+	// Truncated marks a doc whose stored text is a prefix of the page: the
+	// budget dropped whole blocks, and the loss is never silent.
 	Truncated bool `json:"truncated,omitempty"`
 
 	// FetchedBy is the hostname that performed the fetch and Via the route
