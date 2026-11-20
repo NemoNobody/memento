@@ -67,16 +67,20 @@ type authorCache struct {
 // authorCaches holds one cache per store URL.
 var authorCaches sync.Map
 
-func authorCacheFor(storeURL string) *authorCache {
-	if v, ok := authorCaches.Load(storeURL); ok {
+// authorCache holds one resolved writer label per (store, user): the security
+// label is a function of the account the client authenticates with, so two
+// configs sharing a URL but not a user must not share it.
+func authorCacheFor(storeURL, user string) *authorCache {
+	key := storeURL + "\x00" + user
+	if v, ok := authorCaches.Load(key); ok {
 		return v.(*authorCache)
 	}
-	v, _ := authorCaches.LoadOrStore(storeURL, &authorCache{})
+	v, _ := authorCaches.LoadOrStore(key, &authorCache{})
 	return v.(*authorCache)
 }
 
 func (c *Client) resolveAuthor(ctx context.Context) AuthorInfo {
-	cache := authorCacheFor(c.cfg.OpenSearchURL)
+	cache := authorCacheFor(c.cfg.OpenSearchURL, c.cfg.OpenSearchUser)
 	cache.mu.Lock()
 	now := time.Now()
 	if cache.resolved &&

@@ -56,9 +56,11 @@ type Client struct {
 	api *opensearchapi.Client
 	cfg *config.Config
 
-	// Everything below is process-wide (see replicas.go, author.go, journal.go,
-	// mapping.go): the MCP server builds a fresh client per tool call, so
-	// per-client "already done" state would repeat the work on every call.
+	// The process-wide dedup for the replica reconcile, the author label and the
+	// infrastructure passes lives in package variables (replicas.go, author.go,
+	// journal.go, mapping.go): the MCP server builds a fresh client per tool
+	// call, so per-client state would repeat the work on every call. The fields
+	// below only cache a probe for this client's lifetime.
 
 	// replicasOnce/replicasVal cache the auto replica-count probe (see
 	// autoReplicas): the topology does not change within one process run.

@@ -253,7 +253,10 @@ func TestAuthorChainSecurityProbeRetriedAfterBackoff(t *testing.T) {
 	if probeCalls != 1 {
 		t.Fatalf("probes = %d, want 1: the degraded chain is cached inside the backoff window", probeCalls)
 	}
-	authorCacheFor(c.cfg.OpenSearchURL).retryAt = time.Now().Add(-time.Second) // simulate the window expiring
+	cache := authorCacheFor(c.cfg.OpenSearchURL, c.cfg.OpenSearchUser)
+	cache.mu.Lock()
+	cache.retryAt = time.Now().Add(-time.Second) // simulate the window expiring
+	cache.mu.Unlock()
 	info = c.resolveAuthor(context.Background())
 	if info.Author != "alice" || info.AuthorSource != AuthorSourceSecurity {
 		t.Errorf("after the backoff: author = %q/%q, want alice/security", info.Author, info.AuthorSource)
