@@ -1858,11 +1858,8 @@ func (s *mcpServer) getDoc(ctx context.Context, req *mcp.CallToolRequest, in get
 		if in.Blocks != nil {
 			want = *in.Blocks
 		}
-		if want < 1 {
-			want = 1
-		}
-		if want > maxReadBlocks {
-			want = maxReadBlocks
+		if want < 1 || want > maxReadBlocks {
+			return nil, getDocOutput{}, fmt.Errorf("memento_get_doc: blocks must be between 1 and %d, got %d", maxReadBlocks, want)
 		}
 		text, included, next := readDocBlocks(doc, *in.Section, want, docReadBudget)
 		if included == 0 {

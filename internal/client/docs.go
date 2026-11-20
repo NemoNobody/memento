@@ -111,12 +111,24 @@ func (c *Client) EnsureDocsIndex(ctx context.Context) error {
 // PutDoc stores a document under its URL hash, replacing any older version
 // (a refresh is a correction of the snapshot).
 func (c *Client) PutDoc(ctx context.Context, doc *model.Doc) error {
+	return c.putDocCAS(ctx, doc, 0, 0)
+}
+
+// putDocCAS writes a snapshot, optionally conditioned on the version pair from
+// the read that produced it (0,0 = unconditional). A concurrent writer makes the
+// stale write fail instead of silently replacing newer content.
+func (c *Client) putDocCAS(ctx context.Context, doc *model.Doc, seqNo, primaryTerm int) error {
 	body, _ := json.Marshal(doc)
+	params := opensearchapi.IndexParams{Refresh: "wait_for"}
+	if seqNo != 0 || primaryTerm != 0 {
+		params.IfSeqNo = &seqNo
+		params.IfPrimaryTerm = &primaryTerm
+	}
 	_, err := c.api.Index(ctx, opensearchapi.IndexReq{
 		Index:      c.cfg.DocsIndexName,
 		DocumentID: doc.URLHash,
 		Body:       bytes.NewReader(body),
-		Params:     opensearchapi.IndexParams{Refresh: "wait_for"},
+		Params:     params,
 	})
 	if err != nil {
 		return wrapWriteError("store doc", err)
@@ -135,6 +147,13 @@ func (c *Client) GetDocByHash(ctx context.Context, hash string) (*model.Doc, err
 // re-extraction path asks for the body: it is not context, and it must not
 // travel with a normal read.
 func (c *Client) getDocByHash(ctx context.Context, hash string, withHTML bool) (*model.Doc, error) {
+	doc, _, _, err := c.getDocByHashVersion(ctx, hash, withHTML)
+	return doc, err
+}
+
+// getDocByHashVersion is getDocByHash plus the document's version pair, which a
+// conditional write needs.
+func (c *Client) getDocByHashVersion(ctx context.Context, hash string, withHTML bool) (*model.Doc, int, int, error) {
 	params := opensearchapi.DocumentGetParams{SourceExcludes: htmlExclude}
 	if withHTML {
 		params = opensearchapi.DocumentGetParams{}
@@ -146,18 +165,18 @@ func (c *Client) getDocByHash(ctx context.Context, hash string, withHTML bool) (
 	})
 	if err != nil {
 		if isNotFound(err) {
-			return nil, fmt.Errorf("%w: %q", ErrNoDoc, hash)
+			return nil, 0, 0, fmt.Errorf("%w: %q", ErrNoDoc, hash)
 		}
-		return nil, fmt.Errorf("get doc: %w", err)
+		return nil, 0, 0, fmt.Errorf("get doc: %w", err)
 	}
 	if !resp.Found {
-		return nil, fmt.Errorf("%w: %q", ErrNoDoc, hash)
+		return nil, 0, 0, fmt.Errorf("%w: %q", ErrNoDoc, hash)
 	}
 	var doc model.Doc
 	if err := json.Unmarshal(resp.Source, &doc); err != nil {
-		return nil, fmt.Errorf("get doc: decode %q: %w", hash, err)
+		return nil, 0, 0, fmt.Errorf("get doc: decode %q: %w", hash, err)
 	}
-	return &doc, nil
+	return &doc, resp.SeqNo, resp.PrimaryTerm, nil
 }
 
 // DocsSearchCap is the result budget for docs searches: page hits are
@@ -453,12 +472,16 @@ func (c *Client) FetchDocWithin(ctx context.Context, rawURL, project string, ref
 	}
 	// A smaller candidate must not shrink the snapshot: another writer may have
 	// stored more of the same page since it was read. Re-read once, right before
-	// the write, and keep the larger copy.
-	if current, gerr := c.GetDocByHash(ctx, hash); gerr == nil && keepsStored(current, doc) {
-		if err := c.touchDoc(ctx, hash, current, project, meta); err != nil {
-			return nil, false, false, err
+	// the write, with the version pair the conditional write needs.
+	var seqNo, primaryTerm int
+	if current, seq, pt, gerr := c.getDocByHashVersion(ctx, hash, false); gerr == nil {
+		seqNo, primaryTerm = seq, pt
+		if keepsStored(current, doc) {
+			if err := c.touchDoc(ctx, hash, current, project, meta); err != nil {
+				return nil, false, false, err
+			}
+			return current, false, false, nil
 		}
-		return current, false, false, nil
 	}
 	if keepsStored(prior, doc) {
 		if err := c.touchDoc(ctx, hash, prior, project, meta); err != nil {
@@ -466,7 +489,14 @@ func (c *Client) FetchDocWithin(ctx context.Context, rawURL, project string, ref
 		}
 		return prior, false, false, nil
 	}
-	if err := c.PutDoc(ctx, doc); err != nil {
+	if err := c.putDocCAS(ctx, doc, seqNo, primaryTerm); err != nil {
+		if isVersionConflict(err) {
+			// A writer landed between the re-read and the write: its snapshot is
+			// newer, so answer with that one instead of overwriting it.
+			if current, gerr := c.GetDocByHash(ctx, hash); gerr == nil {
+				return current, true, false, nil
+			}
+		}
 		return nil, false, false, err
 	}
 	return doc, false, false, nil
@@ -512,7 +542,7 @@ func (c *Client) touchDoc(ctx context.Context, hash string, doc *model.Doc, proj
 func (c *Client) ReextractDoc(ctx context.Context, hash string, limits ExtractLimits,
 	hook func(*model.Doc) ([]model.Redaction, error)) (*model.Doc, bool, error) {
 	limits = limits.normalized()
-	doc, err := c.getDocByHash(ctx, hash, true)
+	doc, seqNo, primaryTerm, err := c.getDocByHashVersion(ctx, hash, true)
 	if err != nil {
 		return nil, false, err
 	}
@@ -548,14 +578,20 @@ func (c *Client) ReextractDoc(ctx context.Context, hash string, limits ExtractLi
 		truncated = true
 	}
 	oldRedactions := doc.Redactions
+	oldMedium := doc.GuardMediumIgnored
 	doc.Sections, doc.Size, doc.Truncated, doc.FullChars = sections, size, truncated, fullChars
 	if hook != nil {
 		// The scan replaces the counter rather than adding to it: the same
-		// medium findings are re-seen on every growth step.
+		// medium findings are re-seen on every growth step. A hook that does not
+		// scan (e.g. secret_guard=allow) leaves it at zero, and the stored count
+		// still describes the unchanged text.
 		doc.GuardMediumIgnored = 0
 		extra, herr := hook(doc)
 		if herr != nil {
 			return nil, false, herr
+		}
+		if doc.GuardMediumIgnored == 0 {
+			doc.GuardMediumIgnored = oldMedium
 		}
 		doc.Redactions = mergeRedactions(oldRedactions, extra)
 		size = 0
@@ -567,8 +603,11 @@ func (c *Client) ReextractDoc(ctx context.Context, hash string, limits ExtractLi
 	// Re-read right before the write: a concurrent fetch may have stored a
 	// larger copy, or a different revision, while this one was extracting. A
 	// revision change aborts the write — sections from the old html next to a
-	// newer html/content_hash would be a mixed snapshot.
-	if current, gerr := c.GetDocByHash(ctx, hash); gerr == nil {
+	// newer html/content_hash would be a mixed snapshot. The update itself is
+	// conditioned on the version it read, so a writer landing in between fails
+	// the write instead of being overwritten.
+	if current, seq, pt, gerr := c.getDocByHashVersion(ctx, hash, false); gerr == nil {
+		seqNo, primaryTerm = seq, pt
 		if current.ContentHash != "" && doc.ContentHash != "" && current.ContentHash != doc.ContentHash {
 			return current, false, nil
 		}
@@ -576,7 +615,12 @@ func (c *Client) ReextractDoc(ctx context.Context, hash string, limits ExtractLi
 			return current, false, nil
 		}
 	}
-	if err := c.updateDocText(ctx, hash, doc); err != nil {
+	if err := c.updateDocText(ctx, hash, doc, seqNo, primaryTerm); err != nil {
+		if isVersionConflict(err) {
+			if current, gerr := c.GetDocByHash(ctx, hash); gerr == nil {
+				return current, false, nil
+			}
+		}
 		return nil, false, err
 	}
 	return doc, true, nil
@@ -585,7 +629,7 @@ func (c *Client) ReextractDoc(ctx context.Context, hash string, limits ExtractLi
 // updateDocText replaces the stored blocks and their accounting (and the audit
 // lists the re-extraction touched), leaving the raw html and the cache metadata
 // untouched.
-func (c *Client) updateDocText(ctx context.Context, hash string, doc *model.Doc) error {
+func (c *Client) updateDocText(ctx context.Context, hash string, doc *model.Doc, seqNo, primaryTerm int) error {
 	fields := map[string]interface{}{
 		"sections":             doc.Sections,
 		"size":                 doc.Size,
@@ -595,11 +639,16 @@ func (c *Client) updateDocText(ctx context.Context, hash string, doc *model.Doc)
 		"guard_medium_ignored": doc.GuardMediumIgnored,
 	}
 	body, _ := json.Marshal(map[string]interface{}{"doc": fields})
+	params := opensearchapi.UpdateParams{Refresh: "wait_for"}
+	if seqNo != 0 || primaryTerm != 0 {
+		params.IfSeqNo = &seqNo
+		params.IfPrimaryTerm = &primaryTerm
+	}
 	_, err := c.api.Update(ctx, opensearchapi.UpdateReq{
 		Index:      c.cfg.DocsIndexName,
 		DocumentID: hash,
 		Body:       bytes.NewReader(body),
-		Params:     opensearchapi.UpdateParams{Refresh: "wait_for"},
+		Params:     params,
 	})
 	if err != nil {
 		return wrapWriteError("update doc text", err)

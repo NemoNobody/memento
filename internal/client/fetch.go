@@ -773,6 +773,14 @@ func fetchPage(ctx context.Context, cfg *config.Config, normalizedURL string,
 		// by the origin's ETag).
 		doc.ETag, doc.LastModified = out.etag, out.lastModified
 	}
+	// The hook may redact text, shrinking the stored blocks. Measure the text
+	// before it runs so full_chars can describe the same post-redaction text that
+	// size counts.
+	sizeBeforeHook := 0
+	for _, s := range doc.Sections {
+		sizeBeforeHook += utf8.RuneCountInString(s.Text)
+	}
+	preHookChars := utf8.RuneCountInString(full)
 	if hook != nil {
 		redactions, herr := hook(doc)
 		if herr != nil {
@@ -783,8 +791,9 @@ func fetchPage(ctx context.Context, cfg *config.Config, normalizedURL string,
 
 	// Finalize after the hook: size describes the stored text (a redacted span
 	// must not be counted as if it shipped whole). content_hash describes the
-	// page's full extracted text, so it does not move with the storage budget or
-	// the block size; full_chars records how much the page yielded.
+	// page's kept text, so it does not move with the storage budget or the block
+	// size; full_chars is the same text measured after redaction, so a complete
+	// snapshot always reports size == full_chars.
 	size := 0
 	for i := range doc.Sections {
 		doc.Sections[i].Order = i
@@ -792,7 +801,10 @@ func fetchPage(ctx context.Context, cfg *config.Config, normalizedURL string,
 	}
 	sum := sha256.Sum256([]byte(full))
 	doc.Size = size
-	doc.FullChars = utf8.RuneCountInString(full)
+	doc.FullChars = preHookChars - (sizeBeforeHook - size)
+	if doc.FullChars < size {
+		doc.FullChars = size
+	}
 	doc.ContentHash = hex.EncodeToString(sum[:])
 	if cfg.DocsTTLDays > 0 {
 		doc.ExpiresAt = now.AddDate(0, 0, cfg.DocsTTLDays)
