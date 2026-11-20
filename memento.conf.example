@@ -3,6 +3,7 @@
   "opensearch_user": "your-user",
   "insecure_skip_verify": false,
   "index_name": "memento",
+  "index_replicas": -1,
   "history_index_period": "month",
   "history_limit": 20,
   "summary_min_len": 2000,

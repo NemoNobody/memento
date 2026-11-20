@@ -1,8 +1,8 @@
 name: Release
 
 # Cutting a tag (make release VERSION=vX.Y.Z) builds release binaries for the
-# supported platforms and publishes them as a GitHub release. On a private
-# repository the release is private too.
+# supported platforms and publishes them as a GitHub release; the release
+# inherits the repository's visibility.
 #
 # The workflow can also be dispatched by hand for an existing tag: that is the
 # repair path when a release exists without binaries or a publish run failed

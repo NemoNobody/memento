@@ -1,11 +1,10 @@
 # Changelog
 
-Notable changes per release tag. Only `v0.8.6` is published right now: the
-repository is private and the earlier tags were removed, so the entries below
-it are kept as history rather than as downloadable releases.
-Work in progress lives under `## Unreleased`; the release commit moves that
-section under its version number (`.github/workflows/release.yml` reads the
-heading to build the release notes).
+Notable changes per release tag. `v0.8.6` is the first release cut for public
+consumption; the entries below it are kept as history. Work in progress lands
+under `## Unreleased`; the release commit moves that section under its version
+number (`.github/workflows/release.yml` reads the heading to build the release
+notes).
 
 ## v0.8.6 — 2026-11-20
 
