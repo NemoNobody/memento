@@ -163,8 +163,8 @@ chmod 600 ~/.memento.conf
   | Desktop | Provider | Notes |
   |---|---|---|
   | GNOME | gnome-keyring | login keyring, alias normally present; covered by the keyring tests |
-  | KDE Plasma (KF 6.14+, Debian 14+) | ksecretd / KWallet | KWallet registers the Secret Service name (default alias); if it is dead, the collection labelled by `MEMENTO_KEYRING_COLLECTION` (default `kdewallet`, the KDE wallet name) is used |
-  | KDE Plasma without ksecretd (Debian 13 / kwallet6 6.13) | KWallet-native (`org.kde.kwalletd6`) | used when no usable Secret Service provider exists: wallet `kdewallet`, folder = service, key = account |
+  | KDE Plasma with a KWallet-backed Secret Service | kwalletd / ksecretd | KWallet registers the Secret Service name (collection labelled with the wallet name, default alias when present). Works since KF 6.13 when kwalletd is started by PAM and the name is free (verified on Debian 13); `ksecretd` (KF 6.14+) is the separately packaged variant. If the collection is missing, the one labelled by `MEMENTO_KEYRING_COLLECTION` (default `kdewallet`, the KDE wallet name) is used |
+  | KDE Plasma with no Secret Service provider on the bus | KWallet-native (`org.kde.kwalletd6`) | used when the name has no owner: wallet `kdewallet`, folder = service, key = account |
   | XFCE / LXQt / MATE / Cinnamon / tiling WMs | whatever Secret Service is installed (usually gnome-keyring) | works if the daemon runs and the keyring is unlocked |
   | KeePassXC (Secret Service integration) | KeePassXC | entries are namespaced by service + username, same as everywhere |
   | headless / container / ssh | none | no bus, no keyring: export `OPENSEARCH_PASSWORD`; `memento status` reports `password_from: env` and the keyring error |
@@ -175,6 +175,12 @@ chmod 600 ~/.memento.conf
 
   The provider is detected with a read-only probe of the bus owner, and an
   unusable one is refused instead of being used anyway:
+
+  On KDE the provider is whoever owns the name first: with `kwalletd` started by
+  PAM (`kwalletd6 --pam-login`) the wallet-backed Secret Service wins, and
+  gnome-keyring must not be running (mask `gnome-keyring-daemon.service` and
+  `.socket` to keep it out); if gnome-keyring gets the name instead, the case
+  below applies.
 
   - **KDE where `org.freedesktop.secrets` is owned by gnome-keyring** (a
     typical Debian KDE install pulls it in as a dependency): its login

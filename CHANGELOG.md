@@ -2,12 +2,11 @@
 
 Notable changes per release tag. `v0.8.0` is the first tagged baseline; the
 project was developed privately before it, so entries start there.
+Work in progress lives under `## Unreleased`; the release commit moves that
+section under its version number (`.github/workflows/release.yml` reads the
+heading to build the release notes).
 
-## Unreleased
-
-Unreleased work lands here while it is in review; the release commit
-moves the section under its version number (`.github/workflows/release.yml`
-reads that heading to build the release notes).
+## v0.8.6 — 2026-11-20
 
 - keyring: provider detection on Linux — the bus owner of
   `org.freedesktop.secrets` is probed, and an unusable provider is a named
@@ -22,6 +21,18 @@ reads that heading to build the release notes).
 - `memento creds set` refuses on an unusable backend with a hint
   (`OPENSEARCH_PASSWORD` or a plaintext config), instead of reporting a
   successful write.
+- keyring: the KWallet D-Bus methods take the caller's appId as their **last**
+  argument (`writePassword(handle, folder, key, value, appid)`), not the wallet
+  name. Passing the wallet name there makes kwalletd return an empty folder
+  list and `-1` on every write, and after a few such calls it warns about
+  repeated failed attempts to unlock the wallet.
+- keyring: the session-bus connection is never closed. `dbus.SessionBus`
+  returns a process-wide connection, so closing it after one call broke every
+  later call in the same process (an MCP server reads the password repeatedly).
+- docs: on KF 6.13 KWallet can serve `org.freedesktop.secrets` itself when
+  kwalletd is started by PAM and the bus name is free, so `ksecretd` is
+  optional there; gnome-keyring must stay out of the session, otherwise it
+  takes the name and the ephemeral-keyring refusal applies.
 
 ## v0.8.5 — 2026-11-20
 
