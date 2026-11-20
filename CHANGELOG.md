@@ -9,6 +9,25 @@ Nothing yet. A change lands here while it is in review; the release commit
 moves the section under its version number (`.github/workflows/release.yml`
 reads that heading to build the release notes).
 
+## v0.8.4 — 2026-11-19
+
+Extraction edge cases found by the release review.
+
+- the title scan skips three containers it missed: `noframes` (raw text like
+  `script`), `math` (foreign content, like `svg`), and `<![CDATA[...]]>`, which
+  in HTML is a bogus comment and ends at the first `>`;
+- the tokenizer fallback (markup nested past the parser's stack cap) closes an
+  implicitly-ended `<head>` on the first element that cannot live in it, not only
+  on `<body>`: a head left open used to swallow the page;
+- a link that wraps block content through an inline wrapper
+  (`<a><span><div>…</div></span></a>`) is formatting like a direct wrap, not a
+  menu label;
+- tests pin the image cap (one over the cap reports truncation, exactly the cap
+  does not), the three title containers, the nested-block link, and a head left
+  open without a `<body>`. The linearity test comment now says what it can and
+  cannot catch: the parser's 512-level stack cap bounds the depth-times-candidates
+  shape, so that one is pinned by behaviour tests instead.
+
 ## v0.8.3 — 2026-11-19
 
 Extraction runs on the HTML5 parser, and code blocks survive it.
