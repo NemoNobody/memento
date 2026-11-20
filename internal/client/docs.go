@@ -287,26 +287,24 @@ func (c *Client) tagDocProject(ctx context.Context, hash, project string) error 
 	return nil
 }
 
-// storedText joins a snapshot's blocks back into the section-delimited text the
-// never-shrink rule compares. Splitting and re-joining is lossless, so two
-// snapshots of the same page differ only by where the budget stopped.
+// storedText joins a snapshot's blocks into their raw text: blocks are contiguous
+// slices, so concatenating them (no separator) gives back the page text whatever
+// the block size was. The never-shrink rule compares these strings, so it must not
+// depend on where the split fell.
 func storedText(doc *model.Doc) string {
 	var b strings.Builder
-	for i, s := range doc.Sections {
-		if i > 0 {
-			b.WriteByte('\n')
-		}
+	for _, s := range doc.Sections {
 		b.WriteString(s.Text)
 	}
 	return b.String()
 }
 
 // keepsStored reports whether the stored snapshot already holds at least as much
-// of the same page as the candidate: the candidate's text is a prefix of it. A
-// smaller budget, or a concurrent writer that stored more, must never shrink the
-// snapshot.
+// of the same page as the candidate: the candidate is a truncated prefix of it.
+// Requiring Truncated means a shorter but complete page (the content really got
+// smaller) still replaces the old text instead of leaving a stale tail behind.
 func keepsStored(stored, candidate *model.Doc) bool {
-	if stored == nil || candidate == nil || len(candidate.Sections) == 0 {
+	if stored == nil || candidate == nil || len(candidate.Sections) == 0 || !candidate.Truncated {
 		return false
 	}
 	s, c := storedText(stored), storedText(candidate)
@@ -534,6 +532,9 @@ func (c *Client) ReextractDoc(ctx context.Context, hash string, limits ExtractLi
 	oldRedactions := doc.Redactions
 	doc.Sections, doc.Size, doc.Truncated, doc.FullChars = sections, size, truncated, fullChars
 	if hook != nil {
+		// The scan replaces the counter rather than adding to it: the same
+		// medium findings are re-seen on every growth step.
+		doc.GuardMediumIgnored = 0
 		extra, herr := hook(doc)
 		if herr != nil {
 			return nil, false, herr
@@ -544,6 +545,11 @@ func (c *Client) ReextractDoc(ctx context.Context, hash string, limits ExtractLi
 			size += utf8.RuneCountInString(doc.Sections[i].Text)
 		}
 		doc.Size = size
+	}
+	// Re-read right before the write: a concurrent fetch may have stored a
+	// larger copy of a different revision while this one was extracting.
+	if current, gerr := c.GetDocByHash(ctx, hash); gerr == nil && keepsStored(current, doc) {
+		return current, false, nil
 	}
 	if err := c.updateDocText(ctx, hash, doc); err != nil {
 		return nil, false, err

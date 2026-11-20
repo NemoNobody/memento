@@ -171,7 +171,7 @@ func DocCmd() *cobra.Command {
 			if err != nil {
 				fatalErr(err)
 			}
-			if docFlags.blocks < 1 || docFlags.blocks > maxReadBlocks {
+			if !docFlags.full && (docFlags.blocks < 1 || docFlags.blocks > maxReadBlocks) {
 				fatalErr(fmt.Errorf("--blocks must be between 1 and %d, got %d", maxReadBlocks, docFlags.blocks))
 			}
 			ctx := context.Background()
@@ -468,7 +468,7 @@ func printDocOutline(w io.Writer, doc *model.Doc, cached, revalidated bool, now 
 	}
 	if revalidated {
 		// A 304: the content is the stored one, only the timestamps moved.
-		b.WriteString("revalidated: true (origin answered 304 Not Modified; the snapshot is unchanged)\n")
+		b.WriteString("revalidated: true (origin answered 304 Not Modified; the stored snapshot was kept — only the timestamps moved, unless a larger budget re-extracted more text from it)\n")
 	}
 	if doc.Truncated {
 		b.WriteString("truncated: true (extraction hit a limit; the stored text is a prefix; store the whole page with --max-chars 0)\n")

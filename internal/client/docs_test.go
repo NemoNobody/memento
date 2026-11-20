@@ -11,6 +11,62 @@ import (
 	"github.com/NemoNobody/memento/internal/model"
 )
 
+// TestFetchDocNeverShrinksUnchangedSnapshot: a smaller budget must not replace a
+// larger stored copy of the same page. Two agents fetching one URL with
+// different max_chars would otherwise race the text away.
+func TestFetchDocNeverShrinksUnchangedSnapshot(t *testing.T) {
+	ft := newFetchTarget(t)
+	indexExists := false
+	var stored string
+	respond := func(r recordedRequest) (int, string) {
+		switch {
+		case r.Path == "/memento-docs" && r.Method == "HEAD":
+			if indexExists {
+				return 200, ""
+			}
+			return 404, ""
+		case r.Path == "/memento-docs" && r.Method == "PUT":
+			indexExists = true
+			return 200, `{"acknowledged":true}`
+		case strings.HasPrefix(r.Path, "/memento-docs/_update/"):
+			return 200, `{"result":"updated"}`
+		case strings.HasPrefix(r.Path, "/memento-docs/_doc/"):
+			if r.Method == "GET" {
+				if stored == "" {
+					return 404, "{}"
+				}
+				return 200, `{"found":true,"_source":` + stored + `}`
+			}
+			stored = r.Body
+			return 200, `{"result":"created"}`
+		}
+		return 404, "{}"
+	}
+	c, _ := newFakeClientCfg(t, docsMutate, respond)
+	ctx := context.Background()
+	url := ft.srv.URL + "/page"
+
+	big, _, _, err := c.FetchDocWithin(ctx, url, "", false, ExtractLimits{BlockChars: 8000, MaxChars: 0}, nil)
+	if err != nil {
+		t.Fatalf("FetchDocWithin(full): %v", err)
+	}
+	// A refresh with a tiny budget re-downloads the same page and extracts less.
+	small, _, _, err := c.FetchDocWithin(ctx, url, "", true, ExtractLimits{BlockChars: 8000, MaxChars: 5}, nil)
+	if err != nil {
+		t.Fatalf("FetchDocWithin(smaller budget): %v", err)
+	}
+	if small.Size != big.Size {
+		t.Errorf("returned %d chars, want the stored %d (a fetch must not shrink)", small.Size, big.Size)
+	}
+	var storedDoc model.Doc
+	if err := json.Unmarshal([]byte(stored), &storedDoc); err != nil {
+		t.Fatalf("stored doc not decodable: %v", err)
+	}
+	if storedDoc.Size != big.Size {
+		t.Errorf("store now holds %d chars, want %d", storedDoc.Size, big.Size)
+	}
+}
+
 func docsMutate(cfg *config.Config) {
 	cfg.DocsIndexName = "memento-docs"
 	cfg.FetchAllowPrivate = true // fetch targets are httptest loopback servers

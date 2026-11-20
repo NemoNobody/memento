@@ -730,7 +730,9 @@ func buildSections(raw []rawSection, filterChrome bool, truncated bool, limits E
 	for i, r := range kept {
 		texts[i] = r.text
 	}
-	full := strings.Join(texts, "\n")
+	// Joined without separators: full is the page text, and its rune count must
+	// equal the size of an unbudgeted snapshot (blocks concatenate the same way).
+	full := strings.Join(texts, "")
 
 	sections := make([]model.Section, 0, len(kept))
 	total := 0

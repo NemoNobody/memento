@@ -60,18 +60,16 @@ func readDocBlocks(doc *model.Doc, start, want, budget int) (text string, includ
 			break
 		}
 		n := len([]rune(sec.Text))
-		if included > 0 && used+n > budget {
+		head := "--- [" + strconv.Itoa(sec.Order) + "] " + sec.Heading + " ---\n"
+		cost := n + len([]rune(head)) + 1 // header and the line break count too
+		if included > 0 && used+cost > budget {
 			next = sec.Order
 			break
 		}
-		b.WriteString("--- [")
-		b.WriteString(strconv.Itoa(sec.Order))
-		b.WriteString("] ")
-		b.WriteString(sec.Heading)
-		b.WriteString(" ---\n")
+		b.WriteString(head)
 		b.WriteString(sec.Text)
 		b.WriteString("\n")
-		used += n
+		used += cost
 		included++
 	}
 	return b.String(), included, next

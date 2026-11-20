@@ -1613,7 +1613,7 @@ type fetchDocOutput struct {
 	// with HTTP validators, so the content is unchanged and only fetched_at /
 	// expires_at moved. It is a network request, not a cache hit — an agent
 	// asking "did the page change?" needs the difference.
-	Revalidated bool                `json:"revalidated,omitempty" jsonschema:"true when the origin answered 304 Not Modified and the stored snapshot was kept (fetched_at moved, content unchanged)"`
+	Revalidated bool                `json:"revalidated,omitempty" jsonschema:"true when the origin answered 304 Not Modified and the stored snapshot was kept (timestamps moved; a larger max_chars may have re-extracted more text from the saved html)"`
 	Truncated   bool                `json:"truncated,omitempty" jsonschema:"extraction hit a limit: the stored text is a prefix"`
 	Via         string              `json:"via,omitempty" jsonschema:"route that served the fetch when not direct: proxy | obscura (audit; obscura means the content was browser-rendered)"`
 	Sections    []docSectionOutline `json:"sections,omitempty" jsonschema:"outline: pull a section with memento_get_doc(hash, section)"`
@@ -1850,7 +1850,7 @@ func (s *mcpServer) getDoc(ctx context.Context, req *mcp.CallToolRequest, in get
 			out.Hint = mergeHint(out.Hint, fmt.Sprintf("full text capped at %d runes; continue with section=%d", docReadBudget, next))
 		}
 	}
-	if in.Section != nil {
+	if in.Section != nil && !in.Full {
 		want := 1
 		if in.Blocks != nil {
 			want = *in.Blocks

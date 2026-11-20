@@ -614,7 +614,7 @@ func TestFetchPageHook(t *testing.T) {
 	if len(doc.Redactions) != 1 || doc.Redactions[0].Pattern != "aws-access-key" {
 		t.Errorf("redactions not carried: %+v", doc.Redactions)
 	}
-	sum := sha256.Sum256([]byte("First paragraph.\nSecond paragraph."))
+	sum := sha256.Sum256([]byte("First paragraph.Second paragraph."))
 	if doc.ContentHash != hex.EncodeToString(sum[:]) {
 		t.Errorf("content_hash must be over the full extracted text, not the redacted prefix: %s", doc.ContentHash)
 	}
@@ -831,6 +831,24 @@ func TestFetchPageSplitsLongSections(t *testing.T) {
 	}
 	if total != 20000 {
 		t.Errorf("stored %d runes, want all 20000", total)
+	}
+}
+
+// TestFetchPageFullCharsMatchesSize: an unbudgeted snapshot stores the whole page,
+// so its size and the page's full length agree (both count runes the same way).
+func TestFetchPageFullCharsMatchesSize(t *testing.T) {
+	ft := newFetchTarget(t)
+	cfg := config.DefaultConfig()
+	cfg.FetchAllowPrivate = true
+	doc, err := FetchPage(context.Background(), cfg, ft.srv.URL+"/page", nil)
+	if err != nil {
+		t.Fatalf("FetchPage: %v", err)
+	}
+	if doc.Truncated {
+		t.Fatal("the page fits the default budget and must not be truncated")
+	}
+	if doc.Size != doc.FullChars {
+		t.Errorf("size = %d, full_chars = %d: a complete snapshot stores the whole page", doc.Size, doc.FullChars)
 	}
 }
 
