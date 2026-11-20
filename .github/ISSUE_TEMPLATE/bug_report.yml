@@ -42,7 +42,7 @@ body:
     attributes:
       label: memento version
       description: Output of `memento --version` (or the `mcp_version`/`commit` from `memento_status`).
-      placeholder: "0.8.0"
+      placeholder: "0.8.6"
     validations:
       required: true
   - type: dropdown

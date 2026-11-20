@@ -95,7 +95,13 @@ type Client struct {
 func NewClient(cfg *config.Config) (*Client, error) {
 	if cfg.OpenSearchPassword == "" {
 		// Fail fast with the migration path spelled out: a 401 from the server
-		// would not tell the operator where credentials come from now.
+		// would not tell the operator where credentials come from now. When the
+		// keyring itself is unusable, say so — "store one with creds set" would
+		// send the user into the same failure again.
+		if cfg.KeyringError != "" {
+			return nil, fmt.Errorf("OpenSearch password is empty: the keyring is unavailable (%s). "+
+				"Fix the keyring backend, export OPENSEARCH_PASSWORD, or set allow_plaintext=true in the config", cfg.KeyringError)
+		}
 		return nil, fmt.Errorf("OpenSearch password is empty: store one with 'memento creds set' " +
 			"(OS keyring), export OPENSEARCH_PASSWORD, or set allow_plaintext=true in the config")
 	}

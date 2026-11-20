@@ -379,15 +379,15 @@ in query strings stay a plain-fetch concern.
 
 The Linux keyring provider (native D-Bus Secret Service) is the daily driver
 and is exercised live. The darwin/windows providers (system Keychain /
-Credential Manager via zalando/go-keyring) are compile-checked in CI
-(cross-build) and the credential-resolution logic around them is
-unit-tested with a fake provider, but the Keychain/Credential Manager
-backends themselves are not exercised in CI and not smoke-tested on real
-Apple/Windows hardware by the author. Release binaries cover linux/amd64,
-linux/arm64, darwin/amd64, darwin/arm64 and windows/amd64; only linux/amd64
-is smoke-tested by the author — reports from the other machines are welcome
-and move this section. If the keyring misbehaves on your platform, open an
-issue.
+Credential Manager via zalando/go-keyring) are exercised by CI too: the
+`windows` job runs the keyring round-trip on every push and the `macos` job
+runs it against the runner's login Keychain on tags and manual dispatch
+(macOS runners bill 10x minutes, so a release check is the right cadence).
+Neither has been smoke-tested by the author on real Apple/Windows hardware.
+Release binaries cover linux/amd64, linux/arm64, darwin/amd64, darwin/arm64
+and windows/amd64; only linux/amd64 is smoke-tested by the author — reports
+from the other machines are welcome and move this section. If the keyring
+misbehaves on your platform, open an issue.
 
 ## License
 

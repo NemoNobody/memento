@@ -79,6 +79,13 @@ func TestKeyringServiceAndAccount(t *testing.T) {
 		"not a url":                           "not a url",
 		"https://admin:hunter2@os.test:9200":  "os.test:9200",
 		"https://admin:hunter2@os%2test:9200": "<url with user info>", // unparseable: the account name must not echo the password
+		// The default port is the same endpoint: the entry must not vanish when
+		// someone types it out.
+		"https://os.internal:443": "os.internal",
+		"http://os.internal:80":   "os.internal",
+		// A non-default port stays: it is a different endpoint.
+		"http://os.internal:443": "os.internal:443",
+		"https://os.internal:80": "os.internal:80",
 	}
 	for in, want := range cases {
 		if got := KeyringAccount(in); got != want {

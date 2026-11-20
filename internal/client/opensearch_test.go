@@ -703,3 +703,22 @@ func TestTouchCleanNotesClearsStaleRow(t *testing.T) {
 		t.Errorf("the value's audit row was dropped: %s", body)
 	}
 }
+
+// TestNewClientExplainsKeyringOutage: when the keyring itself is unusable, the
+// "store one with creds set" advice sends the user into the same failure. The
+// message has to name the outage instead.
+func TestNewClientExplainsKeyringOutage(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.OpenSearchURL = "https://os.test:9200"
+	cfg.KeyringError = "no usable backend: no session bus"
+	_, err := NewClient(cfg)
+	if err == nil {
+		t.Fatal("NewClient accepted a config without a password")
+	}
+	if !strings.Contains(err.Error(), "keyring is unavailable") {
+		t.Errorf("error %q does not name the keyring outage", err)
+	}
+	if strings.Contains(err.Error(), "store one with 'memento creds set'") {
+		t.Errorf("error %q advertises a store that cannot be written to", err)
+	}
+}

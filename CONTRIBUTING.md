@@ -24,10 +24,11 @@ make dev-opensearch       # throwaway single-node OpenSearch (docker/podman)
 ```
 
 Point a throwaway config at the dev node, e.g.
-`/tmp/memento-dev.conf`:
+`/tmp/memento-dev.conf` (the dev stack runs with the security plugin off, so
+the credentials are ignored — `dev`/`dev` matches the README):
 
 ```
-{"opensearch_url":"http://127.0.0.1:9200","opensearch_user":"admin","opensearch_password":"devtest","allow_plaintext":true}
+{"opensearch_url":"http://127.0.0.1:9200","opensearch_user":"dev","opensearch_password":"dev","allow_plaintext":true}
 ```
 
 Then `MEMENTO_CONF=/tmp/memento-dev.conf ./memento status`. The dev stack has

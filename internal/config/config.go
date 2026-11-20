@@ -652,7 +652,14 @@ func KeyringAccount(rawURL string) string {
 		}
 		return rawURL
 	}
-	return u.Host
+	host := u.Host
+	// Drop the port when it is the scheme default: https://os and
+	// https://os:443 are the same endpoint, and a keyring entry must not
+	// vanish because someone typed the port out.
+	if p := u.Port(); (u.Scheme == "https" && p == "443") || (u.Scheme == "http" && p == "80") {
+		host = strings.TrimSuffix(u.Host, ":"+p)
+	}
+	return host
 }
 
 // fileConfig mirrors Config for JSON decoding. Fields are optional: a missing

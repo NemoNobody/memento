@@ -360,7 +360,7 @@ start and the `GET /<index>` settings read behind `memento status`.
 An older role may be missing a later permission: journal appends also need
 `indices:admin/create` and `indices:admin/settings/update` on
 `memento-history-*` (without them appends fail loudly with 403), the docs index
-needs `indices:data/write/update` for re-tagging, and since **v0.8.0** the facts
+needs `indices:data/write/update` for re-tagging, and since 0.8.0 the facts
 and docs patterns also need `indices:admin/settings/update`: the client realigns
 replica counts at startup, and without the permission that realignment is
 silently refused (the app treats it as best-effort).
