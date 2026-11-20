@@ -56,6 +56,40 @@ tag filter would silently stop matching tags the analyzer splits.
   project label (an empty project at add time means `global`).
 - `value` is the human-readable fact.
 
+## Documents (the docs index)
+
+Fetched pages live in a separate index (`docs_index_name`, `memento-docs` by
+default): the raw HTML is kept write-only for re-extraction, and BM25 runs over
+the extracted text, never over markup.
+
+Extraction splits text into **blocks**; it never cuts a block in the middle.
+The natural unit is a heading-delimited section. A section longer than
+`fetch_block_chars` (default 8000 runes) is split at a line boundary, then at a
+space or punctuation, and only then hard at the count — joining the parts gives
+the text back unchanged, so a split loses nothing. Split parts are labelled
+`heading (2/5)`, and every block is addressable by `order`, the unit
+`memento_get_doc` reads.
+
+`fetch_doc_chars` (default 100000; `0` = the whole document) is the storage
+budget for one document. When the budget runs out, whole blocks are dropped
+from the end, `truncated: true` is set, and the answer carries `chars_stored` /
+`chars_total`. No block is cut to fit. `truncated` therefore marks a real loss
+only: the storage budget, the `fetch_max_bytes` limit (2 MB — a bigger page is
+refused with an error, not trimmed), or dropped image references. Blocks
+skipped by the chrome filter are not a loss.
+
+`content_hash` is sha256 over the full extracted text **before** the budget is
+applied: it does not depend on `max_chars` or `block_chars`, so the same page
+keeps its identity regardless of how much of it was stored. `full_chars` is the
+length of that full text.
+
+When a stored copy was cut by the budget and a larger `max_chars` is requested,
+the text is re-extracted from the stored raw HTML with no network. A smaller
+request never shrinks the stored copy for unchanged content. Response caps —
+32000 runes per `memento_get_doc` answer, a partial outline (the first 60 lines
+plus `more N blocks, orders X..Y`) on a huge document — are read limits, not
+storage limits.
+
 ## Commands
 
 ### add

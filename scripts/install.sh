@@ -3,7 +3,7 @@
 # release.yml (memento-<os>-<arch> + checksums.txt), verifies sha256 and
 # installs into ~/.local/bin (override: --install-dir / MEMENTO_INSTALL_DIR).
 #
-#   scripts/install.sh [--version v0.8.4] [--install-dir DIR]
+#   scripts/install.sh [--version v0.8.5] [--install-dir DIR]
 #
 # Default version = the latest GitHub release. Installing from a private fork
 # or mirror needs GITHUB_TOKEN (a fine-grained PAT with contents:read); public
@@ -24,7 +24,7 @@ usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0; }
 while [ $# -gt 0 ]; do
   case "$1" in
     --version)
-      [ $# -ge 2 ] || { echo "--version needs a value (e.g. --version v0.8.4)" >&2; exit 1; }
+      [ $# -ge 2 ] || { echo "--version needs a value (e.g. --version v0.8.5)" >&2; exit 1; }
       VERSION=$2; shift 2 ;;
     --install-dir)
       [ $# -ge 2 ] || { echo "--install-dir needs a path" >&2; exit 1; }
@@ -57,7 +57,7 @@ if [ -z "$VERSION" ]; then
   command -v python3 >/dev/null || { echo "need python3 to parse the latest release (or pass --version)" >&2; exit 1; }
   if ! latest=$(curl "${curlargs[@]}" "$API/repos/$REPO/releases/latest" 2>/dev/null); then
     echo "could not read the latest release from $API/repos/$REPO/releases/latest" >&2
-    echo "  a private repo needs GITHUB_TOKEN (fine-grained PAT, contents:read); or pin one: --version v0.8.4" >&2
+    echo "  a private repo needs GITHUB_TOKEN (fine-grained PAT, contents:read); or pin one: --version v0.8.5" >&2
     exit 1
   fi
   VERSION=$(printf '%s' "$latest" | python3 -c 'import json,sys;print(json.load(sys.stdin)["tag_name"])')

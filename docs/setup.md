@@ -206,6 +206,14 @@ chmod 600 ~/.memento.conf
   (default 2000) must ship a `summary` (CLI `--summary`, MCP `summary`), kept
   under `summary_max_len` (default 400). Set `summary_min_len: 0` to disable
   the requirement, `summary_max_len: 0` to leave the summary uncapped.
+- Block extraction is tunable: `fetch_block_chars` (env
+  `MEMENTO_FETCH_BLOCK_CHARS`, default 8000, range 1000..64000) is the target
+  size of one stored block — a longer section is split at a line boundary, not
+  cut; `fetch_doc_chars` (env `MEMENTO_FETCH_DOC_CHARS`, default 100000, `0` =
+  the whole document) is the storage budget for one document — when it runs
+  out, whole blocks are dropped from the end and the answer says so
+  (`truncated`, `chars_stored`/`chars_total`). The physical ceiling stays
+  `fetch_max_bytes` (default 2 MB): a bigger page is refused, not trimmed.
 - Upgrading from a pre-journal release: run `memento migrate-history` (prints
   the plan; `--yes` writes) to move the old in-doc history arrays into the
   journal. Unmigrated facts keep working; their history just stays in-doc.
@@ -221,7 +229,8 @@ lists the active ones by name, never by value):
 `MEMENTO_ALLOW_PLAINTEXT`,
 `MEMENTO_AUTHOR`, `MEMENTO_MODEL`, `MEMENTO_HOST`, `MEMENTO_SESSION`,
 `MEMENTO_DOCS_INDEX`, `MEMENTO_DOCS_TTL_DAYS`, `MEMENTO_FETCH_TIMEOUT`,
-`MEMENTO_FETCH_MAX_BYTES`, `MEMENTO_FETCH_HOSTS`, `MEMENTO_FETCH_USER_AGENT`,
+`MEMENTO_FETCH_MAX_BYTES`, `MEMENTO_FETCH_BLOCK_CHARS`,
+`MEMENTO_FETCH_DOC_CHARS`, `MEMENTO_FETCH_HOSTS`, `MEMENTO_FETCH_USER_AGENT`,
 `MEMENTO_FETCH_PROXY_URL`, `MEMENTO_FETCH_PROXY_FALLBACK`,
 `MEMENTO_FETCH_RESPECT_ROBOTS`, `MEMENTO_FETCH_ALLOW_PRIVATE`,
 `MEMENTO_FETCH_RENDER`, `MEMENTO_FETCH_OBSCURA_PATH`,

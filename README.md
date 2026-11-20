@@ -84,10 +84,11 @@ attribution, not trust.
 A session pays only for what it reads. `memento_list` and `memento_search`
 return compact rows — key, summary, category, status, age — and the full value
 is one `memento_get` away; a body over `summary_min_len` must ship a summary,
-so a listing stays skimmable; a fetched page is stored as sections and read one
-at a time. The store never decides to push a document into the context: that is
-what lets it work from a small window — a local model with a modest budget —
-without dragging whole pages along.
+so a listing stays skimmable; a fetched page is split into blocks — a section too
+long for one block is split, not cut — and read one block at a time. The store
+never decides to push a document into the context: that is what lets it work
+from a small window — a local model with a modest budget — without dragging
+whole pages along.
 
 ## Non-goals
 
@@ -163,8 +164,9 @@ The index is created automatically on first use. Env vars override the file:
 `MEMENTO_AUTHOR`, `MEMENTO_MODEL`, `MEMENTO_HOST`, `MEMENTO_SESSION`;
 `MEMENTO_CONF` points at an explicit config file. Fetch
 options (`memento fetch`): `MEMENTO_DOCS_INDEX`, `MEMENTO_DOCS_TTL_DAYS`,
-`MEMENTO_FETCH_TIMEOUT`, `MEMENTO_FETCH_MAX_BYTES`, `MEMENTO_FETCH_HOSTS`,
-`MEMENTO_FETCH_USER_AGENT`, `MEMENTO_FETCH_PROXY_URL`,
+`MEMENTO_FETCH_TIMEOUT`, `MEMENTO_FETCH_MAX_BYTES`, `MEMENTO_FETCH_BLOCK_CHARS`,
+`MEMENTO_FETCH_DOC_CHARS`, `MEMENTO_FETCH_HOSTS`, `MEMENTO_FETCH_USER_AGENT`,
+`MEMENTO_FETCH_PROXY_URL`,
 `MEMENTO_FETCH_PROXY_FALLBACK`, `MEMENTO_FETCH_RESPECT_ROBOTS`,
 `MEMENTO_FETCH_ALLOW_PRIVATE`, `MEMENTO_FETCH_RENDER`,
 `MEMENTO_FETCH_OBSCURA_PATH`, `MEMENTO_FETCH_OBSCURA_STEALTH`,
@@ -188,27 +190,34 @@ memento get demo:api:port
 memento search "api port"
 ```
 
-Fetch a web page into the docs index and read it back section by section:
+Fetch a web page into the docs index and read it back block by block:
 
 ```
 memento fetch https://www.postgresql.org/docs/current/tutorial.html
-memento doc <hash-from-output> 1      # the "Part I. Tutorial" section
+memento doc <hash-from-output> 1      # the "Part I. Tutorial" block
 memento docs "tutorial"
 ```
 
-The page is parsed with the HTML5 tokenizer (`golang.org/x/net/html`), then split
-on its headings; sections are cheap to read, so open the one you want instead of
-the whole document. Code blocks (`<pre>`) are stored with their newlines and
-indentation: a code sample whose braces are missing is not a code sample. Site
-chrome is filtered, not stored: when the markup names the article (`<main>`,
-`role="main"`, `<article>`) only that container is read, `nav`/`aside`/`footer`
-are removed, and a short block of at least two links with no letter outside them
-(a rail, a breadcrumb) is dropped. The rule is deliberately strict: one word outside the
-links makes the block prose, so a labelled menu survives — cutting a paragraph to
-remove a menu is the worse mistake. A page that is nothing but
-links keeps its sections — an empty document would hide the loss. Prose outside
-any of these markers can still carry a banner; truncation by the size limits is
-reported rather than silent.
+The page is parsed with the HTML5 tokenizer (`golang.org/x/net/html`), split on
+its headings, and each heading-delimited section is split into blocks: a section
+longer than `fetch_block_chars` (default 8000 runes) is split at a line boundary,
+never truncated. Blocks are cheap to read, so open the one you want instead of the
+whole document — `--blocks` reads a run of them. `fetch_doc_chars` (default
+100000; `0` = the whole document) is the storage budget: when it runs out, whole
+blocks are dropped from the end and the answer says so (`truncated`,
+`chars_stored`/`chars_total`) — a block is never cut in the middle. Code blocks
+(`<pre>`) are stored with their newlines and indentation: a code sample whose
+braces are missing is not a code sample. Site chrome is filtered, not stored:
+when the markup names the article (`<main>`, `role="main"`, `<article>`) only
+that container is read, `nav`/`aside`/`footer` are removed, and a short block of
+at least two links with no letter outside them (a rail, a breadcrumb) is
+dropped. The rule is deliberately strict: one word outside the links makes the
+block prose, so a labelled menu survives — cutting a paragraph to remove a menu
+is the worse mistake. A page that is nothing but links keeps its blocks — an
+empty document would hide the loss. Prose outside any of these markers can still
+carry a banner; the loss is reported rather than silent: `truncated` covers the
+storage budget, the 2 MB `fetch_max_bytes` limit (a bigger page is refused, not
+trimmed) and dropped image references — never the chrome filter.
 
 ## Commands
 
@@ -226,9 +235,9 @@ reported rather than silent.
 | `memento obsolete <key> [reason] [--allow-secret]` | Mark a fact obsolete because its subject is gone (reason appended to notes) |
 | `memento status [--conf <path>]` | Check connectivity and show the effective configuration (env overrides are listed by name, never values) |
 | `memento creds set\|get\|status\|rm [--url <u>]` | Manage the OpenSearch password in the OS keyring: `set` reads a hidden prompt (piped stdin for scripts), `get` prints the stored password (for scripts that need it), `status` shows only the source (`env\|keyring\|file\|none`), `rm` deletes the entry |
-| `memento fetch <url> [--refresh] [-p <p>] [--allow-secret]` | Fetch a page into the docs index and print its outline: cache-aware, section text is read on demand; github URLs that match a local clone print the file path |
-| `memento doc <hash> [n\|--section N] [--full]` | Read a stored document: the outline (default), section `n`, or every section with `--full` |
-| `memento docs <query> [--limit N] [-p <p>]` | BM25 search over stored documents (the extracted sections, never the raw page) |
+| `memento fetch <url> [--refresh] [-p <p>] [--allow-secret] [--max-chars N] [--block-chars N]` | Fetch a page into the docs index and print its outline: cache-aware, blocks are read on demand; `--max-chars 0` stores the whole document (default `fetch_doc_chars`), `--block-chars` sets the target block size; github URLs that match a local clone print the file path |
+| `memento doc <hash> [n\|--section N] [--blocks N] [--full]` | Read a stored document: the outline (default), block `n`, `--blocks N` consecutive blocks, or every block with `--full` (answers are capped at 32000 runes; `next` names the next block) |
+| `memento docs <query> [--limit N] [-p <p>]` | BM25 search over stored documents (the extracted blocks, never the raw page) |
 | `memento mcp` | Run as an MCP server over stdio |
 
 Exit codes: `0` success, `1` any error, `3` the named key does not exist

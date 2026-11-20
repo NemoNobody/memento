@@ -9,7 +9,90 @@ Nothing yet. A change lands here while it is in review; the release commit
 moves the section under its version number (`.github/workflows/release.yml`
 reads that heading to build the release notes).
 
-## v0.8.4 — 2026-11-19
+## v0.8.5 — 2026-11-20
+
+Second pass over v0.8.4: three of the five fixes there were too coarse.
+
+- `<template>` inside `<head>` was inert content, but closing the head popped it
+  and un-skipped its text: a template's content leaked into the page. The head
+  now closes only when no dropped subtree (template, script, style) is open above
+  it;
+- text after an implicitly-ended `<head>` did not close it, so `<head>…</head
+  missing>VISIBLE` lost the text (and an `<img>` in that spot was not collected).
+  Both text and start tags close the head now, and the head check runs before
+  image collection;
+- `math` is not opaque after all: a `<title>` inside MathML is an ordinary HTML
+  element, so the scan follows document order instead of jumping to `</math>`;
+- opaque containers that nest (`svg`, `template`) are skipped to their matching
+  close tag, not the first one, and constructs inside them are not markup: a
+  commented-out `<svg>`, a CDATA block or a `</svg>` inside a script no longer
+  ends the skip early;
+- closing an implicit head is O(1) when no head is open: the check runs on every
+  start tag, and scanning the stack there made a 2 MB page of open tags take
+  minutes;
+- the head closes before image collection, so an `<img>` right after `<head>`
+  (or after `<meta>`/`<link>`) is collected instead of skipped with the head;
+- tests: text closing an implicit head, an image right after head elements, a
+  template in the head, nested templates, comments and CDATA inside `svg`, the
+  image cap on the tokenizer path, the MathML title, and a start-tag run sized to
+  catch the head check going linear; the v0.8.4 changelog date now matches its tag.
+
+A second review of the same scans found more edges of that class:
+
+- a tag name runs to whitespace, `/` or `>`: `<title-x>` and `<script-widget>`
+  are custom elements, not `title` and `script`, so the scanner no longer reads a
+  title out of them;
+- a CDATA section inside `svg` is text up to `]]>`, not a bogus comment that ends
+  at the first `>`: a `<title>` inside it is SVG content, not the page title;
+- `noscript` is raw text (the tokenizer reads it that way with scripting on), so
+  a `</template>` inside it does not close the enclosing inert template;
+- `plaintext` never ends: the rest of the page is text, so a document that opens
+  it has no title, and its `</plaintext>` is not a close tag;
+- form feed is whitespace, so it terminates a tag name and an attribute value;
+- a quote inside an unquoted attribute value (`href=/x?q="`) is part of the
+  value: the tag ends at the first `>`, as in the tokenizer;
+- a processing instruction, DOCTYPE or other bogus comment ends at the first
+  `>`, so a `<title>` inside one is not the page title;
+- a mismatched close tag inside `svg` closes the elements it names — the tree
+  parser's recovery — instead of being ignored, so an svg ends where a browser
+  ends it;
+- in the fallback, a close tag for an element below an open `<template>` is
+  ignored (template content is inert until `</template>`), and a repeated
+  `<head>` is ignored the way the parser ignores it;
+- tests: custom-element names, CDATA and mismatched closes inside `svg`, raw-text
+  `noscript` and `plaintext`, form feed, a quote in an unquoted value, a title
+  inside a processing instruction, and the two fallback cases.
+
+Documents are stored as blocks, not truncated prefixes:
+
+- a section longer than `fetch_block_chars` (default 8000 runes) is split into
+  blocks at a line boundary (then at a space or punctuation, then hard), and the
+  parts carry a `(2/5)` suffix; concatenating the blocks gives the section back,
+  so a split loses nothing;
+- `fetch_doc_chars` (default 100000, `0` = whole document) caps the stored text;
+  the budget drops whole blocks from the end and sets `truncated`, never cutting
+  a block in half (a first block larger than the budget is stored whole: an
+  empty document would hide the loss);
+- `memento_fetch` takes `max_chars` and `block_chars` per call; asking for more
+  than was stored re-extracts from the saved html without the network (the guard
+  is not re-run, so `redactions`/`guard_medium_ignored` stay intact), and asking
+  for less never shrinks a stored copy whose content is unchanged;
+- `memento_get_doc` takes `blocks` (1..10) and caps one answer at 32000 runes,
+  returning `next` when more remains; `full` hits the same budget with an
+  explicit `next` instead of silently returning megabytes;
+- the outline lists the first 60 blocks and summarizes the rest with their
+  orders and size: a response limit, not a storage limit;
+- `content_hash` now covers the page's full extracted text before the budget
+  (`full_chars` records its length), so it does not depend on `max_chars` or the
+  block size;
+- the old section/document caps (16 / 4000 / 24000) are gone: a section count is
+  not a limit, and `truncated` means a real loss (the budget, `fetch_max_bytes`,
+  or dropped image refs);
+- `memento fetch` gains `--max-chars`/`--block-chars`, `memento doc` gains
+  `--blocks`, and the new keys are in the config example and environment
+  (`MEMENTO_FETCH_BLOCK_CHARS`, `MEMENTO_FETCH_DOC_CHARS`).
+
+## v0.8.4 — 2026-11-20
 
 Extraction edge cases found by the release review.
 
