@@ -86,6 +86,6 @@ func outlineSummary(doc *model.Doc, shown int) string {
 	for _, s := range rest {
 		chars += len([]rune(s.Text))
 	}
-	return fmt.Sprintf("more %d blocks, orders %d..%d, %d chars (read any with memento_get_doc(hash, section=order))",
+	return fmt.Sprintf("more %d blocks, orders %d..%d, %d chars",
 		len(rest), rest[0].Order, rest[len(rest)-1].Order, chars)
 }

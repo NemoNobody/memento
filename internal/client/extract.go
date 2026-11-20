@@ -40,6 +40,11 @@ func (l ExtractLimits) normalized() ExtractLimits {
 	if l.BlockChars <= 0 {
 		l.BlockChars = DefaultExtractLimits.BlockChars
 	}
+	if l.BlockChars > 64000 {
+		// The surfaces validate this range; the library clamp keeps one stored
+		// block from becoming a multi-megabyte read on a direct call.
+		l.BlockChars = 64000
+	}
 	if l.MaxChars < 0 {
 		l.MaxChars = 0
 	}
@@ -736,7 +741,7 @@ func buildSections(raw []rawSection, filterChrome bool, truncated bool, limits E
 
 	sections := make([]model.Section, 0, len(kept))
 	total := 0
-	for _, r := range kept {
+	for i, r := range kept {
 		heading := r.heading
 		if heading == "" {
 			heading = "Top"
@@ -745,7 +750,6 @@ func buildSections(raw []rawSection, filterChrome bool, truncated bool, limits E
 		for k, text := range blocks {
 			n := utf8.RuneCountInString(text)
 			if limits.MaxChars > 0 && total+n > limits.MaxChars {
-				truncated = true
 				if len(sections) == 0 {
 					// Never store nothing: the first block is kept whole even when it
 					// alone exceeds the budget. The budget is a target, and an empty
@@ -753,6 +757,10 @@ func buildSections(raw []rawSection, filterChrome bool, truncated bool, limits E
 					sections = append(sections, model.Section{
 						Order: 0, Heading: partHeading(heading, k, len(blocks)), Text: text,
 					})
+					// Nothing is lost when that block is the whole page.
+					truncated = truncated || k < len(blocks)-1 || i < len(kept)-1
+				} else {
+					truncated = true
 				}
 				return sections, truncated, full
 			}
@@ -867,11 +875,13 @@ func ExtractPlainTextWithin(body string, limits ExtractLimits) (sections []model
 	for k, text := range blocks {
 		n := utf8.RuneCountInString(text)
 		if limits.MaxChars > 0 && total+n > limits.MaxChars {
-			truncated = true
 			if len(sections) == 0 {
 				sections = append(sections, model.Section{
 					Order: 0, Heading: partHeading("Part", k, len(blocks)), Text: text,
 				})
+				truncated = truncated || k < len(blocks)-1
+			} else {
+				truncated = true
 			}
 			break
 		}

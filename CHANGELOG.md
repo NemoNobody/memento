@@ -88,8 +88,8 @@ Documents are stored as blocks, not truncated prefixes:
   (`full_chars` records its length), so it does not depend on `max_chars` or the
   block size;
 - the old section/document caps (16 / 4000 / 24000) are gone: a section count is
-  not a limit, and `truncated` means a real loss (the budget, `fetch_max_bytes`,
-  or dropped image refs);
+  not a limit, and `truncated` means a real loss (the budget or dropped image
+  refs; a page over `fetch_max_bytes` is refused, not trimmed);
 - `memento fetch` gains `--max-chars`/`--block-chars`, `memento doc` gains
   `--blocks`, and the new keys are in the config example and environment
   (`MEMENTO_FETCH_BLOCK_CHARS`, `MEMENTO_FETCH_DOC_CHARS`).

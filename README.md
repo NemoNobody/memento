@@ -216,8 +216,8 @@ block prose, so a labelled menu survives — cutting a paragraph to remove a men
 is the worse mistake. A page that is nothing but links keeps its blocks — an
 empty document would hide the loss. Prose outside any of these markers can still
 carry a banner; the loss is reported rather than silent: `truncated` covers the
-storage budget, the 2 MB `fetch_max_bytes` limit (a bigger page is refused, not
-trimmed) and dropped image references — never the chrome filter.
+storage budget and dropped image references, never the chrome filter. A page over
+the 2 MB `fetch_max_bytes` limit is refused with an error, not trimmed.
 
 ## Commands
 

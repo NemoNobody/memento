@@ -1710,7 +1710,10 @@ func (s *mcpServer) fetchDoc(ctx context.Context, req *mcp.CallToolRequest, in f
 		shown = outlineRows
 	}
 	hint := outlineSummary(doc, shown)
-	if doc.Truncated {
+	if doc.Truncated && (doc.FullChars == 0 || doc.Size < doc.FullChars) {
+		// A truncation with size == full_chars came from dropped image refs (or
+		// a single oversized block): more text is not available, so the budget
+		// advice would send the caller after nothing.
 		truncHint := "stored a prefix of the page; call again with max_chars=0 to store the whole page"
 		if doc.FullChars > 0 {
 			truncHint = fmt.Sprintf("stored the first %d of %d chars; call again with max_chars=0 to store the whole page", doc.Size, doc.FullChars)
@@ -1768,7 +1771,7 @@ type getDocOutput struct {
 	Hash      string `json:"hash,omitempty"`
 	URL       string `json:"url,omitempty"`
 	Title     string `json:"title,omitempty"`
-	Stale     bool   `json:"stale,omitempty" jsonschema:"past TTL: refresh with memento_get_doc before quoting"`
+	Stale     bool   `json:"stale,omitempty" jsonschema:"past TTL: refresh with memento_fetch_doc before quoting"`
 	Truncated bool   `json:"truncated,omitempty" jsonschema:"extraction hit a limit: the stored text is a prefix"`
 	// GuardMediumIgnored surfaces the doc-route leniency recorded at fetch
 	// time: the leniency must be visible on every read path, not only the

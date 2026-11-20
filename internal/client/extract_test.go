@@ -411,7 +411,20 @@ func TestExtractBudgetNeverStoresNothing(t *testing.T) {
 		t.Fatalf("sections = %+v, want one whole block", secs)
 	}
 	if !tr {
-		t.Error("the budget was exceeded and the flag must say so")
+		t.Error("the rest of the section was dropped and the flag must say so")
+	}
+}
+
+// TestExtractBudgetKeptWholePageIsNotTruncation: when the block kept over the
+// budget is the whole page, nothing was lost and the flag stays false.
+func TestExtractBudgetKeptWholePageIsNotTruncation(t *testing.T) {
+	secs, _, tr, _ := ExtractSectionsWithin("<p>short page text</p>",
+		ExtractLimits{BlockChars: 8000, MaxChars: 5})
+	if len(secs) != 1 {
+		t.Fatalf("sections = %+v, want the page kept whole", secs)
+	}
+	if tr {
+		t.Error("nothing was dropped: the kept block is the whole page")
 	}
 }
 

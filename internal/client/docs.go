@@ -300,11 +300,15 @@ func storedText(doc *model.Doc) string {
 }
 
 // keepsStored reports whether the stored snapshot already holds at least as much
-// of the same page as the candidate: the candidate is a truncated prefix of it.
-// Requiring Truncated means a shorter but complete page (the content really got
-// smaller) still replaces the old text instead of leaving a stale tail behind.
+// of the same page as the candidate: the candidate is a truncated prefix of it
+// and the revisions agree. Requiring Truncated means a shorter but complete page
+// (the content really got smaller) still replaces the old text, and comparing the
+// hashes keeps a shared page head from passing for the same revision.
 func keepsStored(stored, candidate *model.Doc) bool {
 	if stored == nil || candidate == nil || len(candidate.Sections) == 0 || !candidate.Truncated {
+		return false
+	}
+	if stored.ContentHash != "" && candidate.ContentHash != "" && stored.ContentHash != candidate.ContentHash {
 		return false
 	}
 	s, c := storedText(stored), storedText(candidate)
@@ -312,25 +316,39 @@ func keepsStored(stored, candidate *model.Doc) bool {
 }
 
 // wantsMore reports whether the caller's budget could hold more of the page than
-// the snapshot does.
+// the snapshot does. Truncation from dropped image refs, or a first block larger
+// than the budget, leaves size == full_chars: there is no text to add, and
+// re-extracting would only re-parse the html.
 func wantsMore(doc *model.Doc, limits ExtractLimits) bool {
-	return doc.Truncated && (limits.MaxChars == 0 || limits.MaxChars > doc.Size)
+	if !doc.Truncated {
+		return false
+	}
+	if doc.FullChars > 0 && doc.Size >= doc.FullChars {
+		return false
+	}
+	return limits.MaxChars == 0 || limits.MaxChars > doc.Size
 }
 
-// mergeRedactions unions two audit lists without repeating an entry: a
-// re-extraction re-scans text the earlier pass may have seen in a different form.
+// mergeRedactions unions two audit lists without repeating an entry. The identity
+// is the detector and the span size, not the field name: re-extraction renumbers
+// blocks, and the same finding must not be counted twice.
 func mergeRedactions(old, extra []model.Redaction) []model.Redaction {
 	if len(extra) == 0 {
 		return old
 	}
-	seen := make(map[model.Redaction]bool, len(old))
+	type key struct {
+		pattern string
+		chars   int
+	}
+	seen := make(map[key]bool, len(old))
 	for _, r := range old {
-		seen[r] = true
+		seen[key{r.Pattern, r.Chars}] = true
 	}
 	out := old
 	for _, r := range extra {
-		if !seen[r] {
-			seen[r] = true
+		k := key{r.Pattern, r.Chars}
+		if !seen[k] {
+			seen[k] = true
 			out = append(out, r)
 		}
 	}
@@ -547,9 +565,16 @@ func (c *Client) ReextractDoc(ctx context.Context, hash string, limits ExtractLi
 		doc.Size = size
 	}
 	// Re-read right before the write: a concurrent fetch may have stored a
-	// larger copy of a different revision while this one was extracting.
-	if current, gerr := c.GetDocByHash(ctx, hash); gerr == nil && keepsStored(current, doc) {
-		return current, false, nil
+	// larger copy, or a different revision, while this one was extracting. A
+	// revision change aborts the write — sections from the old html next to a
+	// newer html/content_hash would be a mixed snapshot.
+	if current, gerr := c.GetDocByHash(ctx, hash); gerr == nil {
+		if current.ContentHash != "" && doc.ContentHash != "" && current.ContentHash != doc.ContentHash {
+			return current, false, nil
+		}
+		if keepsStored(current, doc) {
+			return current, false, nil
+		}
 	}
 	if err := c.updateDocText(ctx, hash, doc); err != nil {
 		return nil, false, err

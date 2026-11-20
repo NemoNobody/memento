@@ -643,11 +643,12 @@ type fetchOutcome struct {
 // JSON feeds) is rejected — silent garbage extraction is worse than an
 // explicit error.
 //
-// hook runs after extraction and BEFORE the document is finalized
-// (size/content_hash computed from the final, possibly redacted text): the
-// write-time secret guard rewrites agent-visible fields here, so the stored
-// metadata describes exactly what the agent-visible content is. A hook
-// error rejects the page (the guard's policy lives in the caller; the
+// hook runs after extraction and BEFORE the document is finalized: size counts
+// the stored (possibly redacted) text, while content_hash describes the page's
+// full extracted text, so neither a redaction nor a storage budget moves the
+// page's identity. The write-time secret guard rewrites agent-visible fields
+// here, so the stored metadata describes exactly what the agent-visible content
+// is. A hook error rejects the page (the guard's policy lives in the caller; the
 // client only owns the timing).
 func FetchPage(ctx context.Context, cfg *config.Config, normalizedURL string,
 	hook func(*model.Doc) ([]model.Redaction, error)) (*model.Doc, error) {

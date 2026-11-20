@@ -77,9 +77,10 @@ it was stored with — rebuilding it at a different size takes `refresh: true`
 budget for one document. When the budget runs out, whole blocks are dropped
 from the end, `truncated: true` is set, and the answer carries `chars_stored` /
 `chars_total`. No block is cut to fit. `truncated` therefore marks a real loss
-only: the storage budget, the `fetch_max_bytes` limit (2 MB — a bigger page is
-refused with an error, not trimmed), or dropped image references. Blocks
-skipped by the chrome filter are not a loss.
+only: the storage budget or dropped image references. A page over the
+`fetch_max_bytes` limit (2 MB) is refused with an error, not trimmed, so it
+never stores a partial document. Blocks skipped by the chrome filter are not a
+loss.
 
 `content_hash` is sha256 over the full extracted text **before** the budget is
 applied: it does not depend on `max_chars` or `block_chars`, so the same page
