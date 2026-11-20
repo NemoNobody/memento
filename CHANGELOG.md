@@ -40,6 +40,9 @@ heading to build the release notes).
   The work is assumed stable for the process lifetime: restart after a cluster
   swap, a deleted template or a topology change (the journal template's replica
   drift check and the "externally managed" verdict are made once per process).
+  A read-only or DLS role cannot manage mappings: the 403 counts as
+  "externally managed" and closes the pass, so reads do not pay a refused PUT
+  on every call.
 - docs: on KF 6.13 KWallet can serve `org.freedesktop.secrets` itself when
   kwalletd is started by PAM and the bus name is free, so `ksecretd` is
   optional there; gnome-keyring must stay out of the session, otherwise it

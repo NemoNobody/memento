@@ -43,6 +43,13 @@ func (c *Client) reconcileMapping(ctx context.Context) error {
 		Indices: []string{c.cfg.IndexName},
 		Body:    bytes.NewReader(body),
 	}); err != nil {
+		if statusIs(err, 403) {
+			// A read-only or DLS role cannot manage mappings: the index is
+			// managed externally, which is not a retryable failure. Closing the
+			// gate keeps every read from paying a refused PUT.
+			gate.done = true
+			return nil
+		}
 		// The gate stays open: the next caller retries.
 		return fmt.Errorf("reconcile index mapping %s: %w", c.cfg.IndexName, err)
 	}

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/NemoNobody/memento/internal/config"
 )
@@ -110,5 +111,93 @@ func TestMappingReconcileFailureIsReleasedForTheNextClient(t *testing.T) {
 	}
 	if puts := fake.requestsFor(http.MethodPut, "/memento/_mapping"); len(puts) != 2 {
 		t.Fatalf("mapping puts = %d, want 2 (the failed pass must not claim the store)", len(puts))
+	}
+}
+
+// TestReconcileMapping403IsExternallyManaged: a read-only or DLS role cannot
+// manage mappings. That is a final verdict, not a retryable failure — without
+// this the gate stays open and every read pays a refused PUT.
+func TestReconcileMapping403IsExternallyManaged(t *testing.T) {
+	puts := 0
+	c1, fake := newFakeClientCfg(t, func(cfg *config.Config) {
+		cfg.IndexReplicas = 0
+	}, func(r recordedRequest) (int, string) {
+		switch {
+		case r.Method == http.MethodHead && r.Path == "/memento":
+			return http.StatusOK, ""
+		case r.Method == http.MethodPut && r.Path == "/memento/_mapping":
+			puts++
+			return http.StatusForbidden, `{"status":403,"error":"no permission"}`
+		}
+		return http.StatusInternalServerError, `{"error":"unexpected request: ` + r.Method + ` ` + r.Path + `"}`
+	})
+	if err := c1.EnsureIndex(context.Background()); err != nil {
+		t.Fatalf("EnsureIndex must stay best effort: %v", err)
+	}
+	c2, err := NewClient(c1.cfg)
+	if err != nil {
+		t.Fatalf("second NewClient: %v", err)
+	}
+	if err := c2.EnsureIndex(context.Background()); err != nil {
+		t.Fatalf("second EnsureIndex: %v", err)
+	}
+	if got := len(fake.requestsFor(http.MethodPut, "/memento/_mapping")); got != 1 {
+		t.Fatalf("mapping puts = %d, want 1 (403 closes the gate: externally managed)", got)
+	}
+	if puts != 1 {
+		t.Fatalf("handler saw %d mapping puts, want 1", puts)
+	}
+}
+
+// TestMappingReconcileWaitsForTheFirstPass mirrors the journal-infra wait test:
+// a second caller must not proceed while the first PUT is in flight, or a write
+// could race the additive mapping and pin a field dynamically.
+func TestMappingReconcileWaitsForTheFirstPass(t *testing.T) {
+	release := make(chan struct{})
+	started := make(chan struct{}, 1)
+	c1, _ := newFakeClientCfg(t, func(cfg *config.Config) {
+		cfg.IndexReplicas = 0
+	}, func(r recordedRequest) (int, string) {
+		switch {
+		case r.Method == http.MethodHead && r.Path == "/memento":
+			return http.StatusOK, ""
+		case r.Method == http.MethodPut && r.Path == "/memento/_mapping":
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			<-release
+			return http.StatusOK, `{"acknowledged":true}`
+		}
+		return http.StatusInternalServerError, `{"error":"unexpected"}`
+	})
+	c2, err := NewClient(c1.cfg)
+	if err != nil {
+		t.Fatalf("second NewClient: %v", err)
+	}
+
+	firstDone := make(chan struct{})
+	go func() {
+		_ = c1.reconcileMapping(context.Background())
+		close(firstDone)
+	}()
+	<-started
+
+	secondDone := make(chan struct{})
+	go func() {
+		_ = c2.reconcileMapping(context.Background())
+		close(secondDone)
+	}()
+	select {
+	case <-secondDone:
+		t.Fatal("the second caller returned while the first mapping PUT was in flight (skip, not wait)")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	<-firstDone
+	select {
+	case <-secondDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the second caller never returned after the first PUT finished")
 	}
 }

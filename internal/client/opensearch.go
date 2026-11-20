@@ -72,8 +72,9 @@ type Client struct {
 	replicasFixOnce sync.Once
 
 	// authorMu guards the writer-label cache: a security-resolved identity
-	// lives for the process; a degraded chain is re-probed with backoff
-	// (see resolveAuthor).
+	// lives for the client's lifetime (the MCP server builds one per tool call,
+	// so this is one probe per call, not per process); a degraded chain is
+	// re-probed with backoff (see resolveAuthor).
 	authorMu       sync.Mutex
 	authorResolved bool
 	authorRetryAt  time.Time
