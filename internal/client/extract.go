@@ -99,6 +99,15 @@ func ExtractTitle(body string) string {
 			return ""
 		}
 		p := i + lt
+		if strings.HasPrefix(lower[p:], "<![cdata[") {
+			// In HTML content this is a bogus comment: it ends at the next '>'.
+			j := strings.IndexByte(lower[p:], '>')
+			if j < 0 {
+				return ""
+			}
+			i = p + j + 1
+			continue
+		}
 		if strings.HasPrefix(lower[p:], "<!--") {
 			rest := lower[p+4:]
 			switch {
@@ -654,9 +663,17 @@ var voidElements = map[string]bool{
 // markup (script/style text, raw-text elements, an SVG icon's own <title>, an
 // inert template).
 var opaqueElements = map[string]bool{
-	"script": true, "style": true, "svg": true, "template": true,
+	"script": true, "style": true, "svg": true, "math": true, "template": true,
 	"noscript": true, "textarea": true, "xmp": true, "iframe": true,
-	"noembed": true, "plaintext": true,
+	"noembed": true, "noframes": true, "plaintext": true,
+}
+
+// headElements may appear inside <head>; any other start tag closes it (HTML5
+// lets </head> be omitted, and the fallback has no tree to tell it so).
+var headElements = map[string]bool{
+	"base": true, "basefont": true, "bgsound": true, "link": true, "meta": true,
+	"title": true, "noscript": true, "noframes": true, "style": true,
+	"script": true, "template": true,
 }
 
 // extractTextOnly is the fallback for markup the tree parser refuses: one
@@ -775,8 +792,9 @@ func extractTextOnly(body string, keepChrome bool) ([]model.Section, []model.Ima
 				}
 				continue
 			}
-			if n == "body" && open["head"] > 0 {
-				// </head> is optional in HTML5: the body closes it implicitly.
+			if open["head"] > 0 && n != "head" && !headElements[n] {
+				// </head> is optional in HTML5: the first element that cannot live
+				// in the head closes it (body included).
 				for i := len(stack) - 1; i >= 0; i-- {
 					if stack[i].name != "head" {
 						continue
@@ -941,7 +959,10 @@ func contentRoots(page *xhtml.Node) []*xhtml.Node {
 // and counting those as menu labels made the section read as a rail.
 func wrapsBlock(n *xhtml.Node) bool {
 	for c := n.FirstChild; c != nil; c = c.NextSibling {
-		if c.Type == xhtml.ElementNode && blockElements[c.Data] {
+		if c.Type != xhtml.ElementNode {
+			continue
+		}
+		if blockElements[c.Data] || wrapsBlock(c) {
 			return true
 		}
 	}

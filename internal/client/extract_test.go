@@ -397,6 +397,63 @@ func TestExtractSectionAndDocCaps(t *testing.T) {
 	}
 }
 
+// TestExtractTitleOpaqueContainers: a <title> inside a raw-text element, a
+// foreign content container or a CDATA bogus comment is not the page title.
+func TestExtractTitleOpaqueContainers(t *testing.T) {
+	cases := []string{
+		`<noframes><title>Fake</title></noframes><title>Real</title>`,
+		`<math><title>Fake</title></math><title>Real</title>`,
+		`<![CDATA[<title>Fake</title>]]><title>Real</title>`,
+	}
+	for _, page := range cases {
+		if got := ExtractTitle(page); got != "Real" {
+			t.Errorf("page %q: title = %q, want Real", page, got)
+		}
+	}
+}
+
+// TestExtractImageCapReportsTruncation pins the other side of the flag: an image
+// dropped by the cap is a loss and must be reported, while exactly the cap is
+// not.
+func TestExtractImageCapReportsTruncation(t *testing.T) {
+	page := func(n int) string {
+		var b strings.Builder
+		b.WriteString("<html><body><h2>Pictures</h2><p>Text next to the images.</p>")
+		for i := 0; i < n; i++ {
+			b.WriteString(`<img src="/i` + strings.Repeat("x", i%5+1) + `.png">`)
+		}
+		b.WriteString(`</body></html>`)
+		return b.String()
+	}
+	imgs, _, tr := imagesOf(t, page(maxImages))
+	if len(imgs) != maxImages || tr {
+		t.Errorf("exactly the cap: %d images, truncated=%v; want %d, false", len(imgs), tr, maxImages)
+	}
+	imgs, _, tr = imagesOf(t, page(maxImages+1))
+	if len(imgs) != maxImages || !tr {
+		t.Errorf("one over the cap: %d images, truncated=%v; want %d, true", len(imgs), tr, maxImages)
+	}
+}
+
+func imagesOf(t *testing.T, page string) ([]model.ImageRef, []model.Section, bool) {
+	t.Helper()
+	secs, imgs, tr := ExtractSections(page)
+	return imgs, secs, tr
+}
+
+// TestExtractLinkWrappingBlockThroughInline: a card link may wrap inline markup
+// around its block content; it is still formatting, not a menu label.
+func TestExtractLinkWrappingBlockThroughInline(t *testing.T) {
+	page := `<html><body><h2>Cards</h2>` +
+		`<a href="/a"><span><div>Card one prose here.</div></span></a>` +
+		`<a href="/b"><span><div>Card two prose here.</div></span></a>` +
+		`<h2>Body</h2><p>Real body text of the page.</p></body></html>`
+	secs, _, _ := ExtractSections(page)
+	if len(secs) != 2 || secs[0].Heading != "Cards" {
+		t.Fatalf("sections = %+v, want Cards and Body", secs)
+	}
+}
+
 // TestExtractTitleCap pins MaxTitleChars.
 func TestExtractTitleCap(t *testing.T) {
 	title := ExtractTitle("<title>" + strings.Repeat("x", MaxTitleChars+50) + "</title>")
@@ -655,12 +712,12 @@ func TestExtractSectionCapReportsTruncation(t *testing.T) {
 	}
 }
 
-// TestExtractContentScanLinear guards the content-root scan and the tokenizer
-// fallback. Two tree shapes made the old scan quadratic (a run of open tags
-// followed by unrelated close tags; a deep stack of candidates), and markup
-// deeper than the parser's 512-element stack cap takes the tokenizer path, which
-// must not go quadratic on unmatched close tags either. Everything fits under the
-// 2 MB fetch cap.
+// TestExtractContentScanLinear guards the scans against unbounded regressions: a
+// raw-text rescan per candidate, or a tokenizer pass that revisits the tail. The
+// wall-clock budget cannot catch a change that is merely "depth times candidates"
+// — the parser caps depth at 512, so that shape costs milliseconds at the 2 MB
+// fetch cap; the shape of the algorithm itself is pinned by the behaviour tests
+// (nested candidates, listing pages) instead.
 func TestExtractContentScanLinear(t *testing.T) {
 	cases := []struct {
 		name string
@@ -853,6 +910,14 @@ func TestExtractFallbackDetails(t *testing.T) {
 		secs, _, _ := ExtractSections(page)
 		if len(secs) != 1 || !strings.Contains(secs[0].Text, "prose that must survive") {
 			t.Fatalf("sections = %+v, want the body prose", secs)
+		}
+	})
+
+	t.Run("unclosed head without a body tag", func(t *testing.T) {
+		page := "<html><head><title>t</title>" + strings.Repeat("<div>", 600) + "<p>prose that must survive</p>"
+		secs, _, _ := ExtractSections(page)
+		if len(secs) != 1 || !strings.Contains(secs[0].Text, "prose that must survive") {
+			t.Fatalf("sections = %+v, want the prose", secs)
 		}
 	})
 
