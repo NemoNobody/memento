@@ -69,9 +69,10 @@ space or punctuation, and only then hard at the count — joining the parts give
 the text back unchanged, so a split loses nothing. Split parts are labelled
 `heading (2/5)`, and every block is addressable by `order`, the unit
 `memento_get_doc` reads. `block_chars` is an extraction setting: it applies
-when a page is fetched or re-extracted, while a cached snapshot keeps the split
-it was stored with — rebuilding it at a different size takes `refresh: true`
-(a revalidating `304` keeps the stored blocks as they are).
+whenever text is extracted, so a truncated snapshot re-extracted for a larger
+`max_chars` is re-blocked at the requested size, while a cached snapshot whose
+text is complete keeps the split it was stored with (a revalidating `304`
+included).
 
 `fetch_doc_chars` (default 100000; `0` = the whole document) is the storage
 budget for one document. When the budget runs out, whole blocks are dropped

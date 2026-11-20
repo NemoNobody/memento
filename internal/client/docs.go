@@ -118,12 +118,22 @@ func (c *Client) PutDoc(ctx context.Context, doc *model.Doc) error {
 // the read that produced it (0,0 = unconditional). A concurrent writer makes the
 // stale write fail instead of silently replacing newer content.
 func (c *Client) putDocCAS(ctx context.Context, doc *model.Doc, seqNo, primaryTerm int) error {
-	body, _ := json.Marshal(doc)
 	params := opensearchapi.IndexParams{Refresh: "wait_for"}
 	if seqNo != 0 || primaryTerm != 0 {
 		params.IfSeqNo = &seqNo
 		params.IfPrimaryTerm = &primaryTerm
 	}
+	return c.indexDoc(ctx, doc, params)
+}
+
+// createDoc writes a snapshot only if the hash has no document yet: two first
+// fetches of one URL must not overwrite each other's copy.
+func (c *Client) createDoc(ctx context.Context, doc *model.Doc) error {
+	return c.indexDoc(ctx, doc, opensearchapi.IndexParams{Refresh: "wait_for", OpType: "create"})
+}
+
+func (c *Client) indexDoc(ctx context.Context, doc *model.Doc, params opensearchapi.IndexParams) error {
+	body, _ := json.Marshal(doc)
 	_, err := c.api.Index(ctx, opensearchapi.IndexReq{
 		Index:      c.cfg.DocsIndexName,
 		DocumentID: doc.URLHash,
@@ -327,7 +337,11 @@ func keepsStored(stored, candidate *model.Doc) bool {
 	if stored == nil || candidate == nil || len(candidate.Sections) == 0 || !candidate.Truncated {
 		return false
 	}
-	if stored.ContentHash != "" && candidate.ContentHash != "" && stored.ContentHash != candidate.ContentHash {
+	// A snapshot written before full_chars existed carries the previous hash
+	// scheme: its hash can never equal a new one, so the hash gate is skipped for
+	// that generation and the textual rule decides.
+	legacy := stored.FullChars == 0 || candidate.FullChars == 0
+	if !legacy && stored.ContentHash != "" && candidate.ContentHash != "" && stored.ContentHash != candidate.ContentHash {
 		return false
 	}
 	s, c := storedText(stored), storedText(candidate)
@@ -474,6 +488,7 @@ func (c *Client) FetchDocWithin(ctx context.Context, rawURL, project string, ref
 	// stored more of the same page since it was read. Re-read once, right before
 	// the write, with the version pair the conditional write needs.
 	var seqNo, primaryTerm int
+	create := false
 	if current, seq, pt, gerr := c.getDocByHashVersion(ctx, hash, false); gerr == nil {
 		seqNo, primaryTerm = seq, pt
 		if keepsStored(current, doc) {
@@ -482,6 +497,14 @@ func (c *Client) FetchDocWithin(ctx context.Context, rawURL, project string, ref
 			}
 			return current, false, false, nil
 		}
+	} else if errors.Is(gerr, ErrNoDoc) {
+		// Nothing stored yet: a create-conditioned write keeps two first fetches
+		// of one URL from overwriting each other.
+		create = true
+	} else {
+		// A read failure must not degrade into an unconditional write: the copy
+		// it would replace is unknown.
+		return nil, false, false, fmt.Errorf("fetch doc: re-read before write: %w", gerr)
 	}
 	if keepsStored(prior, doc) {
 		if err := c.touchDoc(ctx, hash, prior, project, meta); err != nil {
@@ -489,15 +512,21 @@ func (c *Client) FetchDocWithin(ctx context.Context, rawURL, project string, ref
 		}
 		return prior, false, false, nil
 	}
-	if err := c.putDocCAS(ctx, doc, seqNo, primaryTerm); err != nil {
-		if isVersionConflict(err) {
+	var werr error
+	if create {
+		werr = c.createDoc(ctx, doc)
+	} else {
+		werr = c.putDocCAS(ctx, doc, seqNo, primaryTerm)
+	}
+	if werr != nil {
+		if isVersionConflict(werr) {
 			// A writer landed between the re-read and the write: its snapshot is
 			// newer, so answer with that one instead of overwriting it.
 			if current, gerr := c.GetDocByHash(ctx, hash); gerr == nil {
 				return current, true, false, nil
 			}
 		}
-		return nil, false, false, err
+		return nil, false, false, werr
 	}
 	return doc, false, false, nil
 }
@@ -579,6 +608,7 @@ func (c *Client) ReextractDoc(ctx context.Context, hash string, limits ExtractLi
 	}
 	oldRedactions := doc.Redactions
 	oldMedium := doc.GuardMediumIgnored
+	sizeBeforeHook := size
 	doc.Sections, doc.Size, doc.Truncated, doc.FullChars = sections, size, truncated, fullChars
 	if hook != nil {
 		// The scan replaces the counter rather than adding to it: the same
@@ -599,6 +629,13 @@ func (c *Client) ReextractDoc(ctx context.Context, hash string, limits ExtractLi
 			size += utf8.RuneCountInString(doc.Sections[i].Text)
 		}
 		doc.Size = size
+		// A redaction shrinks the stored text; full_chars describes the same
+		// post-redaction text, so a complete snapshot still reports
+		// size == full_chars.
+		doc.FullChars = fullChars - (sizeBeforeHook - size)
+		if doc.FullChars < size {
+			doc.FullChars = size
+		}
 	}
 	// Re-read right before the write: a concurrent fetch may have stored a
 	// larger copy, or a different revision, while this one was extracting. A

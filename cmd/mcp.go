@@ -246,8 +246,10 @@ func runMCPServer(confPath string) error {
 			"blocks, never cuts one. A second fetch of the " +
 			"same URL returns the stored snapshot (cached=true) until its TTL " +
 			"expires; refresh=true forces a new download. block_chars applies when " +
-			"the page is extracted: a cached snapshot keeps its stored split, so " +
-			"pass refresh=true to re-block it. Section text is read with " +
+			"the page is extracted: a cached snapshot with all its text keeps its " +
+			"stored split (a revalidating 304 included), while a truncated snapshot " +
+			"re-extracted for a larger max_chars is re-blocked at the requested " +
+			"size. Section text is read with " +
 			"memento_get_doc; the raw page is never returned (context economy). " +
 			"Requests send no cookies and no credentials; a host outside " +
 			"fetch_allow_hosts is rejected before the request. GitHub URLs that " +
@@ -264,8 +266,8 @@ func runMCPServer(confPath string) error {
 			"32000 runes of block text; when the cap cuts the read, next names " +
 			"the section to continue from. The outline in the answer is capped too " +
 			"(sections_hidden counts the blocks it left out, hint summarizes their " +
-			"range); block_chars is applied at fetch/re-fetch, so a cached snapshot " +
-			"keeps its own split. Prefer one section: full bloats the " +
+			"range); block_chars is applied at fetch/re-extraction, so a cached " +
+			"snapshot keeps its own split unless more text was requested. Prefer one section: full bloats the " +
 			"context. Never touches the " +
 			"network: stale=true means the snapshot is past its TTL — refresh it " +
 			"with memento_fetch_doc before quoting.",
@@ -1814,6 +1816,9 @@ func (s *mcpServer) getDoc(ctx context.Context, req *mcp.CallToolRequest, in get
 	if in.Section != nil && *in.Section < 0 {
 		return nil, getDocOutput{}, fmt.Errorf("memento_get_doc: section must be 0 or greater, got %d", *in.Section)
 	}
+	if in.Blocks != nil && (*in.Blocks < 1 || *in.Blocks > maxReadBlocks) {
+		return nil, getDocOutput{}, fmt.Errorf("memento_get_doc: blocks must be between 1 and %d, got %d", maxReadBlocks, *in.Blocks)
+	}
 	c, err := s.newClient(ctx)
 	if err != nil {
 		return nil, getDocOutput{}, storeError("memento_get_doc", err)
@@ -1857,9 +1862,6 @@ func (s *mcpServer) getDoc(ctx context.Context, req *mcp.CallToolRequest, in get
 		want := 1
 		if in.Blocks != nil {
 			want = *in.Blocks
-		}
-		if want < 1 || want > maxReadBlocks {
-			return nil, getDocOutput{}, fmt.Errorf("memento_get_doc: blocks must be between 1 and %d, got %d", maxReadBlocks, want)
 		}
 		text, included, next := readDocBlocks(doc, *in.Section, want, docReadBudget)
 		if included == 0 {
