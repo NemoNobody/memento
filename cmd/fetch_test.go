@@ -66,26 +66,98 @@ func TestPrintDocOutlineStale(t *testing.T) {
 	}
 }
 
-func TestPrintDocFullAndSection(t *testing.T) {
+func TestPrintDocFull(t *testing.T) {
 	var buf bytes.Buffer
-	now := time.Now().UTC()
+	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
 	if err := printDocFull(&buf, testDoc(), now); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
-	if !strings.Contains(out, "first section text") || !strings.Contains(out, "second section text") {
-		t.Errorf("--full must print every section:\n%s", out)
+	for _, want := range []string{
+		"first section text",
+		"second section text",
+		"--- [0] Intro ---",
+		"--- [1] Usage ---",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("--full lacks %q:\n%s", want, out)
+		}
 	}
-	if !strings.Contains(out, "section [1] Usage") {
-		t.Errorf("section header missing:\n%s", out)
+	if strings.Contains(out, "next:") {
+		t.Errorf("a small document needs no continuation:\n%s", out)
 	}
+	if strings.Contains(out, "stale: fetched") {
+		t.Errorf("a fresh document must not carry the stale note:\n%s", out)
+	}
+}
 
-	buf.Reset()
-	if err := writeSection(&buf, testDoc(), testDoc().Sections[0], now); err != nil {
+func TestPrintDocFullBudget(t *testing.T) {
+	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+	d := testDoc()
+	d.ExpiresAt = now.Add(-time.Hour) // stale: the note must precede the text
+	d.Sections = nil
+	for i := 0; i < 3; i++ {
+		d.Sections = append(d.Sections, model.Section{
+			Order:   i,
+			Heading: "Block " + strconv.Itoa(i),
+			Text:    strings.Repeat("x", docReadBudget),
+		})
+	}
+	var buf bytes.Buffer
+	if err := printDocFull(&buf, d, now); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(buf.String(), "first section text") {
-		t.Errorf("section body missing:\n%s", buf.String())
+	out := buf.String()
+	if !strings.Contains(out, "--- [0] Block 0 ---") {
+		t.Errorf("the first block must always be included:\n%s", out)
+	}
+	if strings.Contains(out, "--- [1] Block 1 ---") {
+		t.Errorf("a block past the budget must be deferred:\n%s", out)
+	}
+	if !strings.Contains(out, "next: continue with --section 1") {
+		t.Errorf("a capped read must name the next block:\n%s", out)
+	}
+	stale := strings.Index(out, "stale: fetched ")
+	body := strings.Index(out, "--- [0] Block 0 ---")
+	if stale < 0 || !strings.Contains(out, "re-fetch before quoting") {
+		t.Errorf("a stale read lacks the re-fetch warning:\n%s", out)
+	} else if stale > body {
+		t.Errorf("the stale note must precede the text:\n%s", out)
+	}
+}
+
+func TestResolveSection(t *testing.T) {
+	tests := []struct {
+		name    string
+		flag    int
+		args    []string
+		want    int
+		wantErr string
+	}{
+		{"flag not given", -1, nil, -1, ""},
+		{"flag given", 3, nil, 3, ""},
+		{"positional", -1, []string{"2"}, 2, ""},
+		{"positional outline", -1, []string{"-1"}, -1, ""},
+		{"positional negative", -1, []string{"-2"}, 0, "--section must be 0 or greater, got -2"},
+		{"flag negative", -2, nil, 0, "--section must be 0 or greater, got -2"},
+		{"positional not a number", -1, []string{"x"}, 0, "invalid syntax"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := resolveSection(tt.flag, tt.args)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("resolveSection(%d, %v) error = %v, want %q", tt.flag, tt.args, err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveSection(%d, %v): %v", tt.flag, tt.args, err)
+			}
+			if got != tt.want {
+				t.Errorf("resolveSection(%d, %v) = %d, want %d", tt.flag, tt.args, got, tt.want)
+			}
+		})
 	}
 }
 

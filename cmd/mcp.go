@@ -245,7 +245,9 @@ func runMCPServer(confPath string) error {
 			"(1000..64000; default fetch_block_chars); the budget drops whole " +
 			"blocks, never cuts one. A second fetch of the " +
 			"same URL returns the stored snapshot (cached=true) until its TTL " +
-			"expires; refresh=true forces a new download. Section text is read with " +
+			"expires; refresh=true forces a new download. block_chars applies when " +
+			"the page is extracted: a cached snapshot keeps its stored split, so " +
+			"pass refresh=true to re-block it. Section text is read with " +
 			"memento_get_doc; the raw page is never returned (context economy). " +
 			"Requests send no cookies and no credentials; a host outside " +
 			"fetch_allow_hosts is rejected before the request. GitHub URLs that " +
@@ -260,7 +262,10 @@ func runMCPServer(confPath string) error {
 			"default, section=N for one block or a run of them (blocks=N, default " +
 			"1, max 10), full=true for every block. One answer is capped at " +
 			"32000 runes of block text; when the cap cuts the read, next names " +
-			"the section to continue from. Prefer one section: full bloats the " +
+			"the section to continue from. The outline in the answer is capped too " +
+			"(sections_hidden counts the blocks it left out, hint summarizes their " +
+			"range); block_chars is applied at fetch/re-fetch, so a cached snapshot " +
+			"keeps its own split. Prefer one section: full bloats the " +
 			"context. Never touches the " +
 			"network: stale=true means the snapshot is past its TTL — refresh it " +
 			"with memento_fetch_doc before quoting.",
@@ -1771,19 +1776,40 @@ type getDocOutput struct {
 	GuardMediumIgnored int                 `json:"guard_medium_ignored,omitempty" jsonschema:"medium-confidence shapes left in documentation content on purpose (documentation route only); high-confidence secrets are always redacted"`
 	Sections           []docSectionOutline `json:"sections,omitempty" jsonschema:"outline: heading + length per section"`
 
+	// The outline is capped at outlineRows lines, like the fetch answer:
+	// SectionsHidden counts the rest and Hint summarizes their range.
+	SectionsHidden int    `json:"sections_hidden,omitempty" jsonschema:"outline blocks beyond the listed ones (hint summarizes their range)"`
+	Hint           string `json:"hint,omitempty" jsonschema:"how to continue: more outline blocks, or a capped read"`
+
 	SectionText string `json:"section_text,omitempty" jsonschema:"the text of the requested section"`
 	// BlocksIncluded counts the blocks in SectionText; Next is where a capped
 	// read continues (absent when the read reached the end).
 	BlocksIncluded int    `json:"blocks_included,omitempty" jsonschema:"blocks returned in section_text"`
 	FullText       string `json:"full_text,omitempty" jsonschema:"every section, delimited by headers (full=true)"`
 	Next           *int   `json:"next,omitempty" jsonschema:"section to continue from when the read was capped"`
-	Hint           string `json:"hint,omitempty" jsonschema:"how to continue a capped read"`
+}
+
+// mergeHint joins two navigation hints without losing either: one answer
+// carries at most one hint field.
+func mergeHint(existing, extra string) string {
+	switch {
+	case existing == "":
+		return extra
+	case extra == "":
+		return existing
+	}
+	return existing + "; " + extra
 }
 
 func (s *mcpServer) getDoc(ctx context.Context, req *mcp.CallToolRequest, in getDocInput) (*mcp.CallToolResult, getDocOutput, error) {
 	in.Hash = strings.TrimSpace(in.Hash)
 	if in.Hash == "" {
 		return nil, getDocOutput{}, errors.New("memento_get_doc: hash is required")
+	}
+	// Validate before the read: readDocBlocks skips orders below start, so a
+	// negative section would silently return block 0.
+	if in.Section != nil && *in.Section < 0 {
+		return nil, getDocOutput{}, fmt.Errorf("memento_get_doc: section must be 0 or greater, got %d", *in.Section)
 	}
 	c, err := s.newClient(ctx)
 	if err != nil {
@@ -1796,6 +1822,13 @@ func (s *mcpServer) getDoc(ctx context.Context, req *mcp.CallToolRequest, in get
 	if err != nil {
 		return nil, getDocOutput{}, storeError("memento_get_doc", err)
 	}
+	// The outline is capped like the fetch answer; the hint carries the range
+	// of the blocks it left out and is merged with the read hints below.
+	outline := newDocOutline(doc)
+	shown := len(outline)
+	if shown > outlineRows {
+		shown = outlineRows
+	}
 	now := time.Now().UTC()
 	out := getDocOutput{
 		Found:              true,
@@ -1805,14 +1838,16 @@ func (s *mcpServer) getDoc(ctx context.Context, req *mcp.CallToolRequest, in get
 		Stale:              doc.Stale(now),
 		Truncated:          doc.Truncated,
 		GuardMediumIgnored: doc.GuardMediumIgnored,
-		Sections:           newDocOutline(doc),
+		Sections:           outline[:shown],
+		SectionsHidden:     len(outline) - shown,
+		Hint:               outlineSummary(doc, shown),
 	}
 	if in.Full {
 		text, _, next := readDocBlocks(doc, 0, len(doc.Sections), docReadBudget)
 		out.FullText = text
 		if next >= 0 {
 			out.Next = &next
-			out.Hint = fmt.Sprintf("full text capped at %d runes; continue with section=%d", docReadBudget, next)
+			out.Hint = mergeHint(out.Hint, fmt.Sprintf("full text capped at %d runes; continue with section=%d", docReadBudget, next))
 		}
 	}
 	if in.Section != nil {
@@ -1835,7 +1870,7 @@ func (s *mcpServer) getDoc(ctx context.Context, req *mcp.CallToolRequest, in get
 		out.BlocksIncluded = included
 		if next >= 0 {
 			out.Next = &next
-			out.Hint = fmt.Sprintf("continue with section=%d", next)
+			out.Hint = mergeHint(out.Hint, fmt.Sprintf("continue with section=%d", next))
 		}
 		return nil, out, nil
 	}

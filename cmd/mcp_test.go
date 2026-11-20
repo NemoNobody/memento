@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -227,6 +228,9 @@ func TestMCPServerDocToolsValidateOffline(t *testing.T) {
 		{"memento_fetch_doc", map[string]any{"url": "https://allowed.example.com/x", "project": "p " + guardSentinel}, "secret-guard"},
 		{"memento_search_docs", map[string]any{"query": ""}, "query"},
 		{"memento_get_doc", map[string]any{"hash": ""}, "hash"},
+		// A negative section would silently read block 0 (readDocBlocks
+		// skips orders below start): refuse it before the store.
+		{"memento_get_doc", map[string]any{"hash": "abcd1234abcd1234", "section": -1}, "section must be 0 or greater"},
 	} {
 		t.Run(tc.name+" "+tc.want, func(t *testing.T) {
 			res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: tc.name, Arguments: tc.args})
@@ -561,6 +565,85 @@ func TestMCPGetDocMissingIsFoundFalse(t *testing.T) {
 	raw, _ := json.Marshal(res.StructuredContent)
 	if !strings.Contains(string(raw), `"found":false`) {
 		t.Fatalf("want found:false, got: %s", raw)
+	}
+}
+
+// TestMCPGetDocOutlineCapped pins the read-side outline budget: memento_get_doc
+// caps the outline at outlineRows lines exactly like memento_fetch_doc, so a
+// long page cannot flood the answer. sections_hidden counts the blocks left
+// out and hint names their range; a capped read adds its own hint without
+// losing the outline one.
+func TestMCPGetDocOutlineCapped(t *testing.T) {
+	const total = outlineRows + 5
+	sections := make([]model.Section, 0, total)
+	for i := 0; i < total; i++ {
+		sections = append(sections, model.Section{
+			Order:   i,
+			Heading: fmt.Sprintf("section %d", i),
+			// 1000 runes per block: full=true must exceed docReadBudget.
+			Text: strings.Repeat("x", 1000),
+		})
+	}
+	source, err := json.Marshal(model.Doc{
+		URL:      "https://allowed.example.com/page",
+		URLHash:  "abcd1234abcd1234",
+		Title:    "page",
+		Sections: sections,
+	})
+	if err != nil {
+		t.Fatalf("marshal doc: %v", err)
+	}
+	body := fmt.Sprintf(`{"_index":"memento-docs","_id":"abcd1234abcd1234","found":true,"_source":%s}`, source)
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusOK) // the docs index "exists"
+			return
+		}
+		_, _ = io.WriteString(w, body)
+	}))
+	t.Cleanup(fake.Close)
+
+	session := connectTestServer(t, "OPENSEARCH_URL="+fake.URL)
+	ctx := context.Background()
+	call := func(args map[string]any) map[string]any {
+		t.Helper()
+		res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "memento_get_doc", Arguments: args})
+		if err != nil {
+			t.Fatalf("CallTool(memento_get_doc): %v", err)
+		}
+		if res.IsError {
+			t.Fatalf("memento_get_doc failed: %s", toolText(res))
+		}
+		raw, err := json.Marshal(res.StructuredContent)
+		if err != nil {
+			t.Fatalf("marshal structured content: %v", err)
+		}
+		var out map[string]any
+		if err := json.Unmarshal(raw, &out); err != nil {
+			t.Fatalf("decode structured content: %v (%s)", err, raw)
+		}
+		return out
+	}
+
+	out := call(map[string]any{"hash": "abcd1234abcd1234"})
+	lines, _ := out["sections"].([]any)
+	if len(lines) != outlineRows {
+		t.Errorf("outline lines = %d, want %d", len(lines), outlineRows)
+	}
+	if got := out["sections_hidden"]; got != float64(total-outlineRows) {
+		t.Errorf("sections_hidden = %v, want %d", got, total-outlineRows)
+	}
+	hint, _ := out["hint"].(string)
+	if !strings.Contains(hint, fmt.Sprintf("more %d blocks", total-outlineRows)) {
+		t.Errorf("hint must summarize the hidden blocks, got: %q", hint)
+	}
+
+	full := call(map[string]any{"hash": "abcd1234abcd1234", "full": true})
+	hint, _ = full["hint"].(string)
+	if !strings.Contains(hint, fmt.Sprintf("more %d blocks", total-outlineRows)) ||
+		!strings.Contains(hint, "full text capped") {
+		t.Errorf("a capped full read must keep both hints, got: %q", hint)
 	}
 }
 

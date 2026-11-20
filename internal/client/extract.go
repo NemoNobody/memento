@@ -328,11 +328,10 @@ func opaqueEnd(lower, name string, from int) int {
 
 // opaqueSelfClosing reports whether a self-closing slash closes an opaque
 // element. HTML ignores the slash outside foreign content, so <script/> is an
-// open script (and its raw text runs to </script>), while <svg/> is closed. svg is
-// the only opaque foreign container: a <title> inside MathML is an ordinary HTML
-// element, so math is scanned in document order.
+// open script (and its raw text runs to </script>), while <svg/> and <math/> are
+// closed.
 func opaqueSelfClosing(name, tag string) bool {
-	return name == "svg" && selfClosingTag(tag)
+	return (name == "svg" || name == "math") && selfClosingTag(tag)
 }
 
 // commentEnd returns the offset just past the terminator of the comment whose
@@ -893,10 +892,10 @@ var voidElements = map[string]bool{
 }
 
 // opaqueElements are skipped whole by the title scan: their content is not page
-// markup (script/style text, raw-text elements, an SVG icon's own <title>, an
-// inert template).
+// markup (script/style text, raw-text elements, an SVG icon's own <title>, a
+// MathML title, an inert template).
 var opaqueElements = map[string]bool{
-	"script": true, "style": true, "svg": true, "template": true,
+	"script": true, "style": true, "svg": true, "math": true, "template": true,
 	"noscript": true, "textarea": true, "xmp": true, "iframe": true,
 	"noembed": true, "noframes": true, "plaintext": true,
 }

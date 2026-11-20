@@ -74,6 +74,32 @@ func TestPermWarning(t *testing.T) {
 	}
 }
 
+// TestPrintStatusFetchLimits pins the block/document budgets next to
+// max_bytes: the reader can see which limit cut its document.
+func TestPrintStatusFetchLimits(t *testing.T) {
+	rep := statusReport{
+		URL:                "http://localhost:9200",
+		Index:              "memento",
+		HistoryIndexPeriod: "day",
+		SecretGuard:        config.GuardReject,
+		PasswordFrom:       "env",
+		Fetch: &fetchReport{
+			TimeoutSeconds: 30,
+			MaxBytes:       2_000_000,
+			BlockChars:     8000,
+			DocChars:       100_000,
+		},
+	}
+	var b strings.Builder
+	if err := printStatus(&b, rep); err != nil {
+		t.Fatalf("printStatus: %v", err)
+	}
+	want := "timeout=30s max=1.9MiB block=8000 doc=100000"
+	if !strings.Contains(b.String(), want) {
+		t.Errorf("status lacks %q:\n%s", want, b.String())
+	}
+}
+
 // TestStatusEnvVarsMatchConfig pins the "kept in sync" claim of
 // statusEnvVars: every env variable config.LoadConfigFrom reads must be
 // listed in status (names only), and the list must not name a variable the

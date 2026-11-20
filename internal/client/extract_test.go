@@ -485,10 +485,10 @@ func TestExtractTitleOpaqueContainers(t *testing.T) {
 		t.Errorf("addressed title: title = %q, want Real", got)
 	}
 
-	// A <title> inside MathML is an ordinary HTML element in document order, so
-	// the first one is the title — same answer the tree gives.
-	if got := ExtractTitle(`<math><title>Fake</title></math><title>Real</title>`); got != "Fake" {
-		t.Errorf("title inside math = %q, want the first title (Fake)", got)
+	// A <title> inside MathML is a MathML element, not the page title: the scan
+	// skips the whole math container, same answer the tree gives.
+	if got := ExtractTitle(`<math><title>Fake</title></math><title>Real</title>`); got != "Real" {
+		t.Errorf("title inside math = %q, want Real", got)
 	}
 }
 

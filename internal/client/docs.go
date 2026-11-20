@@ -287,27 +287,72 @@ func (c *Client) tagDocProject(ctx context.Context, hash, project string) error 
 	return nil
 }
 
-// FetchDoc is the full fetch pipeline: cache check → download → extract →
-// guard → store. cached=true means the stored snapshot was fresh and the
-// network was not touched at all. A stale snapshot is refetched (stale is an
-// instruction to re-verify, not to discard); refresh=true forces the refetch.
-//
-// beforeStore (may be nil) inspects the extracted doc before it is written —
-// this is where the secret guard runs: page text is untrusted input, and a
-// rejected doc must never reach the plaintext store. Validation of the URL
-// itself (normalize, allowlist) belongs to the callers: bad input is rejected
-// before the store is touched at all.
+// storedText joins a snapshot's blocks back into the section-delimited text the
+// never-shrink rule compares. Splitting and re-joining is lossless, so two
+// snapshots of the same page differ only by where the budget stopped.
+func storedText(doc *model.Doc) string {
+	var b strings.Builder
+	for i, s := range doc.Sections {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(s.Text)
+	}
+	return b.String()
+}
+
+// keepsStored reports whether the stored snapshot already holds at least as much
+// of the same page as the candidate: the candidate's text is a prefix of it. A
+// smaller budget, or a concurrent writer that stored more, must never shrink the
+// snapshot.
+func keepsStored(stored, candidate *model.Doc) bool {
+	if stored == nil || candidate == nil || len(candidate.Sections) == 0 {
+		return false
+	}
+	s, c := storedText(stored), storedText(candidate)
+	return len(c) < len(s) && strings.HasPrefix(s, c)
+}
+
+// wantsMore reports whether the caller's budget could hold more of the page than
+// the snapshot does.
+func wantsMore(doc *model.Doc, limits ExtractLimits) bool {
+	return doc.Truncated && (limits.MaxChars == 0 || limits.MaxChars > doc.Size)
+}
+
+// mergeRedactions unions two audit lists without repeating an entry: a
+// re-extraction re-scans text the earlier pass may have seen in a different form.
+func mergeRedactions(old, extra []model.Redaction) []model.Redaction {
+	if len(extra) == 0 {
+		return old
+	}
+	seen := make(map[model.Redaction]bool, len(old))
+	for _, r := range old {
+		seen[r] = true
+	}
+	out := old
+	for _, r := range extra {
+		if !seen[r] {
+			seen[r] = true
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// FetchDoc is FetchDocWithin with the configured limits.
 func (c *Client) FetchDoc(ctx context.Context, rawURL, project string, refresh bool,
 	hook func(*model.Doc) ([]model.Redaction, error)) (doc *model.Doc, cached, revalidated bool, err error) {
-	return c.FetchDocWithin(ctx, rawURL, project, refresh, DefaultExtractLimits, hook)
+	return c.FetchDocWithin(ctx, rawURL, project, refresh,
+		ExtractLimits{BlockChars: c.cfg.FetchBlockChars, MaxChars: c.cfg.FetchDocChars}, hook)
 }
 
 // FetchDocWithin is FetchDoc with explicit extraction limits. Two rules keep a
-// shared snapshot from losing text: a stored copy is never shrunk while the page
-// is unchanged (two agents fetching one URL with different budgets would
-// otherwise race the larger copy away), and a truncated copy is re-extracted
-// from its stored html when the caller asks for more — no network, no second
-// guard pass.
+// shared snapshot from losing text: a stored copy is never shrunk while its text
+// is a prefix of what is already there (two agents fetching one URL with
+// different budgets would otherwise race the larger copy away), and a truncated
+// copy is re-extracted from its stored html when the caller asks for more — no
+// network. The re-extraction re-runs the caller's hook: a credential split by
+// markup is invisible to the html pass and is reconstructed by extraction.
 func (c *Client) FetchDocWithin(ctx context.Context, rawURL, project string, refresh bool, limits ExtractLimits,
 	hook func(*model.Doc) ([]model.Redaction, error)) (doc *model.Doc, cached, revalidated bool, err error) {
 	limits = limits.normalized()
@@ -331,11 +376,12 @@ func (c *Client) FetchDocWithin(ctx context.Context, rawURL, project string, ref
 				}
 				existing.Project = project
 			}
-			if existing.Truncated && (limits.MaxChars == 0 || limits.MaxChars > existing.Size) {
+			if wantsMore(existing, limits) {
 				// The caller asks for more than the stored prefix: rebuild it from
-				// the raw html the snapshot keeps. A failure falls back to the
-				// stored copy — the fetch itself succeeded.
-				if grown, changed, gerr := c.ReextractDoc(ctx, hash, limits); gerr == nil && changed {
+				// the raw html the snapshot keeps, under the same guard a fetch
+				// would run. A failure falls back to the stored copy — the fetch
+				// itself succeeded.
+				if grown, changed, gerr := c.ReextractDoc(ctx, hash, limits, hook); gerr == nil && changed {
 					grown.HTML = ""
 					existing = grown
 				}
@@ -379,12 +425,26 @@ func (c *Client) FetchDocWithin(ctx context.Context, rawURL, project string, ref
 		if err := c.touchDoc(ctx, hash, prior, project, meta); err != nil {
 			return nil, false, false, err
 		}
+		if wantsMore(prior, limits) {
+			// The origin says the page did not change, so the stored html is the
+			// source for more text; a 304 carries no body to extract from.
+			if grown, changed, gerr := c.ReextractDoc(ctx, hash, limits, hook); gerr == nil && changed {
+				grown.HTML = ""
+				return grown, true, true, nil
+			}
+		}
 		return prior, true, true, nil
 	}
-	if prior != nil && prior.ContentHash != "" && doc.ContentHash == prior.ContentHash && doc.Size < prior.Size {
-		// The page is unchanged and the requested budget is smaller than what
-		// is already stored: keep the larger copy. A fetch must never shrink a
-		// snapshot.
+	// A smaller candidate must not shrink the snapshot: another writer may have
+	// stored more of the same page since it was read. Re-read once, right before
+	// the write, and keep the larger copy.
+	if current, gerr := c.GetDocByHash(ctx, hash); gerr == nil && keepsStored(current, doc) {
+		if err := c.touchDoc(ctx, hash, current, project, meta); err != nil {
+			return nil, false, false, err
+		}
+		return current, false, false, nil
+	}
+	if keepsStored(prior, doc) {
 		if err := c.touchDoc(ctx, hash, prior, project, meta); err != nil {
 			return nil, false, false, err
 		}
@@ -426,9 +486,15 @@ func (c *Client) touchDoc(ctx context.Context, hash string, doc *model.Doc, proj
 // ReextractDoc rebuilds a stored document's blocks from the raw html kept in the
 // snapshot, without touching the network. A snapshot is never shrunk: when the
 // stored text already holds at least as much as the new limits allow, it is
-// returned unchanged. redactions and guard_medium_ignored are preserved — the
-// guard is not re-run over the already-redacted body.
-func (c *Client) ReextractDoc(ctx context.Context, hash string, limits ExtractLimits) (*model.Doc, bool, error) {
+// returned unchanged.
+//
+// hook (may be nil) is the caller's write-time guard, and it runs again here. The
+// stored html was redacted by the html pass, but a credential split by markup is
+// invisible to that pass and is reconstructed by extraction; skipping the guard
+// would put it back into the agent-visible text. The audit lists are merged, so
+// the earlier findings stay on record.
+func (c *Client) ReextractDoc(ctx context.Context, hash string, limits ExtractLimits,
+	hook func(*model.Doc) ([]model.Redaction, error)) (*model.Doc, bool, error) {
 	limits = limits.normalized()
 	doc, err := c.getDocByHash(ctx, hash, true)
 	if err != nil {
@@ -460,21 +526,42 @@ func (c *Client) ReextractDoc(ctx context.Context, hash string, limits ExtractLi
 	if size <= doc.Size && fullChars <= doc.FullChars {
 		return doc, false, nil
 	}
-	if err := c.updateDocText(ctx, hash, sections, size, truncated, fullChars); err != nil {
+	if !truncated && doc.Truncated && (doc.FullChars == 0 || doc.Size >= doc.FullChars) {
+		// The stored text was complete, so the earlier flag came from image refs
+		// dropped as SSRF bait; re-extraction does not resolve them again.
+		truncated = true
+	}
+	oldRedactions := doc.Redactions
+	doc.Sections, doc.Size, doc.Truncated, doc.FullChars = sections, size, truncated, fullChars
+	if hook != nil {
+		extra, herr := hook(doc)
+		if herr != nil {
+			return nil, false, herr
+		}
+		doc.Redactions = mergeRedactions(oldRedactions, extra)
+		size = 0
+		for i := range doc.Sections {
+			size += utf8.RuneCountInString(doc.Sections[i].Text)
+		}
+		doc.Size = size
+	}
+	if err := c.updateDocText(ctx, hash, doc); err != nil {
 		return nil, false, err
 	}
-	doc.Sections, doc.Size, doc.Truncated, doc.FullChars = sections, size, truncated, fullChars
 	return doc, true, nil
 }
 
-// updateDocText replaces the stored blocks and their accounting, leaving the raw
-// html, the credentials audit and the cache metadata untouched.
-func (c *Client) updateDocText(ctx context.Context, hash string, sections []model.Section, size int, truncated bool, fullChars int) error {
+// updateDocText replaces the stored blocks and their accounting (and the audit
+// lists the re-extraction touched), leaving the raw html and the cache metadata
+// untouched.
+func (c *Client) updateDocText(ctx context.Context, hash string, doc *model.Doc) error {
 	fields := map[string]interface{}{
-		"sections":   sections,
-		"size":       size,
-		"full_chars": fullChars,
-		"truncated":  truncated,
+		"sections":             doc.Sections,
+		"size":                 doc.Size,
+		"full_chars":           doc.FullChars,
+		"truncated":            doc.Truncated,
+		"redactions":           doc.Redactions,
+		"guard_medium_ignored": doc.GuardMediumIgnored,
 	}
 	body, _ := json.Marshal(map[string]interface{}{"doc": fields})
 	_, err := c.api.Update(ctx, opensearchapi.UpdateReq{

@@ -131,8 +131,28 @@ var docFlags struct {
 	full    bool
 }
 
+// resolveSection combines the --section flag with the optional positional
+// argument. -1 is the flag default and means "no section chosen" (the
+// outline); any other negative order is a caller error on both paths, so a
+// positional -2 no longer silently reads block 0.
+func resolveSection(flagVal int, args []string) (int, error) {
+	section := flagVal
+	if len(args) > 0 {
+		n, err := strconv.Atoi(args[0])
+		if err != nil {
+			return 0, err
+		}
+		section = n
+	}
+	if section < -1 {
+		return 0, fmt.Errorf("--section must be 0 or greater, got %d", section)
+	}
+	return section, nil
+}
+
 // DocCmd returns the `memento doc` command: read a run of blocks (one by
-// default), or the whole doc with --full, of a stored document by hash.
+// default), or as many as one answer's budget holds with --full, of a stored
+// document by hash.
 func DocCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "doc <hash> [section]",
@@ -147,13 +167,9 @@ func DocCmd() *cobra.Command {
 			if hash == "" {
 				fatalErr(errors.New("hash is required"))
 			}
-			section := docFlags.section
-			if len(args) == 2 {
-				n, err := strconv.Atoi(args[1])
-				if err != nil {
-					fatalErr(err)
-				}
-				section = n
+			section, err := resolveSection(docFlags.section, args[1:])
+			if err != nil {
+				fatalErr(err)
 			}
 			if docFlags.blocks < 1 || docFlags.blocks > maxReadBlocks {
 				fatalErr(fmt.Errorf("--blocks must be between 1 and %d, got %d", maxReadBlocks, docFlags.blocks))
@@ -178,13 +194,7 @@ func DocCmd() *cobra.Command {
 					fatalErr(errors.New("doc " + hash + " has no section " + strconv.Itoa(section) +
 						" (see the outline with 'memento doc " + hash + "')"))
 				}
-				if doc.Stale(time.Now().UTC()) {
-					text = "stale: fetched " + displayTime(doc.FetchedAt) + "; re-fetch before quoting\n" + text
-				}
-				if next >= 0 {
-					text += "next: continue with --section " + strconv.Itoa(next) + "\n"
-				}
-				if _, err := io.WriteString(os.Stdout, text); err != nil {
+				if _, err := io.WriteString(os.Stdout, staleNote(doc, time.Now().UTC())+text+nextNote(next)); err != nil {
 					fatalErr(err)
 				}
 				return
@@ -198,7 +208,8 @@ func DocCmd() *cobra.Command {
 	cmd.Flags().IntVar(&docFlags.section, "section", -1, "section number to print (from the outline)")
 	cmd.Flags().IntVar(&docFlags.blocks, "blocks", 1,
 		"consecutive blocks to print from --section (max "+strconv.Itoa(maxReadBlocks)+")")
-	cmd.Flags().BoolVar(&docFlags.full, "full", false, "print every section (bloats the context; prefer one section)")
+	cmd.Flags().BoolVar(&docFlags.full, "full", false,
+		"print as many blocks as one answer holds (capped at "+strconv.Itoa(docReadBudget)+" runes; prefer one section)")
 	return cmd
 }
 
@@ -515,35 +526,36 @@ func printDocOutline(w io.Writer, doc *model.Doc, cached, revalidated bool, now 
 	return err
 }
 
-// printDocFull prints every section; it is the escape hatch, not the default.
+// printDocFull prints the outline and as many blocks as one answer's budget
+// holds; it is the escape hatch, not the default. A capped read names where it
+// stopped, so a large document takes several --section calls.
 func printDocFull(w io.Writer, doc *model.Doc, now time.Time) error {
 	if err := printDocOutline(w, doc, false, false, now); err != nil {
 		return err
 	}
-	for _, s := range doc.Sections {
-		if err := writeSection(w, doc, s, now); err != nil {
-			return err
-		}
+	text, included, next := readDocBlocks(doc, 0, len(doc.Sections), docReadBudget)
+	if included == 0 {
+		return nil
 	}
-	return nil
+	_, err := io.WriteString(w, staleNote(doc, now)+text+nextNote(next))
+	return err
 }
 
-func writeSection(w io.Writer, doc *model.Doc, s model.Section, now time.Time) error {
-	var b strings.Builder
-	b.WriteString("--- section [")
-	b.WriteString(strconv.Itoa(s.Order))
-	b.WriteString("] ")
-	b.WriteString(s.Heading)
-	b.WriteString(" (fetched ")
-	b.WriteString(displayTime(doc.FetchedAt))
-	if doc.Stale(now) {
-		b.WriteString(", STALE: re-fetch before quoting")
+// staleNote marks a snapshot past its TTL; it prefixes every block read.
+func staleNote(doc *model.Doc, now time.Time) string {
+	if !doc.Stale(now) {
+		return ""
 	}
-	b.WriteString(") ---\n")
-	b.WriteString(s.Text)
-	b.WriteString("\n")
-	_, err := io.WriteString(w, b.String())
-	return err
+	return "stale: fetched " + displayTime(doc.FetchedAt) + "; re-fetch before quoting\n"
+}
+
+// nextNote names the block a capped read stopped at; empty when the read
+// reached the end of the document.
+func nextNote(next int) string {
+	if next < 0 {
+		return ""
+	}
+	return "next: continue with --section " + strconv.Itoa(next) + "\n"
 }
 
 // printDocHits renders search results: the hash first so the reader can pull

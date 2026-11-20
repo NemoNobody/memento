@@ -115,6 +115,8 @@ type fetchReport struct {
 	AllowHosts      int    `json:"allow_hosts" jsonschema:"number of hosts in the privacy allowlist (0 = no allowlist)"`
 	TimeoutSeconds  int    `json:"timeout_seconds" jsonschema:"per-fetch timeout"`
 	MaxBytes        int    `json:"max_bytes" jsonschema:"body size cap per fetch"`
+	BlockChars      int    `json:"block_chars" jsonschema:"target size of one stored block, in runes (a longer section is split, never truncated)"`
+	DocChars        int    `json:"doc_chars" jsonschema:"stored-text cap per document, in runes; 0 = the whole document"`
 	UserAgent       string `json:"user_agent,omitempty" jsonschema:"User-Agent sent on fetches (not a secret: every target sees it)"`
 }
 
@@ -199,6 +201,8 @@ func collectStatus(ctx context.Context, confPath string, noCWD bool) statusRepor
 		AllowHosts:      len(cfg.FetchAllowHosts),
 		TimeoutSeconds:  cfg.FetchTimeoutSeconds,
 		MaxBytes:        cfg.FetchMaxBytes,
+		BlockChars:      cfg.FetchBlockChars,
+		DocChars:        cfg.FetchDocChars,
 		UserAgent:       cfg.FetchUserAgent,
 	}
 	rep.PasswordFrom = cfg.PasswordSource
@@ -398,6 +402,10 @@ func printStatus(w io.Writer, rep statusReport) error {
 		b.WriteString(strconv.Itoa(f.TimeoutSeconds))
 		b.WriteString("s max=")
 		b.WriteString(humanBytes(int64(f.MaxBytes)))
+		b.WriteString(" block=")
+		b.WriteString(strconv.Itoa(f.BlockChars))
+		b.WriteString(" doc=")
+		b.WriteString(strconv.Itoa(f.DocChars))
 	}
 	b.WriteString("\nsecret_guard: ")
 	b.WriteString(rep.SecretGuard)

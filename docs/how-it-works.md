@@ -68,7 +68,10 @@ The natural unit is a heading-delimited section. A section longer than
 space or punctuation, and only then hard at the count — joining the parts gives
 the text back unchanged, so a split loses nothing. Split parts are labelled
 `heading (2/5)`, and every block is addressable by `order`, the unit
-`memento_get_doc` reads.
+`memento_get_doc` reads. `block_chars` is an extraction setting: it applies
+when a page is fetched or re-extracted, while a cached snapshot keeps the split
+it was stored with — rebuilding it at a different size takes `refresh: true`
+(a revalidating `304` keeps the stored blocks as they are).
 
 `fetch_doc_chars` (default 100000; `0` = the whole document) is the storage
 budget for one document. When the budget runs out, whole blocks are dropped
@@ -84,11 +87,15 @@ keeps its identity regardless of how much of it was stored. `full_chars` is the
 length of that full text.
 
 When a stored copy was cut by the budget and a larger `max_chars` is requested,
-the text is re-extracted from the stored raw HTML with no network. A smaller
-request never shrinks the stored copy for unchanged content. Response caps —
-32000 runes per `memento_get_doc` answer, a partial outline (the first 60 lines
-plus `more N blocks, orders X..Y`) on a huge document — are read limits, not
-storage limits.
+the text is re-extracted from the stored raw HTML with no network. The guard
+runs again over the re-extracted text — a credential split by markup is
+invisible to the HTML pass and is reconstructed by extraction — and its audit
+rows are merged with the earlier ones; the stored raw HTML and the cache
+metadata (`etag`, `project`, `expires_at`) are not rewritten. A smaller request
+never shrinks the stored copy for unchanged content. Response caps — 32000
+runes per `memento_get_doc` answer (one block is returned whole even when it
+alone exceeds the cap), a partial outline (the first 60 lines plus `more N
+blocks, orders X..Y`) on a huge document — are read limits, not storage limits.
 
 ## Commands
 

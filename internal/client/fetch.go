@@ -651,7 +651,13 @@ type fetchOutcome struct {
 // client only owns the timing).
 func FetchPage(ctx context.Context, cfg *config.Config, normalizedURL string,
 	hook func(*model.Doc) ([]model.Redaction, error)) (*model.Doc, error) {
-	return FetchPageWithin(ctx, cfg, normalizedURL, DefaultExtractLimits, hook)
+	return FetchPageWithin(ctx, cfg, normalizedURL, cfgExtractLimits(cfg), hook)
+}
+
+// cfgExtractLimits is the configured default for a library caller: the same
+// knobs the MCP and CLI surfaces take per call.
+func cfgExtractLimits(cfg *config.Config) ExtractLimits {
+	return ExtractLimits{BlockChars: cfg.FetchBlockChars, MaxChars: cfg.FetchDocChars}
 }
 
 // FetchPageWithin is FetchPage with explicit extraction limits: the stored text
@@ -669,7 +675,7 @@ func FetchPageWithin(ctx context.Context, cfg *config.Config, normalizedURL stri
 // not what the origin's validator covers), so it re-fetches in full.
 func RevalidatePage(ctx context.Context, cfg *config.Config, normalizedURL string, prior *model.Doc,
 	hook func(*model.Doc) ([]model.Redaction, error)) (*model.Doc, fetchMeta, error) {
-	return RevalidatePageWithin(ctx, cfg, normalizedURL, prior, DefaultExtractLimits, hook)
+	return RevalidatePageWithin(ctx, cfg, normalizedURL, prior, cfgExtractLimits(cfg), hook)
 }
 
 // RevalidatePageWithin is RevalidatePage with explicit extraction limits.

@@ -236,7 +236,7 @@ trimmed) and dropped image references — never the chrome filter.
 | `memento status [--conf <path>]` | Check connectivity and show the effective configuration (env overrides are listed by name, never values) |
 | `memento creds set\|get\|status\|rm [--url <u>]` | Manage the OpenSearch password in the OS keyring: `set` reads a hidden prompt (piped stdin for scripts), `get` prints the stored password (for scripts that need it), `status` shows only the source (`env\|keyring\|file\|none`), `rm` deletes the entry |
 | `memento fetch <url> [--refresh] [-p <p>] [--allow-secret] [--max-chars N] [--block-chars N]` | Fetch a page into the docs index and print its outline: cache-aware, blocks are read on demand; `--max-chars 0` stores the whole document (default `fetch_doc_chars`), `--block-chars` sets the target block size; github URLs that match a local clone print the file path |
-| `memento doc <hash> [n\|--section N] [--blocks N] [--full]` | Read a stored document: the outline (default), block `n`, `--blocks N` consecutive blocks, or every block with `--full` (answers are capped at 32000 runes; `next` names the next block) |
+| `memento doc <hash> [n\|--section N] [--blocks N] [--full]` | Read a stored document: the outline (default), block `n`, `--blocks N` consecutive blocks, or every block with `--full` (answers are capped at 32000 runes; `next` names the next block; one block is always returned whole even when it alone exceeds the cap) |
 | `memento docs <query> [--limit N] [-p <p>]` | BM25 search over stored documents (the extracted blocks, never the raw page) |
 | `memento mcp` | Run as an MCP server over stdio |
 

@@ -75,11 +75,13 @@ Documents are stored as blocks, not truncated prefixes:
   empty document would hide the loss);
 - `memento_fetch` takes `max_chars` and `block_chars` per call; asking for more
   than was stored re-extracts from the saved html without the network (the guard
-  is not re-run, so `redactions`/`guard_medium_ignored` stay intact), and asking
-  for less never shrinks a stored copy whose content is unchanged;
+  runs again over the re-extracted text — a credential split by markup is only
+  visible there — and the audit lists are merged), and asking for less never
+  shrinks a stored copy whose content is unchanged;
 - `memento_get_doc` takes `blocks` (1..10) and caps one answer at 32000 runes,
-  returning `next` when more remains; `full` hits the same budget with an
-  explicit `next` instead of silently returning megabytes;
+  returning `next` when more remains; one block is always returned whole even
+  when it alone exceeds the budget; `full` hits the same budget with an explicit
+  `next` instead of silently returning megabytes;
 - the outline lists the first 60 blocks and summarizes the rest with their
   orders and size: a response limit, not a storage limit;
 - `content_hash` now covers the page's full extracted text before the budget
