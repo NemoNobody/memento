@@ -63,10 +63,11 @@ type Client struct {
 	// below only cache a probe for this client's lifetime.
 
 	// replicasOnce/replicasVal cache the auto replica-count probe (see
-	// autoReplicas): the topology does not change within one process run.
-	// replicasProbeOK distinguishes "probed, lone node" (reconcile may act)
-	// from "probe failed" (reconcile must not guess). replicasFixOnce makes
-	// the drift correction run at most once per process (see reconcileReplicas).
+	// autoReplicas) for this client; the process-wide progress is claimed through
+	// reconciledStores in replicas.go. replicasProbeOK distinguishes "probed,
+	// lone node" (reconcile may act) from "probe failed" (reconcile must not
+	// guess). replicasFixOnce makes the drift correction run at most once for
+	// this client (see reconcileReplicas).
 	replicasOnce    sync.Once
 	replicasVal     int
 	replicasProbeOK bool

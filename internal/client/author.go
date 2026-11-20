@@ -54,9 +54,9 @@ const authorRetryBackoff = 5 * time.Minute
 // model is a local/trusted contour, not an opponent with store access).
 // With the security plugin off — the common single-node case — authinfo is
 // unavailable and the chain falls to config/OS silently.
-// authorCache is the per-store writer-label cache. It lives in the process, not
-// on the Client: the MCP server builds a client per tool call, and a per-client
-// cache would probe GET /_security/authinfo on every write.
+// authorCache is the writer-label cache for one (store, user) pair. It lives in
+// the process, not on the Client: the MCP server builds a client per tool call,
+// and a per-client cache would probe GET /_security/authinfo on every write.
 type authorCache struct {
 	mu       sync.Mutex
 	resolved bool
@@ -64,12 +64,12 @@ type authorCache struct {
 	info     AuthorInfo
 }
 
-// authorCaches holds one cache per store URL.
+// authorCaches holds one cache per (store URL, user).
 var authorCaches sync.Map
 
-// authorCache holds one resolved writer label per (store, user): the security
-// label is a function of the account the client authenticates with, so two
-// configs sharing a URL but not a user must not share it.
+// authorCacheFor returns the cache for a store and account: the security label
+// is what authinfo answers for that account, so two configs sharing a URL but
+// not a user must not share it.
 func authorCacheFor(storeURL, user string) *authorCache {
 	key := storeURL + "\x00" + user
 	if v, ok := authorCaches.Load(key); ok {
