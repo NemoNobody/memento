@@ -219,7 +219,11 @@ func RedactAll(field, text string) (string, []Finding) {
 // markerPrefix opens the placeholder Redact writes in place of a span.
 const markerPrefix = "[velruna-redacted:"
 
-var markerRE = regexp.MustCompile(`\[velruna-redacted:[^\]]+\]`)
+// markerRE matches the placeholder in either the current or the pre-rename
+// spelling: a store written before the project was renamed as velruna keeps
+// `[memento-redacted:...]` markers, and HasContent has to treat those as
+// placeholders too, not as surviving content.
+var markerRE = regexp.MustCompile(`\[(?:velruna|memento)-redacted:[^\]]+\]`)
 
 // HasContent reports whether text still carries readable content once the
 // redaction markers are removed. A field that was nothing but one flagged

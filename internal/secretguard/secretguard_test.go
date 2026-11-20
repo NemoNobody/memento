@@ -458,3 +458,15 @@ func TestOpaqueTokenExemptsIdentifierPaths(t *testing.T) {
 		}
 	}
 }
+
+// TestHasContentRecognizesThePreRenameMarker pins compatibility with stores
+// written before the project was renamed: `[memento-redacted:...]` is still a
+// placeholder, so a field that held only one has no content to store.
+func TestHasContentRecognizesThePreRenameMarker(t *testing.T) {
+	if HasContent("[memento-redacted:long-hex]") {
+		t.Error("the pre-rename marker must count as a placeholder, not as content")
+	}
+	if !HasContent("value [memento-redacted:long-hex]") {
+		t.Error("text next to the marker is content")
+	}
+}

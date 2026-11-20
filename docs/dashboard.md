@@ -43,6 +43,11 @@ the index-pattern list per session. A quick start for the whole stack:
 
 ## How it reads the store
 
+> An older store that still uses the pre-rename index names
+> (`index_name`/`docs_index_name` pinned to `memento*`) needs the index
+> patterns edited in the bundle before pushing, and the `memento-store-*`
+> saved objects from an earlier push removed.
+
 - Three index patterns with time fields: `velruna` (facts, `updated_at`),
   `velruna-history-*` (journal, `created_at`), `velruna-docs` (doc snapshots,
   `fetched_at`). The dashboard pins a `now-90d` window (`timeRestore`).

@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Existing tag to publish, e.g. v0.8.6"
+        description: "Existing tag to publish, e.g. v0.8.8"
         required: true
 
 permissions:

@@ -23,6 +23,12 @@ as `velruna` from this release.
   `docs_index_name` at the old names, or copy the indices to the new ones.
 - release assets and the installer: `velruna-<os>-<arch>`.
 - the redaction marker is `[velruna-redacted:...]`.
+  Markers written before the rename (`[memento-redacted:...]`) are still
+  recognized as placeholders.
+- local paths: the dashboards credential file moves from
+  `~/.config/memento/dashboards.env` to `~/.config/velruna/dashboards.env`, and
+  the dev compose project and volume names gain the `velruna` prefix, so a dev
+  stack starts on a fresh volume.
 
 ## v0.8.6 — 2026-11-20
 

@@ -42,7 +42,7 @@ body:
     attributes:
       label: velruna version
       description: Output of `velruna --version` (or the `mcp_version`/`commit` from `velruna_status`).
-      placeholder: "0.8.6"
+      placeholder: "0.8.8"
     validations:
       required: true
   - type: dropdown
