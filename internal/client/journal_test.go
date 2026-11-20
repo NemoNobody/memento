@@ -1392,3 +1392,58 @@ func TestBuildJournalEntriesWindow(t *testing.T) {
 		t.Errorf("must clauses = %d, want 1 without a window", len(must))
 	}
 }
+
+// TestJournalInfraRunsOncePerProcess: a fresh client per tool call must not
+// re-probe the pipeline and template on every append.
+func TestJournalInfraRunsOncePerProcess(t *testing.T) {
+	c1, fake := newFakeClientCfg(t, nil, journalInfraOK)
+	if err := c1.ensureJournalInfra(context.Background()); err != nil {
+		t.Fatalf("first ensureJournalInfra: %v", err)
+	}
+	c2, err := NewClient(c1.cfg)
+	if err != nil {
+		t.Fatalf("second NewClient: %v", err)
+	}
+	if err := c2.ensureJournalInfra(context.Background()); err != nil {
+		t.Fatalf("second ensureJournalInfra: %v", err)
+	}
+	probes := 0
+	fake.mu.Lock()
+	for _, r := range fake.requests {
+		if r.Method == http.MethodGet && strings.HasPrefix(r.Path, "/_ingest/pipeline/") {
+			probes++
+		}
+	}
+	fake.mu.Unlock()
+	if probes != 1 {
+		t.Fatalf("pipeline probes = %d, want 1 (the claim is per store, not per client)", probes)
+	}
+}
+
+// TestJournalIndexPipelinePinnedOncePerProcess: the default_pipeline settings
+// PUT is idempotent but not free, and it used to run on every append.
+func TestJournalIndexPipelinePinnedOncePerProcess(t *testing.T) {
+	const index = "memento-history-2026.11"
+	c1, fake := newFakeClientCfg(t, nil, journalInfraOK)
+	if err := c1.ensureJournalIndexPipeline(context.Background(), index); err != nil {
+		t.Fatalf("first pin: %v", err)
+	}
+	c2, err := NewClient(c1.cfg)
+	if err != nil {
+		t.Fatalf("second NewClient: %v", err)
+	}
+	if err := c2.ensureJournalIndexPipeline(context.Background(), index); err != nil {
+		t.Fatalf("second pin: %v", err)
+	}
+	puts := 0
+	fake.mu.Lock()
+	for _, r := range fake.requests {
+		if r.Method == http.MethodPut && strings.HasSuffix(r.Path, "/_settings") {
+			puts++
+		}
+	}
+	fake.mu.Unlock()
+	if puts != 1 {
+		t.Fatalf("settings puts = %d, want 1 (per index per process)", puts)
+	}
+}

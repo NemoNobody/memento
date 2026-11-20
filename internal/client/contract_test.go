@@ -45,9 +45,26 @@ func newFakeClient(t *testing.T, respond func(r recordedRequest) (int, string)) 
 
 // newFakeClientCfg is newFakeClient with a hook to override config values
 // (e.g. HistoryLimit) after the defaults are applied.
+// resetProcessCaches clears the process-wide "already installed" claims. Tests
+// build several clients against the same store name, and the MCP server builds
+// one per tool call: without this, a claim made by one test would silently
+// disable the work another test asserts.
+func resetProcessCaches() {
+	for _, m := range []*sync.Map{&reconciledMappings, &journalPipelines, &reconciledStores} {
+		m.Range(func(key, _ any) bool {
+			m.Delete(key)
+			return true
+		})
+	}
+	journalGatesMu.Lock()
+	journalGates = map[string]*infraGate{}
+	journalGatesMu.Unlock()
+}
+
 func newFakeClientCfg(t *testing.T, mutate func(*config.Config),
 	respond func(r recordedRequest) (int, string)) (*Client, *fakeOpenSearch) {
 	t.Helper()
+	resetProcessCaches()
 
 	fake := &fakeOpenSearch{respond: respond}
 	fake.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/NemoNobody/memento/internal/model"
@@ -125,20 +126,60 @@ func buildJournalPipelineBody(prefix string) map[string]interface{} {
 	}
 }
 
+// infraGate marks one piece of store infrastructure as installed for the whole
+// process. The MCP server builds a fresh client per tool call, so per-client
+// flags would re-run the probes on every call.
+type infraGate struct {
+	mu   sync.Mutex
+	done bool
+}
+
+// journalInfraGate returns the gate for a store, creating it on first use.
+func journalInfraGate(key string) *infraGate {
+	journalGatesMu.Lock()
+	defer journalGatesMu.Unlock()
+	gate, ok := journalGates[key]
+	if !ok {
+		gate = &infraGate{}
+		journalGates[key] = gate
+	}
+	return gate
+}
+
+var (
+	journalGatesMu sync.Mutex
+	journalGates   = map[string]*infraGate{}
+	// journalPipelines claims one default_pipeline pin per journal index per
+	// process, released on failure so a refused settings PUT retries.
+	journalPipelines sync.Map
+)
+
 // ensureJournalInfra installs the journal pipeline and index template.
 // PUT pipeline and the template existence check are idempotent, and the
-// create-race between processes is benign. The success flag is set ONLY on
-// success: a first-call failure (network blip, 403) must leave the next
-// write in the same process free to retry, or a long-lived MCP server
-// would append journal entries forever without the template's mappings and
-// the server-clock pipeline. The mutex serializes concurrent appends so
-// only one pays the probes.
+// create-race between processes is benign. The gate marks success only: a
+// first-call failure (network blip, 403) must leave the next write free to
+// retry, or a long-lived MCP server would append journal entries forever
+// without the template's mappings and the server-clock pipeline.
 func (c *Client) ensureJournalInfra(ctx context.Context) error {
-	c.journalInfraMu.Lock()
-	defer c.journalInfraMu.Unlock()
-	if c.journalInfraOK {
+	gate := journalInfraGate(c.cfg.OpenSearchURL + "|" + c.cfg.IndexName)
+	// The lock makes a concurrent append wait for the first pass instead of
+	// skipping it: an entry written before the template exists would land on an
+	// index without the ingest pipeline and the stamped replica count.
+	gate.mu.Lock()
+	defer gate.mu.Unlock()
+	if gate.done {
 		return nil
 	}
+	if err := c.installJournalInfra(ctx); err != nil {
+		// Not done: the next append retries.
+		return err
+	}
+	gate.done = true
+	return nil
+}
+
+// installJournalInfra performs the one-time pipeline and template work.
+func (c *Client) installJournalInfra(ctx context.Context) error {
 	pipeline := journalPipelineName(c.cfg.IndexName)
 	_, getErr := c.api.Ingest.Get(ctx, &opensearchapi.IngestGetReq{PipelineIDs: []string{pipeline}})
 	if getErr != nil && !statusIs(getErr, 403) {
@@ -159,7 +200,6 @@ func (c *Client) ensureJournalInfra(ctx context.Context) error {
 	if exErr != nil && statusIs(exErr, 403) {
 		// Same story as the pipeline: no template read permission = externally
 		// managed template, leave it alone and let the append proceed.
-		c.journalInfraOK = true
 		return nil
 	}
 	if exErr != nil {
@@ -191,7 +231,6 @@ func (c *Client) ensureJournalInfra(ctx context.Context) error {
 			}
 		}
 	}
-	c.journalInfraOK = true
 	return nil
 }
 
@@ -277,13 +316,8 @@ func (c *Client) appendJournalID(ctx context.Context, e *model.JournalEntry, id 
 // template (which wires the pipeline), so nothing more is needed. One
 // idempotent settings PUT per index per process.
 func (c *Client) ensureJournalIndexPipeline(ctx context.Context, index string) error {
-	c.journalInfraMu.Lock()
-	if c.journalIdxPipeline == nil {
-		c.journalIdxPipeline = map[string]bool{}
-	}
-	need := !c.journalIdxPipeline[index]
-	c.journalInfraMu.Unlock()
-	if !need {
+	key := c.cfg.OpenSearchURL + "|" + c.cfg.IndexName + "|" + index
+	if _, loaded := journalPipelines.LoadOrStore(key, struct{}{}); loaded {
 		return nil
 	}
 	body, _ := json.Marshal(map[string]interface{}{
@@ -299,11 +333,9 @@ func (c *Client) ensureJournalIndexPipeline(ctx context.Context, index string) e
 	// the externally-managed index already carries the pipeline. Only a genuine
 	// transport/server error fails the append.
 	if err != nil && !isNotFound(err) && !statusIs(err, 403) {
+		journalPipelines.Delete(key)
 		return wrapWriteError("journal index pipeline", err)
 	}
-	c.journalInfraMu.Lock()
-	c.journalIdxPipeline[index] = true
-	c.journalInfraMu.Unlock()
 	return nil
 }
 
@@ -571,9 +603,6 @@ func (c *Client) PruneJournal(ctx context.Context, key string, keep int) (int, e
 	}
 	return len(drop), nil
 }
-
-// journalInfraMu lives on the Client (see opensearch.go); journal infra is
-// (re)installed until it succeeds (see ensureJournalInfra).
 
 // migrateLinkScript is the fact-side half of MigrateFact: it drops the
 // legacy array and (only while the ref is still empty) links current_ref.

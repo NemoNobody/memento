@@ -56,11 +56,10 @@ type Client struct {
 	api *opensearchapi.Client
 	cfg *config.Config
 
-	// journalInfraMu guards journal infra installation (pipeline +
-	// template): the idempotent check runs until it succeeds — a failed
-	// probe must not mark the infra as installed (see ensureJournalInfra).
-	journalInfraMu sync.Mutex
-	journalInfraOK bool
+	// journal infra, journal index pipeline pinning, the additive mapping
+	// reconcile and the replica reconcile are process-wide (see the gates in
+	// journal.go, mapping.go and replicas.go): the MCP server builds a fresh
+	// client per tool call, so per-client flags would repeat the work.
 
 	// replicasOnce/replicasVal cache the auto replica-count probe (see
 	// autoReplicas): the topology does not change within one process run.
@@ -71,16 +70,6 @@ type Client struct {
 	replicasVal     int
 	replicasProbeOK bool
 	replicasFixOnce sync.Once
-
-	// journalIdxPipeline tracks journal indices whose default_pipeline has
-	// been pinned in this process (see ensureJournalIndexPipeline).
-	journalIdxPipeline map[string]bool
-
-	// mappingMu/mappingOK guard the additive mapping reconcile (see
-	// reconcileMapping): it runs once per process, and a refused PUT (a field
-	// already exists with another type) must not mark it done.
-	mappingMu sync.Mutex
-	mappingOK bool
 
 	// authorMu guards the writer-label cache: a security-resolved identity
 	// lives for the process; a degraded chain is re-probed with backoff

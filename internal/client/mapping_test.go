@@ -71,3 +71,23 @@ func TestReconcileMappingRetriesAfterFailure(t *testing.T) {
 		t.Fatalf("mapping puts = %d, want 2 (one failure, one retry, then cached)", len(puts))
 	}
 }
+
+// TestMappingReconcileIsProcessWide: the MCP server builds a client per tool
+// call, so the "already reconciled" claim has to outlive the client. Two
+// clients for the same store must send the mapping PUT once.
+func TestMappingReconcileIsProcessWide(t *testing.T) {
+	c1, fake, _ := mappingCase(t, 0)
+	if err := c1.EnsureIndex(context.Background()); err != nil {
+		t.Fatalf("first EnsureIndex: %v", err)
+	}
+	c2, err := NewClient(c1.cfg)
+	if err != nil {
+		t.Fatalf("second NewClient: %v", err)
+	}
+	if err := c2.EnsureIndex(context.Background()); err != nil {
+		t.Fatalf("second EnsureIndex: %v", err)
+	}
+	if puts := fake.requestsFor(http.MethodPut, "/memento/_mapping"); len(puts) != 1 {
+		t.Fatalf("mapping puts = %d, want 1 (the claim is per store, not per client)", len(puts))
+	}
+}
