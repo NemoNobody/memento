@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NemoNobody/memento/internal/client"
-	"github.com/NemoNobody/memento/internal/config"
-	"github.com/NemoNobody/memento/internal/version"
+	"github.com/NemoNobody/velruna/internal/client"
+	"github.com/NemoNobody/velruna/internal/config"
+	"github.com/NemoNobody/velruna/internal/version"
 	"github.com/spf13/cobra"
 )
 
@@ -24,35 +24,35 @@ var statusEnvVars = []string{
 	"OPENSEARCH_USER",
 	"OPENSEARCH_PASSWORD",
 	"OPENSEARCH_INSECURE_SKIP_VERIFY",
-	"MEMENTO_INDEX",
-	"MEMENTO_HISTORY_LIMIT",
-	"MEMENTO_HISTORY_PERIOD",
-	"MEMENTO_SUMMARY_MIN_LEN",
-	"MEMENTO_SUMMARY_MAX_LEN",
-	"MEMENTO_AUTHOR",
-	"MEMENTO_MODEL",
-	"MEMENTO_HOST",
-	"MEMENTO_SESSION",
-	"MEMENTO_SECRET_GUARD",
-	"MEMENTO_ALLOW_PLAINTEXT",
-	"MEMENTO_CONF",
-	"MEMENTO_DOCS_INDEX",
-	"MEMENTO_DOCS_TTL_DAYS",
-	"MEMENTO_FETCH_TIMEOUT",
-	"MEMENTO_FETCH_MAX_BYTES",
-	"MEMENTO_FETCH_BLOCK_CHARS",
-	"MEMENTO_FETCH_DOC_CHARS",
-	"MEMENTO_FETCH_HOSTS",
-	"MEMENTO_FETCH_USER_AGENT",
-	"MEMENTO_FETCH_PROXY_URL",
-	"MEMENTO_FETCH_PROXY_FALLBACK",
-	"MEMENTO_FETCH_RESPECT_ROBOTS",
-	"MEMENTO_FETCH_ALLOW_PRIVATE",
-	"MEMENTO_FETCH_RENDER",
-	"MEMENTO_FETCH_OBSCURA_PATH",
-	"MEMENTO_FETCH_OBSCURA_STEALTH",
-	"MEMENTO_LOCAL_REPO_ROOTS",
-	"MEMENTO_REPO_SCAN_DEPTH",
+	"VELRUNA_INDEX",
+	"VELRUNA_HISTORY_LIMIT",
+	"VELRUNA_HISTORY_PERIOD",
+	"VELRUNA_SUMMARY_MIN_LEN",
+	"VELRUNA_SUMMARY_MAX_LEN",
+	"VELRUNA_AUTHOR",
+	"VELRUNA_MODEL",
+	"VELRUNA_HOST",
+	"VELRUNA_SESSION",
+	"VELRUNA_SECRET_GUARD",
+	"VELRUNA_ALLOW_PLAINTEXT",
+	"VELRUNA_CONF",
+	"VELRUNA_DOCS_INDEX",
+	"VELRUNA_DOCS_TTL_DAYS",
+	"VELRUNA_FETCH_TIMEOUT",
+	"VELRUNA_FETCH_MAX_BYTES",
+	"VELRUNA_FETCH_BLOCK_CHARS",
+	"VELRUNA_FETCH_DOC_CHARS",
+	"VELRUNA_FETCH_HOSTS",
+	"VELRUNA_FETCH_USER_AGENT",
+	"VELRUNA_FETCH_PROXY_URL",
+	"VELRUNA_FETCH_PROXY_FALLBACK",
+	"VELRUNA_FETCH_RESPECT_ROBOTS",
+	"VELRUNA_FETCH_ALLOW_PRIVATE",
+	"VELRUNA_FETCH_RENDER",
+	"VELRUNA_FETCH_OBSCURA_PATH",
+	"VELRUNA_FETCH_OBSCURA_STEALTH",
+	"VELRUNA_LOCAL_REPO_ROOTS",
+	"VELRUNA_REPO_SCAN_DEPTH",
 }
 
 // permWarning flags a plaintext password living in a file that group/others
@@ -66,18 +66,18 @@ func permWarning(cfg *config.Config, configFile string) string {
 		"): run chmod 600 " + configFile
 }
 
-// processStart is when this binary process booted: memento_status carries it
+// processStart is when this binary process booted: velruna_status carries it
 // (RFC3339) so an agent can tell a long-lived MCP server from one that
 // restarted after an update — the "is the tool I'm talking to the build I
 // just installed?" question.
 var processStart = time.Now().UTC()
 
-// statusReport is the shared diagnostics payload behind `memento status` and the
-// memento_status MCP tool. It never carries an error: it describes the situation
+// statusReport is the shared diagnostics payload behind `velruna status` and the
+// velruna_status MCP tool. It never carries an error: it describes the situation
 // so both a human and an agent can act on it.
 type statusReport struct {
 	OK                 bool                 `json:"ok" jsonschema:"true when OpenSearch is reachable and the store is usable"`
-	MCPVersion         string               `json:"mcp_version" jsonschema:"memento MCP server version (dev for source builds; the git tag for releases) — NOT the OpenSearch version"`
+	MCPVersion         string               `json:"mcp_version" jsonschema:"velruna MCP server version (dev for source builds; the git tag for releases) — NOT the OpenSearch version"`
 	Commit             string               `json:"commit,omitempty" jsonschema:"git commit this binary was stamped from (release/dev builds); empty for plain source builds"`
 	StartedAt          string               `json:"started_at" jsonschema:"RFC3339 when this MCP server process started (a restart after an update moves it)"`
 	URL                string               `json:"url" jsonschema:"the OpenSearch URL that was tried"`
@@ -182,7 +182,7 @@ func collectStatus(ctx context.Context, confPath string, noCWD bool) statusRepor
 	}
 	if err != nil {
 		rep.Error = err.Error()
-		rep.Hint = "Fix the config file (or point --conf / MEMENTO_CONF at a valid one). See docs/setup.md."
+		rep.Hint = "Fix the config file (or point --conf / VELRUNA_CONF at a valid one). See docs/setup.md."
 		return rep
 	}
 	rep.URL = config.RedactURL(cfg.OpenSearchURL)
@@ -224,7 +224,7 @@ func collectStatus(ctx context.Context, confPath string, noCWD bool) statusRepor
 		// come from instead of sending a guaranteed 401.
 		rep.Error = "no OpenSearch password (env, keyring and file sources all empty or refused)"
 		var b strings.Builder
-		b.WriteString("Store it in the OS keyring with 'memento creds set'.")
+		b.WriteString("Store it in the OS keyring with 'velruna creds set'.")
 		if cfg.FileHasPlaintext {
 			b.WriteString(" The config file carries a plaintext password and allow_plaintext is off: migrate, then delete opensearch_password from the file (or set allow_plaintext=true).")
 		}
@@ -252,7 +252,7 @@ func collectStatus(ctx context.Context, confPath string, noCWD bool) statusRepor
 		b.WriteString(").")
 		b.WriteString(envNote(rep))
 		b.WriteString(" If OpenSearch is not set up yet, see docs/setup.md — a single node is " +
-			"enough to start, and nothing in memento assumes one or the other. " +
+			"enough to start, and nothing in velruna assumes one or the other. " +
 			"Report this to the user; do not retry in a loop.")
 		rep.Hint = b.String()
 		return rep
@@ -306,8 +306,8 @@ var statusFlags struct {
 	conf string
 }
 
-// StatusCmd returns the `memento status` command: the same diagnostics as the
-// memento_status MCP tool, for use from a shell.
+// StatusCmd returns the `velruna status` command: the same diagnostics as the
+// velruna_status MCP tool, for use from a shell.
 func StatusCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "status",
@@ -324,7 +324,7 @@ func StatusCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&statusFlags.conf, "conf", "",
-		"config file to use (overrides MEMENTO_CONF and the default lookup)")
+		"config file to use (overrides VELRUNA_CONF and the default lookup)")
 	return cmd
 }
 
@@ -348,7 +348,7 @@ func printStatus(w io.Writer, rep statusReport) error {
 		_, err := io.WriteString(w, b.String())
 		return err
 	}
-	b.WriteString("memento ")
+	b.WriteString("velruna ")
 	b.WriteString(rep.MCPVersion)
 	if rep.Commit != "" {
 		b.WriteString(" (")

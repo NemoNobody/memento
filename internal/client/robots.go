@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NemoNobody/memento/internal/config"
+	"github.com/NemoNobody/velruna/internal/config"
 )
 
 // robotsTTL bounds how long a fetched robots.txt is reused.
@@ -255,8 +255,8 @@ func matchRobotPath(rule, path string) bool {
 }
 
 // uaToken extracts the RFC 9309 product token from a User-Agent string:
-// the leading identifier before a "/" or space ("memento/fetch (x)" →
-// "memento"). robots matches products, not full UA strings.
+// the leading identifier before a "/" or space ("velruna/fetch (x)" →
+// "velruna"). robots matches products, not full UA strings.
 func uaToken(ua string) string {
 	ua = strings.ToLower(strings.TrimSpace(ua))
 	var b strings.Builder

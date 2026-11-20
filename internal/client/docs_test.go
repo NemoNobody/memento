@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/NemoNobody/memento/internal/config"
-	"github.com/NemoNobody/memento/internal/model"
+	"github.com/NemoNobody/velruna/internal/config"
+	"github.com/NemoNobody/velruna/internal/model"
 )
 
 // TestFetchDocNeverShrinksUnchangedSnapshot: a smaller budget must not replace a
@@ -20,17 +20,17 @@ func TestFetchDocNeverShrinksUnchangedSnapshot(t *testing.T) {
 	var stored string
 	respond := func(r recordedRequest) (int, string) {
 		switch {
-		case r.Path == "/memento-docs" && r.Method == "HEAD":
+		case r.Path == "/velruna-docs" && r.Method == "HEAD":
 			if indexExists {
 				return 200, ""
 			}
 			return 404, ""
-		case r.Path == "/memento-docs" && r.Method == "PUT":
+		case r.Path == "/velruna-docs" && r.Method == "PUT":
 			indexExists = true
 			return 200, `{"acknowledged":true}`
-		case strings.HasPrefix(r.Path, "/memento-docs/_update/"):
+		case strings.HasPrefix(r.Path, "/velruna-docs/_update/"):
 			return 200, `{"result":"updated"}`
-		case strings.HasPrefix(r.Path, "/memento-docs/_doc/"):
+		case strings.HasPrefix(r.Path, "/velruna-docs/_doc/"):
 			if r.Method == "GET" {
 				if stored == "" {
 					return 404, "{}"
@@ -68,7 +68,7 @@ func TestFetchDocNeverShrinksUnchangedSnapshot(t *testing.T) {
 }
 
 func docsMutate(cfg *config.Config) {
-	cfg.DocsIndexName = "memento-docs"
+	cfg.DocsIndexName = "velruna-docs"
 	cfg.FetchAllowPrivate = true // fetch targets are httptest loopback servers
 }
 
@@ -117,7 +117,7 @@ func TestBuildDocSearchBody(t *testing.T) {
 
 func TestGetDocByHashExcludesHTML(t *testing.T) {
 	c, fake := newFakeClientCfg(t, docsMutate, func(r recordedRequest) (int, string) {
-		if r.Path == "/memento-docs/_doc/h1" && r.Method == "GET" {
+		if r.Path == "/velruna-docs/_doc/h1" && r.Method == "GET" {
 			return 200, `{"found":true,"_source":{"url":"https://x","url_hash":"h1","title":"T","sections":[{"order":0,"heading":"A","text":"a"}]}}`
 		}
 		return 404, "{}"
@@ -129,7 +129,7 @@ func TestGetDocByHashExcludesHTML(t *testing.T) {
 	if doc.Title != "T" || len(doc.Sections) != 1 {
 		t.Errorf("doc = %+v", doc)
 	}
-	reqs := fake.requestsFor("GET", "/memento-docs/_doc/h1")
+	reqs := fake.requestsFor("GET", "/velruna-docs/_doc/h1")
 	if len(reqs) != 1 {
 		t.Fatalf("GET requests = %d, want 1", len(reqs))
 	}
@@ -148,13 +148,13 @@ func TestPutDocRefreshesAndWait(t *testing.T) {
 	}
 	var rec *recordedRequest
 	for i, r := range fake.requests {
-		if strings.HasPrefix(r.Path, "/memento-docs/_doc/h1") {
+		if strings.HasPrefix(r.Path, "/velruna-docs/_doc/h1") {
 			rec = &fake.requests[i]
 			break
 		}
 	}
 	if rec == nil {
-		t.Fatalf("no write to /memento-docs/_doc/h1; requests: %+v", fake.requests)
+		t.Fatalf("no write to /velruna-docs/_doc/h1; requests: %+v", fake.requests)
 	}
 	if rec.Method != "PUT" {
 		t.Errorf("method = %s, want PUT", rec.Method)
@@ -178,7 +178,7 @@ func TestSearchDocsContract(t *testing.T) {
 	if len(docs) != 0 {
 		t.Errorf("docs = %d, want 0", len(docs))
 	}
-	reqs := fake.requestsFor("POST", "/memento-docs/_search")
+	reqs := fake.requestsFor("POST", "/velruna-docs/_search")
 	if len(reqs) != 1 {
 		t.Fatalf("search requests = %d, want 1", len(reqs))
 	}
@@ -193,8 +193,8 @@ func TestSearchDocsContract(t *testing.T) {
 // fetch must return an empty result, not an index_not_found error.
 func TestSearchDocsMissingIndexIsEmpty(t *testing.T) {
 	c, _ := newFakeClientCfg(t, docsMutate, func(r recordedRequest) (int, string) {
-		if r.Method == http.MethodPost && r.Path == "/memento-docs/_search" {
-			return http.StatusNotFound, `{"status":404,"error":{"type":"index_not_found_exception","reason":"no such index [memento-docs]"}}`
+		if r.Method == http.MethodPost && r.Path == "/velruna-docs/_search" {
+			return http.StatusNotFound, `{"status":404,"error":{"type":"index_not_found_exception","reason":"no such index [velruna-docs]"}}`
 		}
 		return http.StatusInternalServerError, "unexpected " + r.Path
 	})
@@ -215,15 +215,15 @@ func TestFetchDocStoresSnapshotThenServesCache(t *testing.T) {
 	)
 	respond := func(r recordedRequest) (int, string) {
 		switch {
-		case r.Path == "/memento-docs" && r.Method == "HEAD":
+		case r.Path == "/velruna-docs" && r.Method == "HEAD":
 			if indexExists {
 				return 200, ""
 			}
 			return 404, ""
-		case r.Path == "/memento-docs" && r.Method == "PUT":
+		case r.Path == "/velruna-docs" && r.Method == "PUT":
 			indexExists = true
 			return 200, `{"acknowledged":true}`
-		case strings.HasPrefix(r.Path, "/memento-docs/_doc/"):
+		case strings.HasPrefix(r.Path, "/velruna-docs/_doc/"):
 			if r.Method == "GET" {
 				if stored == "" {
 					return 404, "{}"
@@ -272,7 +272,7 @@ func TestFetchDocStoresSnapshotThenServesCache(t *testing.T) {
 	}
 	puts := 0
 	for _, r := range fake.requests {
-		if r.Method == "PUT" && strings.HasPrefix(r.Path, "/memento-docs/_doc/") {
+		if r.Method == "PUT" && strings.HasPrefix(r.Path, "/velruna-docs/_doc/") {
 			puts++
 		}
 	}
@@ -293,17 +293,17 @@ func TestFetchDocRevalidatesWithETag(t *testing.T) {
 	)
 	respond := func(r recordedRequest) (int, string) {
 		switch {
-		case r.Path == "/memento-docs" && r.Method == "HEAD":
+		case r.Path == "/velruna-docs" && r.Method == "HEAD":
 			if indexExists {
 				return 200, ""
 			}
 			return 404, ""
-		case r.Path == "/memento-docs" && r.Method == "PUT":
+		case r.Path == "/velruna-docs" && r.Method == "PUT":
 			indexExists = true
 			return 200, `{"acknowledged":true}`
-		case r.Method == "POST" && strings.Contains(r.Path, "/memento-docs/_update/"):
+		case r.Method == "POST" && strings.Contains(r.Path, "/velruna-docs/_update/"):
 			return 200, `{"result":"updated"}`
-		case strings.HasPrefix(r.Path, "/memento-docs/_doc/"):
+		case strings.HasPrefix(r.Path, "/velruna-docs/_doc/"):
 			if r.Method == "GET" {
 				if stored == "" {
 					return 404, "{}"
@@ -356,10 +356,10 @@ func TestFetchDocRevalidatesWithETag(t *testing.T) {
 	puts, updates := 0, 0
 	var updateBody string
 	for _, r := range fake.requests {
-		if r.Method == "PUT" && strings.HasPrefix(r.Path, "/memento-docs/_doc/") {
+		if r.Method == "PUT" && strings.HasPrefix(r.Path, "/velruna-docs/_doc/") {
 			puts++
 		}
-		if r.Method == "POST" && strings.Contains(r.Path, "/memento-docs/_update/") {
+		if r.Method == "POST" && strings.Contains(r.Path, "/velruna-docs/_update/") {
 			updates++
 			updateBody = r.Body
 		}
@@ -395,14 +395,14 @@ func TestFetchDocRevalidationClearsExpiryWhenTTLDisabled(t *testing.T) {
 		`"fetched_at":"2020-01-01T00:00:00Z","expires_at":"2021-01-01T00:00:00Z","etag":"\"v1\""}`
 	respond := func(r recordedRequest) (int, string) {
 		switch {
-		case r.Path == "/memento-docs" && r.Method == "HEAD":
+		case r.Path == "/velruna-docs" && r.Method == "HEAD":
 			return 200, ""
-		case r.Method == "GET" && strings.HasPrefix(r.Path, "/memento-docs/_doc/"):
+		case r.Method == "GET" && strings.HasPrefix(r.Path, "/velruna-docs/_doc/"):
 			return 200, `{"found":true,"_source":` + stored + `}`
-		case r.Method == "POST" && strings.Contains(r.Path, "/memento-docs/_update/"):
+		case r.Method == "POST" && strings.Contains(r.Path, "/velruna-docs/_update/"):
 			updateBody = r.Body
 			return 200, `{"result":"updated"}`
-		case r.Method == "PUT" && strings.HasPrefix(r.Path, "/memento-docs/_doc/"):
+		case r.Method == "PUT" && strings.HasPrefix(r.Path, "/velruna-docs/_doc/"):
 			puts++
 			return 200, `{"result":"created"}`
 		}

@@ -37,8 +37,8 @@ func TestPatchBatchDuplicateKeysRejected(t *testing.T) {
 // store — proving rejection happens offline. A malformed item (unknown
 // status) is a per-item shape error, never a batch failure.
 func TestPatchBatchGuardRunsBeforeStore(t *testing.T) {
-	t.Setenv("MEMENTO_SECRET_GUARD", "reject")
-	t.Setenv("MEMENTO_OPENSEARCH_URL", "http://127.0.0.1:9")
+	t.Setenv("VELRUNA_SECRET_GUARD", "reject")
+	t.Setenv("VELRUNA_OPENSEARCH_URL", "http://127.0.0.1:9")
 	s := &mcpServer{}
 	in := patchBatchInput{Items: []patchInput{
 		{Key: "k1", NotesAppend: "clean note"},
@@ -60,7 +60,7 @@ func TestPatchBatchGuardRunsBeforeStore(t *testing.T) {
 	}
 	// The clean item reaches the (broken) store path: a store/config error,
 	// not a guard or shape error — the batch itself never fails. Checking the
-	// store half directly avoids the "memento_status" hint substring.
+	// store half directly avoids the "velruna_status" hint substring.
 	if !strings.Contains(out.Items[0].Error, "password is empty") {
 		t.Errorf("clean item error = %q, want the store-path error", out.Items[0].Error)
 	}

@@ -63,16 +63,16 @@ protocol, the default-collection resolution and the "missing entry" sentinel
 are provider behavior. `make test-keyring` starts a disposable session bus
 (`dbus-run-session`) and a `gnome-keyring-daemon` with a throwaway `HOME`, then
 runs `internal/keyringnative` against it — the developer's real wallet is never
-touched. The tests also exist behind `MEMENTO_KEYRING_TEST=1`, which is what CI
+touched. The tests also exist behind `VELRUNA_KEYRING_TEST=1`, which is what CI
 turns on:
 
 - Linux: `make test-keyring` in the `build-test` job (Secret Service over D-Bus).
-- macOS: the `macos` job runs `MEMENTO_KEYRING_TEST=1 go test ./internal/keyring/`
+- macOS: the `macos` job runs `VELRUNA_KEYRING_TEST=1 go test ./internal/keyring/`
   against the runner's login Keychain (the zalando provider: `security` CLI). It is
   gated to tags and `workflow_dispatch`: a macOS runner bills 10x minutes, so a
   release check is the right cadence (`gh workflow run ci.yml` forces it).
 - Windows: the `windows` job runs `vet`, `build`, the platform-neutral packages'
-  tests and `MEMENTO_KEYRING_TEST=1 go test ./internal/keyring/` on every push —
+  tests and `VELRUNA_KEYRING_TEST=1 go test ./internal/keyring/` on every push —
   the Credential Manager is exercised for real (zalando -> wincred), not just
   compiled. The job already earned its keep: it caught a HOME-vs-USERPROFILE
   assumption in a config test the Linux suite could never see.

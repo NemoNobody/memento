@@ -14,8 +14,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/NemoNobody/memento/internal/config"
-	"github.com/NemoNobody/memento/internal/model"
+	"github.com/NemoNobody/velruna/internal/config"
+	"github.com/NemoNobody/velruna/internal/model"
 )
 
 // writeBody serves a fixture body; a write failure means the page never
@@ -629,7 +629,7 @@ func TestFetchPageHook(t *testing.T) {
 }
 
 // TestFetchPageDefaultUA pins the anti-fingerprinting default: an unconfigured
-// client arrives as a current desktop browser, not as "memento/x.y.z".
+// client arrives as a current desktop browser, not as "velruna/x.y.z".
 func TestFetchPageDefaultUA(t *testing.T) {
 	ft := newFetchTarget(t)
 	cfg := config.DefaultConfig()

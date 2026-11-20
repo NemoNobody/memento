@@ -9,8 +9,8 @@ import (
 
 func TestDefaultConfigFetchFields(t *testing.T) {
 	cfg := DefaultConfig()
-	if cfg.DocsIndexName != "memento-docs" {
-		t.Errorf("DocsIndexName = %q, want memento-docs", cfg.DocsIndexName)
+	if cfg.DocsIndexName != "velruna-docs" {
+		t.Errorf("DocsIndexName = %q, want velruna-docs", cfg.DocsIndexName)
 	}
 	if cfg.FetchTimeoutSeconds != 30 {
 		t.Errorf("FetchTimeoutSeconds = %d, want 30", cfg.FetchTimeoutSeconds)
@@ -44,17 +44,17 @@ func TestLoadConfigFetchEnv(t *testing.T) {
 	defer restore()
 	clearEnv(t)
 
-	t.Setenv("MEMENTO_DOCS_INDEX", "docsx")
-	t.Setenv("MEMENTO_FETCH_TIMEOUT", "7")
-	t.Setenv("MEMENTO_FETCH_MAX_BYTES", "999")
-	t.Setenv("MEMENTO_DOCS_TTL_DAYS", "0")
-	t.Setenv("MEMENTO_FETCH_HOSTS", "a.com, .b.com ,")
-	t.Setenv("MEMENTO_FETCH_USER_AGENT", "UA/1")
-	t.Setenv("MEMENTO_FETCH_RESPECT_ROBOTS", "true")
-	t.Setenv("MEMENTO_FETCH_PROXY_URL", "http://p:3128")
-	t.Setenv("MEMENTO_FETCH_PROXY_FALLBACK", "true")
-	t.Setenv("MEMENTO_LOCAL_REPO_ROOTS", "/r1, /r2")
-	t.Setenv("MEMENTO_REPO_SCAN_DEPTH", "4")
+	t.Setenv("VELRUNA_DOCS_INDEX", "docsx")
+	t.Setenv("VELRUNA_FETCH_TIMEOUT", "7")
+	t.Setenv("VELRUNA_FETCH_MAX_BYTES", "999")
+	t.Setenv("VELRUNA_DOCS_TTL_DAYS", "0")
+	t.Setenv("VELRUNA_FETCH_HOSTS", "a.com, .b.com ,")
+	t.Setenv("VELRUNA_FETCH_USER_AGENT", "UA/1")
+	t.Setenv("VELRUNA_FETCH_RESPECT_ROBOTS", "true")
+	t.Setenv("VELRUNA_FETCH_PROXY_URL", "http://p:3128")
+	t.Setenv("VELRUNA_FETCH_PROXY_FALLBACK", "true")
+	t.Setenv("VELRUNA_LOCAL_REPO_ROOTS", "/r1, /r2")
+	t.Setenv("VELRUNA_REPO_SCAN_DEPTH", "4")
 
 	cfg, err := LoadConfig()
 	if err != nil {
@@ -102,7 +102,7 @@ func TestLoadConfigFetchFileFields(t *testing.T) {
 		"local_repo_roots": ["/a", "/b"],
 		"local_repo_scan_depth": 3
 	}`
-	if err := os.WriteFile(filepath.Join(dir, "memento.conf"), []byte(body), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "velruna.conf"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := LoadConfig()
@@ -158,7 +158,7 @@ func TestLoadConfigRejectsBadProxyURL(t *testing.T) {
 	defer restore()
 	clearEnv(t)
 
-	t.Setenv("MEMENTO_FETCH_PROXY_URL", "proxy.internal:3128")
+	t.Setenv("VELRUNA_FETCH_PROXY_URL", "proxy.internal:3128")
 	if _, err := LoadConfig(); err == nil {
 		t.Fatal("a scheme-less proxy URL must fail at config load")
 	}
@@ -171,9 +171,9 @@ func TestLoadConfigFetchBadEnvFails(t *testing.T) {
 	clearEnv(t)
 
 	for _, tc := range []struct{ key, val string }{
-		{"MEMENTO_FETCH_TIMEOUT", "abc"},
-		{"MEMENTO_FETCH_PROXY_FALLBACK", "nope"},
-		{"MEMENTO_REPO_SCAN_DEPTH", "deep"},
+		{"VELRUNA_FETCH_TIMEOUT", "abc"},
+		{"VELRUNA_FETCH_PROXY_FALLBACK", "nope"},
+		{"VELRUNA_REPO_SCAN_DEPTH", "deep"},
 	} {
 		t.Run(tc.key, func(t *testing.T) {
 			t.Setenv(tc.key, tc.val)

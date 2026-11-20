@@ -1,8 +1,8 @@
-# How memento works
+# How velruna works
 
 ## Storage model
 
-Facts are stored in an OpenSearch index (`memento` by default). Each fact is a
+Facts are stored in an OpenSearch index (`velruna` by default). Each fact is a
 document keyed by its `key` (the key is the document ID).
 
 ### Index schema
@@ -30,7 +30,7 @@ document keyed by its `key` (the key is the document ID).
 | `session` | keyword | agent session label at creation (write-once, self-reported) |
 | `updated_by` | keyword | self-reported label of the last writer (moves on every write) |
 | `current_ref` | keyword | id of the journal entry that carries the current value |
-| `history` | object (`enabled: false`) | **legacy** pre-journal array `[{value, observed_at, source}]` — stored, never indexed; `memento migrate-history` moves it into the journal and removes the field |
+| `history` | object (`enabled: false`) | **legacy** pre-journal array `[{value, observed_at, source}]` — stored, never indexed; `velruna migrate-history` moves it into the journal and removes the field |
 
 The catalog is applied twice: on index creation, and additively on an existing
 index (`PUT _mapping`, once per process). Without the second pass a field added
@@ -49,7 +49,7 @@ tag filter would silently stop matching tags the analyzer splits.
 - Keys are **trimmed at every edge** (add, patch, get, journal, obsolete,
   prune, keys; the batch dupe check runs on the trimmed key): `" k "` and
   `"k"` must never become two docs with diverging history. Documents written
-  with padded keys before this rule are not auto-merged — `memento keys
+  with padded keys before this rule are not auto-merged — `velruna keys
   --match` finds them; merging is an admin call.
 - `project` labels are trimmed at every edge (write and read) and, like the
   birth authorship, **write-once**: re-adding a fact never migrates its
@@ -58,7 +58,7 @@ tag filter would silently stop matching tags the analyzer splits.
 
 ## Documents (the docs index)
 
-Fetched pages live in a separate index (`docs_index_name`, `memento-docs` by
+Fetched pages live in a separate index (`docs_index_name`, `velruna-docs` by
 default): the raw HTML is kept write-only for re-extraction, and BM25 runs over
 the extracted text, never over markup.
 
@@ -68,7 +68,7 @@ The natural unit is a heading-delimited section. A section longer than
 space or punctuation, and only then hard at the count — joining the parts gives
 the text back unchanged, so a split loses nothing. Split parts are labelled
 `heading (2/5)`, and every block is addressable by `order`, the unit
-`memento_get_doc` reads. `block_chars` is an extraction setting: it applies
+`velruna_get_doc` reads. `block_chars` is an extraction setting: it applies
 whenever text is extracted, so a truncated snapshot re-extracted for a larger
 `max_chars` is re-blocked at the requested size when that budget actually
 stores more text, while a cached snapshot whose text is complete keeps the
@@ -95,7 +95,7 @@ invisible to the HTML pass and is reconstructed by extraction — and its audit
 rows are merged with the earlier ones; the stored raw HTML and the cache
 metadata (`etag`, `project`, `expires_at`) are not rewritten. A smaller request
 never shrinks the stored copy for unchanged content. Response caps — 32000
-runes per `memento_get_doc` answer (one block is returned whole even when it
+runes per `velruna_get_doc` answer (one block is returned whole even when it
 alone exceeds the cap), a partial outline (the first 60 lines plus `more N
 blocks, orders X..Y`) on a huge document — are read limits, not storage limits.
 
@@ -104,7 +104,7 @@ blocks, orders X..Y`) on a huge document — are read limits, not storage limits
 ### add
 
 ```
-memento add <key> <value> <category> [--project <p>] [--source <s>] [--notes <n>] [--summary <s>]
+velruna add <key> <value> <category> [--project <p>] [--source <s>] [--notes <n>] [--summary <s>]
 ```
 
 Adds a fact. If the key exists: a different value corrects it (the accepted
@@ -128,7 +128,7 @@ irreversible. A value over `summary_min_len` requires `--summary`
 ### get
 
 ```
-memento get <key> [--history]
+velruna get <key> [--history]
 ```
 
 Returns the fact for a key, plus the freshness signal (`age_days`, `stale`).
@@ -137,13 +137,13 @@ read facts on every turn); `--history` prints the legacy in-doc array of
 pre-journal facts (a half-migrated fact keeps showing the array until
 `migrate-history` retires it), and for facts without a legacy array the
 newest journal entries (up to 20). The full journal is one
-`memento journal <key> --limit <N>` away (counts at a glance:
-`memento history-info`).
+`velruna journal <key> --limit <N>` away (counts at a glance:
+`velruna history-info`).
 
 ### search
 
 ```
-memento search <query> [--project <p>] [--category <c>] [--status <s>]
+velruna search <query> [--project <p>] [--category <c>] [--status <s>]
 ```
 
 Full-text search over `value`, `notes` and `summary`, filtered by project/category/status.
@@ -153,7 +153,7 @@ listing.
 ### list
 
 ```
-memento list <project> [--prefix <p>]
+velruna list <project> [--prefix <p>]
 ```
 
 All facts for a project, optionally narrowed to a key prefix (navigation cap
@@ -163,8 +163,8 @@ All facts for a project, optionally narrowed to a key prefix (navigation cap
 ### journal / history-info
 
 ```
-memento journal <key> [--limit N] [--since RFC3339] [--until RFC3339]
-memento history-info <key>
+velruna journal <key> [--limit N] [--since RFC3339] [--until RFC3339]
+velruna history-info <key>
 ```
 
 `journal` reads the journal for a key: every accepted value, newest first
@@ -179,7 +179,7 @@ full journal.
 ### prune
 
 ```
-memento prune <key> [--keep N] [--yes]
+velruna prune <key> [--keep N] [--yes]
 ```
 
 Drops journal entries beyond the newest `N` (journal-first; keys that predate
@@ -196,7 +196,7 @@ explicit approval.
 ### obsolete
 
 ```
-memento obsolete <key> [reason]
+velruna obsolete <key> [reason]
 ```
 
 Marks the fact `obsolete` because its subject is gone (file deleted, endpoint
@@ -208,12 +208,12 @@ The write is scripted (painless): the reason appends **inside** the script, so
 a concurrent `notes_append` cannot be dropped by a read-modify-write from the
 stale read, and status/`current_ref` land in the same atomic update. The
 journal entry carries the reason in notes (audit symmetry with
-`memento_patch`). A reason with `memento_patch` on an already-obsolete fact is
+`velruna_patch`). A reason with `velruna_patch` on an already-obsolete fact is
 refused — the reason belongs to the transition. That refusal is computed from
 the read taken before the scripted update: a retire racing in between the read
 and the script slips past the check (the journal entry documents that event, so
 the audit trail never lies about the state — at worst a notes line duplicates).
-`memento_obsolete` refuses the same way, from the same kind of pre-read: two
+`velruna_obsolete` refuses the same way, from the same kind of pre-read: two
 racing retires can duplicate the notes line and journal one entry each — the
 journal records every accepted write, so the events stay truthful.
 
@@ -228,7 +228,7 @@ the fact doc:
   `notes`, `source`, `keywords`, `created_at`, author fields. `op_type=create`: appends
   never overwrite each other, there is no CAS.
 - Entries live in `<index>-history-<period-date>`: the period granularity is
-  `history_index_period` (config; env `MEMENTO_HISTORY_PERIOD`; default
+  `history_index_period` (config; env `VELRUNA_HISTORY_PERIOD`; default
   `month` — `2026.11`; also `day`, `week` (`2026-w46`), `quarter`
   (`2026-q4`), `year`). Dated indices keep old periods small, inspectable,
   and deletable (the admin pruning path).
@@ -256,14 +256,14 @@ the fact doc:
   overwritten is history, not a lie.
 - The journal is never pruned automatically (write-forever): history shows
   how old it is. `history_limit` is only the default `--keep` for the manual
-  `memento prune`.
+  `velruna prune`.
 - After an admin deleted old journal indices, read counts are lower bounds —
   the app cannot see deletions it did not perform.
 
 ### migrate-history
 
 ```
-memento migrate-history [--project <p>] [--yes]
+velruna migrate-history [--project <p>] [--yes]
 ```
 
 One-time upgrade step from pre-journal releases: moves each fact's in-doc
@@ -280,8 +280,8 @@ run wrote (collision = success) and never duplicates.
 Corrections are frequent (state keys get re-observed daily), so history is
 kept out of the fact doc entirely: the journal carries it and fact reads stay
 cheap. The journal is write-forever; `history_limit` (config key
-`history_limit`, env `MEMENTO_HISTORY_LIMIT`, default 20) is the default
-`--keep` for `memento prune`, which applies it on demand, behind a
+`history_limit`, env `VELRUNA_HISTORY_LIMIT`, default 20) is the default
+`--keep` for `velruna prune`, which applies it on demand, behind a
 confirmation barrier. Dated journal indices are the retention lever: an admin
 can close, snapshot, or delete whole periods with standard OpenSearch tools.
 
@@ -300,7 +300,7 @@ the MCP tools) carries `age_days` and `stale`:
 | `context_map` | never | decisions and design notes do not rot by age |
 
 The category TTL is also a **cap**: a writer may set a shorter per-fact window
-(`ttl_days` on `memento_add`/`memento_patch`, `--ttl-days` on the CLI) when it
+(`ttl_days` on `velruna_add`/`velruna_patch`, `--ttl-days` on the CLI) when it
 knows the fact rots faster. Lengthening past the category cap is refused at the
 write edge — a window that outlives the category's promise would quietly
 mislead every later reader. Categories with no default TTL are uncapped
@@ -321,11 +321,11 @@ Rules:
 
 ## Keywords
 
-A fact may carry up to 10 tags (`keywords` on `memento_add`, `--keyword` on the
+A fact may carry up to 10 tags (`keywords` on `velruna_add`, `--keyword` on the
 CLI). Tags are normalized at the write edge — trimmed, lowercased, one token
 each, deduplicated in first-seen order — because the filter is a plain term on
 a `keyword` array: exact match, no analysis. That makes tags the cheapest
-cross-project slice (`memento_search` with `keyword: "perf"` over all projects)
+cross-project slice (`velruna_search` with `keyword: "perf"` over all projects)
 and the association layer an agent needs without a graph database. An empty
 list on a re-add leaves the stored tags alone (the notes/source convention);
 keywords are a stored qualifier, not a journaled observation. Every accepted
@@ -338,7 +338,7 @@ safe: the previous set stays recoverable from the entry that carried it.
 Without one, a fact could never become fresh again (a same-value re-add is a
 touch: it deliberately does not move `observed_at`).
 
-`memento_patch {reverify: true}` re-confirms the current value in place:
+`velruna_patch {reverify: true}` re-confirms the current value in place:
 `observed_at` moves to now, the journal gains an `op=rediscovery` entry (who,
 when, model, session), and the writer joins the fact's `confirmed_by`. The
 value, notes, tags and summary are untouched; a `reverify` cannot ride along
@@ -385,13 +385,13 @@ exactly the context cost the store exists to avoid. So an accepted value over
 `summary_min_len` runes (default 2000) must ship a `summary` — a short
 table-of-contents rendering — and the summary itself is capped at
 `summary_max_len` runes (default 400; ~100 tokens, about a 10x compression).
-Both knobs are config keys (env `MEMENTO_SUMMARY_MIN_LEN` /
-`MEMENTO_SUMMARY_MAX_LEN`); `0` disables the respective check.
+Both knobs are config keys (env `VELRUNA_SUMMARY_MIN_LEN` /
+`VELRUNA_SUMMARY_MAX_LEN`); `0` disables the respective check.
 
 The rule applies to the accepted value: create and correction. A notes-only
 touch of a long fact that predates the rule is not rejected (the value is
 unchanged), and a rejected correction never reaches the journal. The summary
-is searchable text (`text`, BM25): `memento_search` can match it, which turns
+is searchable text (`text`, BM25): `velruna_search` can match it, which turns
 the store into a skimmable index — find by summary, read the full value by
 key.
 
@@ -408,12 +408,12 @@ The author resolves once per process, down this chain:
    name the *server* authenticated, so it cannot be forged by the client).
    Any non-success (security off, 403, timeout) silently degrades to the next
    link; a stalled plugin never slows writes (5s probe deadline).
-2. `config` — the `author` config key / `MEMENTO_AUTHOR`.
+2. `config` — the `author` config key / `VELRUNA_AUTHOR`.
 3. `os` — the OS username of the process.
 4. `none` — nothing resolved; writes carry no author labels.
 
-`model`/`host`/`session` come from config keys / env (`MEMENTO_MODEL`,
-`MEMENTO_HOST`, `MEMENTO_SESSION`); `host` falls back to the OS hostname
+`model`/`host`/`session` come from config keys / env (`VELRUNA_MODEL`,
+`VELRUNA_HOST`, `VELRUNA_SESSION`); `host` falls back to the OS hostname
 (sanitized), `model` and `session` are never guessed.
 
 **Threat model:** these labels are audit metadata, not authentication. A
@@ -435,7 +435,7 @@ shapes: vendor token
 prefixes (`AKIA…`, `ghp_…`, `xox…`, `sk-…`, JWT, PEM headers), `Bearer`
 headers, `password = …` assignments, and long opaque strings (hex/base64).
 
-The level is `secret_guard` in the config (env `MEMENTO_SECRET_GUARD`). Every
+The level is `secret_guard` in the config (env `VELRUNA_SECRET_GUARD`). Every
 finding carries a confidence level — `high` for deterministic credential
 shapes (vendor prefixes, PEM key blocks, `Bearer` headers, basic-auth URLs,
 assignments whose right-hand side is 20+ characters spanning 3+ character
@@ -462,8 +462,8 @@ content is not authored by the writer.
 A redaction is never silent: the fact carries `redactions` (field, pattern,
 size — never the text, so the removed span cannot leak back through a read),
 the journal entry of the accepted value carries the same rows, and the write
-answer repeats them. The rows reach every read shape (`memento_get`,
-`memento_search`, `memento_list`, `memento_journal`, CLI `get`), so a value
+answer repeats them. The rows reach every read shape (`velruna_get`,
+`velruna_search`, `velruna_list`, `velruna_journal`, CLI `get`), so a value
 that quietly shrank never reads as a complete claim. The rows follow the text
 they describe: a field the write overwrites drops its stored row even when the
 new text is clean, appending a line accumulates (the earlier line is still in
@@ -495,7 +495,7 @@ Guarantees and limits:
   server's content type: HTML/markdown/plain is DOCUMENTATION, `application/
   json|xml` and `+json`/`+xml` types are API payloads. High-confidence
   shapes in the agent-visible fields (title, section text/headings, image
-  alt/title) and in the stored raw HTML are REDACTED in place (`[memento-
+  alt/title) and in the stored raw HTML are REDACTED in place (`[velruna-
   redacted:pattern]`) and the page is stored — the answer lists `redactions`
   (field/pattern/size, never a preview). Medium findings in the agent-visible
   text: on the DOCUMENTATION route they do not refuse the write (documentation
@@ -523,7 +523,7 @@ Guarantees and limits:
   shapes are redacted in place (a credential-bearing src is a leak, not a
   link). The agent/user-supplied `project` tag is scanned at the call sites,
   before the store (the cache-hit re-tag path never sees the content guard),
-  on fact writes (`memento_add`/`memento_add_batch`/CLI add) exactly as on the
+  on fact writes (`velruna_add`/`velruna_add_batch`/CLI add) exactly as on the
   fetch path. The project is graded like the visible text (not HighOnly) and
   stays strict on every content route: labels are short identity text where
   a credential has no business appearing;
@@ -543,24 +543,24 @@ Guarantees and limits:
 The CLI uses **Basic auth** (user + password). Connection and auth settings
 come from a config file:
 
-- `--conf <path>` flag (`memento mcp` and `memento status`)
-- `MEMENTO_CONF` env var
-- `memento.conf` (current dir)
-- `memento.conf` next to the binary
-- `~/.memento.conf`
+- `--conf <path>` flag (`velruna mcp` and `velruna status`)
+- `VELRUNA_CONF` env var
+- `velruna.conf` (current dir)
+- `velruna.conf` next to the binary
+- `~/.velruna.conf`
 
 Env vars override the file: `OPENSEARCH_URL`, `OPENSEARCH_USER`,
-`OPENSEARCH_PASSWORD`, `OPENSEARCH_INSECURE_SKIP_VERIFY`, `MEMENTO_CONF`,
-`MEMENTO_INDEX`, `MEMENTO_HISTORY_PERIOD`, `MEMENTO_HISTORY_LIMIT`,
-`MEMENTO_SECRET_GUARD`,
-`MEMENTO_ALLOW_PLAINTEXT`, `MEMENTO_SUMMARY_MIN_LEN`,
-`MEMENTO_SUMMARY_MAX_LEN`, `MEMENTO_AUTHOR`, `MEMENTO_MODEL`,
-`MEMENTO_HOST`, `MEMENTO_SESSION`, plus the `MEMENTO_FETCH_*` /
-`MEMENTO_DOCS_*` / `MEMENTO_LOCAL_REPO_ROOTS` / `MEMENTO_REPO_SCAN_DEPTH`
+`OPENSEARCH_PASSWORD`, `OPENSEARCH_INSECURE_SKIP_VERIFY`, `VELRUNA_CONF`,
+`VELRUNA_INDEX`, `VELRUNA_HISTORY_PERIOD`, `VELRUNA_HISTORY_LIMIT`,
+`VELRUNA_SECRET_GUARD`,
+`VELRUNA_ALLOW_PLAINTEXT`, `VELRUNA_SUMMARY_MIN_LEN`,
+`VELRUNA_SUMMARY_MAX_LEN`, `VELRUNA_AUTHOR`, `VELRUNA_MODEL`,
+`VELRUNA_HOST`, `VELRUNA_SESSION`, plus the `VELRUNA_FETCH_*` /
+`VELRUNA_DOCS_*` / `VELRUNA_LOCAL_REPO_ROOTS` / `VELRUNA_REPO_SCAN_DEPTH`
 fetch options (the full list lives in README and docs/setup.md).
 
 OpenSearch also offers API keys, mTLS, and enterprise SSO (Kerberos / LDAP /
-JWT), but `memento` speaks **Basic auth only** — user and password in the
+JWT), but `velruna` speaks **Basic auth only** — user and password in the
 config.
 
 ## Notes

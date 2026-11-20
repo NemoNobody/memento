@@ -13,15 +13,15 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/NemoNobody/memento/internal/config"
-	"github.com/NemoNobody/memento/internal/model"
+	"github.com/NemoNobody/velruna/internal/config"
+	"github.com/NemoNobody/velruna/internal/model"
 )
 
 // author_source values: which link of the chain produced the label.
 const (
 	AuthorSourceSecurity = "security" // the store's authenticated user
-	AuthorSourceConfig   = "config"   // config author / MEMENTO_AUTHOR
-	AuthorSourceOS       = "os"       // the OS user running memento
+	AuthorSourceConfig   = "config"   // config author / VELRUNA_AUTHOR
+	AuthorSourceOS       = "os"       // the OS user running velruna
 	AuthorSourceNone     = "none"     // nothing resolved
 )
 

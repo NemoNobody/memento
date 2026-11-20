@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NemoNobody/memento/internal/client"
-	"github.com/NemoNobody/memento/internal/config"
-	"github.com/NemoNobody/memento/internal/model"
-	"github.com/NemoNobody/memento/internal/secretguard"
+	"github.com/NemoNobody/velruna/internal/client"
+	"github.com/NemoNobody/velruna/internal/config"
+	"github.com/NemoNobody/velruna/internal/model"
+	"github.com/NemoNobody/velruna/internal/secretguard"
 
 	"github.com/spf13/cobra"
 )
@@ -26,7 +26,7 @@ var fetchFlags struct {
 	blockChars  int
 }
 
-// FetchCmd returns the `memento fetch` command: download a page, extract its
+// FetchCmd returns the `velruna fetch` command: download a page, extract its
 // text into sections, store it in the docs index, print the outline. The page
 // text stays in the store; only the outline enters the terminal (context
 // economy: agents read sections on demand, not whole pages).
@@ -40,7 +40,7 @@ the same URL returns the stored snapshot (cache) until its TTL expires;
 --refresh forces a new download.
 
 Only the outline is printed: section text is read on demand with
-'memento doc <hash> <n>'. Requests send no cookies and no credentials.
+'velruna doc <hash> <n>'. Requests send no cookies and no credentials.
 A host outside fetch_allow_hosts is rejected before the request is made.`,
 		Args: cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
@@ -150,7 +150,7 @@ func resolveSection(flagVal int, args []string) (int, error) {
 	return section, nil
 }
 
-// DocCmd returns the `memento doc` command: read a run of blocks (one by
+// DocCmd returns the `velruna doc` command: read a run of blocks (one by
 // default), or as many as one answer's budget holds with --full, of a stored
 // document by hash.
 func DocCmd() *cobra.Command {
@@ -192,7 +192,7 @@ func DocCmd() *cobra.Command {
 				text, included, next := readDocBlocks(doc, section, docFlags.blocks, docReadBudget)
 				if included == 0 {
 					fatalErr(errors.New("doc " + hash + " has no section " + strconv.Itoa(section) +
-						" (see the outline with 'memento doc " + hash + "')"))
+						" (see the outline with 'velruna doc " + hash + "')"))
 				}
 				if _, err := io.WriteString(os.Stdout, staleNote(doc, time.Now().UTC())+text+nextNote(next)); err != nil {
 					fatalErr(err)
@@ -218,7 +218,7 @@ var docsFlags struct {
 	limit   int
 }
 
-// DocsCmd returns the `memento docs` command: search stored documents.
+// DocsCmd returns the `velruna docs` command: search stored documents.
 func DocsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "docs <query>",
@@ -525,7 +525,7 @@ func printDocOutline(w io.Writer, doc *model.Doc, cached, revalidated bool, now 
 		b.WriteString(summary)
 		b.WriteString("\n")
 	}
-	b.WriteString("read a section: memento doc ")
+	b.WriteString("read a section: velruna doc ")
 	b.WriteString(doc.URLHash)
 	b.WriteString(" <n>\n")
 	_, err := io.WriteString(w, b.String())

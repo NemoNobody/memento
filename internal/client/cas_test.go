@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/NemoNobody/memento/internal/model"
+	"github.com/NemoNobody/velruna/internal/model"
 	"github.com/opensearch-project/opensearch-go/v4"
 )
 
@@ -25,7 +25,7 @@ const casSource = `{"key":"k","value":"same","category":"config","project":"p","
 
 const casConflictBody = `{"error":{"root_cause":[{"type":"version_conflict_engine_exception",` +
 	`"reason":"[k]: version conflict, required seq_no [5], primary_term [2], but was [6] [2]",` +
-	`"index":"memento","shard":"0","document_id":"k"}],` +
+	`"index":"velruna","shard":"0","document_id":"k"}],` +
 	`"type":"version_conflict_engine_exception",` +
 	`"reason":"[k]: version conflict, required seq_no [5], primary_term [2], but was [6] [2]"},` +
 	`"status":409}`
@@ -39,9 +39,9 @@ func casRespond(source string, updateStatus int, updateBody string, got *recorde
 			return code, body
 		}
 		switch {
-		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
-			return http.StatusOK, `{"_index":"memento","_id":"k","_version":3,"_seq_no":5,"_primary_term":2,"found":true,"_source":` + source + `}`
-		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+		case r.Method == http.MethodGet && r.Path == "/velruna/_doc/k":
+			return http.StatusOK, `{"_index":"velruna","_id":"k","_version":3,"_seq_no":5,"_primary_term":2,"found":true,"_source":` + source + `}`
+		case r.Method == http.MethodPost && r.Path == "/velruna/_update/k":
 			*got = r
 			return updateStatus, updateBody
 		}
@@ -61,7 +61,7 @@ func assertCasParams(t *testing.T, got recordedRequest) {
 
 func TestAddSameValueTouchIsConditional(t *testing.T) {
 	var got recordedRequest
-	c, _ := newFakeClient(t, casRespond(casSource, http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`, &got))
+	c, _ := newFakeClient(t, casRespond(casSource, http.StatusOK, `{"_index":"velruna","_id":"k","result":"updated"}`, &got))
 
 	if _, err := c.Add(context.Background(), model.NewFact("k", "same", "config", "p", "test:cas", "retouched")); err != nil {
 		t.Fatalf("Add: %v", err)
@@ -89,7 +89,7 @@ func TestAddResurrectIsConditional(t *testing.T) {
 	var got recordedRequest
 	c, _ := newFakeClient(t, casRespond(
 		`{"key":"k","value":"same","category":"config","project":"p","status":"obsolete"}`,
-		http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`, &got))
+		http.StatusOK, `{"_index":"velruna","_id":"k","result":"updated"}`, &got))
 
 	res, err := c.Add(context.Background(), model.NewFact("k", "same", "config", "p", "test:cas", ""))
 	if err != nil {
@@ -103,7 +103,7 @@ func TestAddResurrectIsConditional(t *testing.T) {
 
 func TestObsoleteTransitionIsConditional(t *testing.T) {
 	var got recordedRequest
-	c, _ := newFakeClient(t, casRespond(casSource, http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`, &got))
+	c, _ := newFakeClient(t, casRespond(casSource, http.StatusOK, `{"_index":"velruna","_id":"k","result":"updated"}`, &got))
 
 	if err := c.Obsolete(context.Background(), "k", "file deleted", nil); err != nil {
 		t.Fatalf("Obsolete: %v", err)
@@ -113,7 +113,7 @@ func TestObsoleteTransitionIsConditional(t *testing.T) {
 
 func TestPatchStatusFlipIsConditional(t *testing.T) {
 	var got recordedRequest
-	c, _ := newFakeClient(t, casRespond(casSource, http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`, &got))
+	c, _ := newFakeClient(t, casRespond(casSource, http.StatusOK, `{"_index":"velruna","_id":"k","result":"updated"}`, &got))
 
 	if _, err := c.Patch(context.Background(), "k", PatchFields{Status: "obsolete", Reason: "file deleted"}); err != nil {
 		t.Fatalf("Patch: %v", err)
@@ -148,13 +148,13 @@ func TestAddCreateLinkIsConditional(t *testing.T) {
 			return code, body
 		}
 		switch {
-		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
-			return http.StatusNotFound, `{"error":{"type":"document_missing_exception","reason":"Document with id k not found.","index":"memento"},"status":404}`
-		case r.Method == http.MethodPut && r.Path == "/memento/_doc/k":
-			return http.StatusCreated, `{"_index":"memento","_id":"k","_version":1,"_seq_no":4,"_primary_term":2,"result":"created"}`
-		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+		case r.Method == http.MethodGet && r.Path == "/velruna/_doc/k":
+			return http.StatusNotFound, `{"error":{"type":"document_missing_exception","reason":"Document with id k not found.","index":"velruna"},"status":404}`
+		case r.Method == http.MethodPut && r.Path == "/velruna/_doc/k":
+			return http.StatusCreated, `{"_index":"velruna","_id":"k","_version":1,"_seq_no":4,"_primary_term":2,"result":"created"}`
+		case r.Method == http.MethodPost && r.Path == "/velruna/_update/k":
 			got = r
-			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+			return http.StatusOK, `{"_index":"velruna","_id":"k","result":"updated"}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Method + " " + r.Path + `"}`
 	})
@@ -274,7 +274,7 @@ func TestAddGatewayStatusRewriteIsNotConflict(t *testing.T) {
 // branch fails HERE, not only at some call-site fixture. The table is
 // built from the same bodies as the call-site pins.
 func TestIsVersionConflictDelegatesBothShapes(t *testing.T) {
-	raceRC := `{"error":{"type":"version_conflict_engine_exception","reason":"[k2] already exists","root_cause":[{"type":"resource_already_exists_exception","reason":"index [memento-history-2026-11/uuid] already exists"}]},"status":409}`
+	raceRC := `{"error":{"type":"version_conflict_engine_exception","reason":"[k2] already exists","root_cause":[{"type":"resource_already_exists_exception","reason":"index [velruna-history-2026-11/uuid] already exists"}]},"status":409}`
 	mkStruct := func(body string) *opensearch.StructError {
 		var ste opensearch.StructError
 		if err := json.Unmarshal([]byte(body), &ste); err != nil {
@@ -289,14 +289,14 @@ func TestIsVersionConflictDelegatesBothShapes(t *testing.T) {
 	}{
 		{"struct canonical conflict", mkStruct(casConflictBody), true},
 		{"struct doc-create conflict", mkStruct(`{"error":{"type":"version_conflict_engine_exception","reason":"[k]: version conflict, document already exists (current version [3])"},"status":409}`), true},
-		{"struct race type", mkStruct(`{"error":{"type":"resource_already_exists_exception","reason":"index [memento-history-2026-11/uuid] already exists"},"status":409}`), false},
+		{"struct race type", mkStruct(`{"error":{"type":"resource_already_exists_exception","reason":"index [velruna-history-2026-11/uuid] already exists"},"status":409}`), false},
 		{"struct race in root_cause", mkStruct(raceRC), false},
 		{"struct race in caused_by chain", mkStruct(`{"error":{"type":"mapper_parsing_exception","reason":"[k2] already exists","caused_by":{"type":"engine_exception","reason":"outer","caused_by":{"type":"resource_already_exists_exception","reason":"index detail"}}},"status":409}`), false},
-		{"struct race marker pair in root_cause only", mkStruct(`{"error":{"type":"mapper_parsing_exception","reason":"[k2] already exists","root_cause":[{"type":"engine_exception","reason":"index [memento-history-2026-11/uuid] already exists"}]},"status":409}`), false},
+		{"struct race marker pair in root_cause only", mkStruct(`{"error":{"type":"mapper_parsing_exception","reason":"[k2] already exists","root_cause":[{"type":"engine_exception","reason":"index [velruna-history-2026-11/uuid] already exists"}]},"status":409}`), false},
 		{"struct status rewritten to 500", mkStruct(`{"error":{"type":"version_conflict_engine_exception","reason":"[k]: version conflict, required seq_no [5]"},"status":500}`), false},
 		{"struct sub-409 wording", mkStruct(`{"error":{"type":"mapper_parsing_exception","reason":"document already exists"},"status":400}`), false},
 		{"string conflict", &opensearch.StringError{Err: "document already exists", Status: http.StatusConflict}, true},
-		{"string race marker", &opensearch.StringError{Err: "index [memento-history-2026-11/uuid] already exists", Status: http.StatusConflict}, false},
+		{"string race marker", &opensearch.StringError{Err: "index [velruna-history-2026-11/uuid] already exists", Status: http.StatusConflict}, false},
 		{"string race type name", &opensearch.StringError{Err: "resource_already_exists_exception: [k2] already exists", Status: http.StatusConflict}, false},
 		{"string sub-409", &opensearch.StringError{Err: "document already exists", Status: http.StatusBadRequest}, false},
 	} {
@@ -326,7 +326,7 @@ func TestGatewayHTTPErrorWithConflictBodyIsConflict(t *testing.T) {
 
 func TestPatchValueChangeIsNotConditional(t *testing.T) {
 	var got recordedRequest
-	c, _ := newFakeClient(t, casRespond(casSource, http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`, &got))
+	c, _ := newFakeClient(t, casRespond(casSource, http.StatusOK, `{"_index":"velruna","_id":"k","result":"updated"}`, &got))
 	if _, err := c.Patch(context.Background(), "k", PatchFields{Value: "corrected", Summary: "the corrected value"}); err != nil {
 		t.Fatalf("Patch: %v", err)
 	}

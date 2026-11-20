@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NemoNobody/memento/internal/model"
+	"github.com/NemoNobody/velruna/internal/model"
 )
 
 func testDoc() *model.Doc {
@@ -16,7 +16,7 @@ func testDoc() *model.Doc {
 		URL:       "https://example.com/guide",
 		URLHash:   "abc123def4567890",
 		Title:     "Example Guide",
-		Project:   "memento",
+		Project:   "velruna",
 		FetchedAt: now.Add(-24 * time.Hour),
 		ExpiresAt: now.Add(24 * time.Hour),
 		Sections: []model.Section{
@@ -37,11 +37,11 @@ func TestPrintDocOutline(t *testing.T) {
 		"url: https://example.com/guide",
 		"hash: abc123def4567890",
 		"title: Example Guide",
-		"project: memento",
+		"project: velruna",
 		"cached: true",
 		"[0] Intro",
 		"[1] Usage",
-		"memento doc abc123def4567890 <n>",
+		"velruna doc abc123def4567890 <n>",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("outline lacks %q:\n%s", want, out)

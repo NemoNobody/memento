@@ -6,6 +6,24 @@ under `## Unreleased`; the release commit moves that section under its version
 number (`.github/workflows/release.yml` reads the heading to build the release
 notes).
 
+## v0.8.8 — 2026-11-21
+
+Rename only; behaviour is unchanged. Published as `memento` up to v0.8.6, and
+as `velruna` from this release.
+
+- module path: `github.com/NemoNobody/memento` -> `github.com/NemoNobody/velruna`.
+- MCP server name and all 16 tools: `memento_*` -> `velruna_*`.
+- environment variables: `MEMENTO_*` -> `VELRUNA_*`; the config lookup now
+  finds `velruna.conf` in the working directory, next to the executable, or
+  `~/.velruna.conf`.
+- keyring: the service name and the KWallet application id are `velruna` now,
+  so an existing credential is not found — run `velruna creds set` once.
+- default index names: `velruna`, `velruna-docs`, `velruna-history-<period>`.
+  The binary does not migrate an existing store: point `index_name` and
+  `docs_index_name` at the old names, or copy the indices to the new ones.
+- release assets and the installer: `velruna-<os>-<arch>`.
+- the redaction marker is `[velruna-redacted:...]`.
+
 ## v0.8.6 — 2026-11-20
 
 - keyring: provider detection on Linux — the bus owner of

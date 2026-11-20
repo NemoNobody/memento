@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/NemoNobody/memento/internal/config"
-	"github.com/NemoNobody/memento/internal/model"
+	"github.com/NemoNobody/velruna/internal/config"
+	"github.com/NemoNobody/velruna/internal/model"
 )
 
 const guardSentinel = "AKIAIOSFODNN7EXAMPLE" // the AWS documentation example key
@@ -86,7 +86,7 @@ func TestGuardFetchRedactsStoredHTML(t *testing.T) {
 	if strings.Contains(doc.HTML, guardSentinel) {
 		t.Errorf("the secret survived the html redaction: %s", doc.HTML)
 	}
-	if !strings.Contains(doc.HTML, "[memento-redacted:aws-access-key]") {
+	if !strings.Contains(doc.HTML, "[velruna-redacted:aws-access-key]") {
 		t.Errorf("redaction marker missing: %s", doc.HTML)
 	}
 	if !strings.Contains(doc.HTML, "prose") {

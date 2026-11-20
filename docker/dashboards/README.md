@@ -1,8 +1,8 @@
 # Dashboards bundle
 
-`objects.ndjson` — saved objects for the "Memento — store overview"
+`objects.ndjson` — saved objects for the "Velruna — store overview"
 dashboard: 3 index patterns, 18 visualizations, the dashboard itself.
-Stable `memento-store-*` ids make the push idempotent (update in place).
+Stable `velruna-store-*` ids make the push idempotent (update in place).
 
 Push with `scripts/push-dashboards.sh` (wallet-first credentials, see its
 header). The script talks to the CLUSTER, not the Dashboards port: it indexes
@@ -74,12 +74,12 @@ Index SIZES are deliberately absent: sizes live outside searchable data and
 Vega url data sources are GET-only (the OSD console proxy is POST-only).
 A size TREND needs a self-monitoring metric (planned, not built yet).
 Live sizes meanwhile:
-Stack Management -> Index Management, or `memento status` for the cluster view.
+Stack Management -> Index Management, or `velruna status` for the cluster view.
 
 After a mapping change (new fact/journal/doc fields) regenerate the field
 lists from a live cluster and push again:
 
 ```
-python3 docker/dashboards/gen_fields.py   # reads memento.conf + wallet
+python3 docker/dashboards/gen_fields.py   # reads velruna.conf + wallet
 scripts/push-dashboards.sh
 ```

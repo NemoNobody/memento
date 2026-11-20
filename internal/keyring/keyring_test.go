@@ -12,13 +12,13 @@ import (
 // Cross-platform keyring providers (macOS Keychain, Windows Credential
 // Manager) have no in-process fake here: the value is the real store, and it
 // is the only way to know the provider works at all on that platform.
-// MEMENTO_KEYRING_TEST=1 opts in (CI's macOS job sets it); a developer's local
+// VELRUNA_KEYRING_TEST=1 opts in (CI's macOS job sets it); a developer's local
 // keychain is not touched by a plain `go test ./...`.
 func TestProviderRoundTrip(t *testing.T) {
-	if os.Getenv("MEMENTO_KEYRING_TEST") == "" {
-		t.Skip("keyring integration test disabled: set MEMENTO_KEYRING_TEST=1 to run against the system keyring")
+	if os.Getenv("VELRUNA_KEYRING_TEST") == "" {
+		t.Skip("keyring integration test disabled: set VELRUNA_KEYRING_TEST=1 to run against the system keyring")
 	}
-	service := fmt.Sprintf("memento-ci-%d", os.Getpid())
+	service := fmt.Sprintf("velruna-ci-%d", os.Getpid())
 	user := "user"
 	t.Cleanup(func() { _ = Delete(service, user) })
 

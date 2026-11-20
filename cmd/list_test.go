@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NemoNobody/memento/internal/model"
+	"github.com/NemoNobody/velruna/internal/model"
 )
 
 // The summary is the store's table of contents: a one-line listing must

@@ -5,9 +5,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/NemoNobody/memento/internal/config"
-	"github.com/NemoNobody/memento/internal/model"
-	"github.com/NemoNobody/memento/internal/secretguard"
+	"github.com/NemoNobody/velruna/internal/config"
+	"github.com/NemoNobody/velruna/internal/model"
+	"github.com/NemoNobody/velruna/internal/secretguard"
 )
 
 // guardField is one user-supplied text that the secret guard inspects on a

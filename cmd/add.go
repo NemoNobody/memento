@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/NemoNobody/memento/internal/config"
-	"github.com/NemoNobody/memento/internal/model"
+	"github.com/NemoNobody/velruna/internal/config"
+	"github.com/NemoNobody/velruna/internal/model"
 
 	"github.com/spf13/cobra"
 )

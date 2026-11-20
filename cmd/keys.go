@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NemoNobody/memento/internal/client"
+	"github.com/NemoNobody/velruna/internal/client"
 	"github.com/spf13/cobra"
 )
 
@@ -18,7 +18,7 @@ var keysFlags struct {
 	status  string
 }
 
-// KeysCmd returns the `memento keys` command: key-level navigation across the
+// KeysCmd returns the `velruna keys` command: key-level navigation across the
 // store. It answers "what is under this key subtree" (prefix) and "which keys
 // mention this token" (match) without pulling fact content into the query.
 func KeysCmd() *cobra.Command {

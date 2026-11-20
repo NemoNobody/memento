@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// A set-but-empty MEMENTO_FETCH_HOSTS must not silently blank the file's
+// A set-but-empty VELRUNA_FETCH_HOSTS must not silently blank the file's
 // allowlist: an empty allowlist means "any public host", so a value like
 // "," widens the SSRF scope with nobody noticing (finding 143).
 func TestFetchHostsEnvMustNameAtLeastOneHost(t *testing.T) {
@@ -16,12 +16,12 @@ func TestFetchHostsEnvMustNameAtLeastOneHost(t *testing.T) {
 	defer restore()
 	clearEnv(t)
 
-	if err := os.WriteFile(filepath.Join(dir, "memento.conf"), []byte(`{"fetch_allow_hosts": ["keep.me"]}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "velruna.conf"), []byte(`{"fetch_allow_hosts": ["keep.me"]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("MEMENTO_FETCH_HOSTS", " , ")
+	t.Setenv("VELRUNA_FETCH_HOSTS", " , ")
 	if _, err := LoadConfig(); err == nil || !strings.Contains(err.Error(), "names no hosts") {
-		t.Errorf("set-but-empty MEMENTO_FETCH_HOSTS must be refused, got %v", err)
+		t.Errorf("set-but-empty VELRUNA_FETCH_HOSTS must be refused, got %v", err)
 	}
 }
 
@@ -34,17 +34,17 @@ func TestDocsTTLNegativeRejected(t *testing.T) {
 	defer restore()
 	clearEnv(t)
 
-	if err := os.WriteFile(filepath.Join(dir, "memento.conf"), []byte(`{"docs_ttl_days": -1}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "velruna.conf"), []byte(`{"docs_ttl_days": -1}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := LoadConfig(); err == nil || !strings.Contains(err.Error(), "docs_ttl_days") {
 		t.Errorf("negative file docs_ttl_days must be refused, got %v", err)
 	}
 
-	if err := os.WriteFile(filepath.Join(dir, "memento.conf"), []byte(`{}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "velruna.conf"), []byte(`{}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("MEMENTO_DOCS_TTL_DAYS", "-7")
+	t.Setenv("VELRUNA_DOCS_TTL_DAYS", "-7")
 	if _, err := LoadConfig(); err == nil || !strings.Contains(err.Error(), "docs_ttl_days") {
 		t.Errorf("negative env docs_ttl_days must be refused, got %v", err)
 	}

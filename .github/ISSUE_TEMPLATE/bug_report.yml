@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for reporting. memento is a small-team tool without an SLA, but a
+        Thanks for reporting. velruna is a small-team tool without an SLA, but a
         reproducible report gets fixed.
 
         Do not paste real secrets, private host names or internal URLs — the store
@@ -24,8 +24,8 @@ body:
       label: Steps to reproduce
       description: The exact command or MCP tool call, with the store shape (single node / cluster, OpenSearch version).
       placeholder: |
-        1. memento add ...
-        2. memento search ...
+        1. velruna add ...
+        2. velruna search ...
         3. observed: ...
     validations:
       required: true
@@ -33,15 +33,15 @@ body:
     id: output
     attributes:
       label: Output
-      description: Relevant output. `memento status` answers most environment questions (version, commit, index health, storage) — paste it with credentials removed.
+      description: Relevant output. `velruna status` answers most environment questions (version, commit, index health, storage) — paste it with credentials removed.
       render: text
     validations:
       required: false
   - type: input
     id: version
     attributes:
-      label: memento version
-      description: Output of `memento --version` (or the `mcp_version`/`commit` from `memento_status`).
+      label: velruna version
+      description: Output of `velruna --version` (or the `mcp_version`/`commit` from `velruna_status`).
       placeholder: "0.8.6"
     validations:
       required: true
@@ -64,5 +64,5 @@ body:
       options:
         - label: I removed secrets, private hosts and internal URLs from this report.
           required: true
-        - label: The store is reachable (`memento status` says OK) or the failure is about that.
+        - label: The store is reachable (`velruna status` says OK) or the failure is about that.
           required: false

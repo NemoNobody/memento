@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/NemoNobody/memento/internal/config"
+	"github.com/NemoNobody/velruna/internal/config"
 	"github.com/opensearch-project/opensearch-go/v4/opensearchapi"
 )
 
@@ -62,7 +62,7 @@ func storeAlreadyReconciled(cfg *config.Config) bool {
 	return loaded
 }
 
-// reconcileReplicas aligns existing memento indices with the desired count.
+// reconcileReplicas aligns existing velruna indices with the desired count.
 // Called once per process from EnsureIndex; it is best-effort by design — a
 // failed settings write (read-only store, blip) never fails the operation the
 // caller actually asked for.

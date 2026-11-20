@@ -7,7 +7,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/NemoNobody/memento/internal/client"
+	"github.com/NemoNobody/velruna/internal/client"
 )
 
 // writeLine writes a single line with a trailing newline to w.

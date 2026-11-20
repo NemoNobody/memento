@@ -2,11 +2,11 @@
 docker/os-snapshots/
 
 # Binary (the leading slash anchors this to the repo root, so a committed
-# `memento` directory further down the tree is not caught)
-/memento
+# `velruna` directory further down the tree is not caught)
+/velruna
 
 # Config (contains auth)
-memento.conf
+velruna.conf
 opensearch_password.md
 
 # Local reference copy of opensearch-go (not part of the project)

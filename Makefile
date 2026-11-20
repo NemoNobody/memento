@@ -5,11 +5,11 @@
 # real (suffix-less) number is set only when cutting a tag:
 # make release VERSION=v0.8.6. Tag builds stamp the tag name via release.yml.
 VERSION ?= 0.8.6
-# Commit stamps the exact tree into the binary (memento_status reports it).
+# Commit stamps the exact tree into the binary (velruna_status reports it).
 # `?=` + shell fallback: local builds get the live HEAD; CI can pass it explicitly.
 COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null)
-LDFLAGS := -s -w -X github.com/NemoNobody/memento/internal/version.Version=$(VERSION) -X github.com/NemoNobody/memento/internal/version.Commit=$(COMMIT)
-BIN     ?= memento
+LDFLAGS := -s -w -X github.com/NemoNobody/velruna/internal/version.Version=$(VERSION) -X github.com/NemoNobody/velruna/internal/version.Commit=$(COMMIT)
+BIN     ?= velruna
 
 CONTAINER ?= $(shell if command -v docker >/dev/null 2>&1; then echo "docker compose"; elif command -v podman-compose >/dev/null 2>&1; then echo "podman-compose"; else echo "podman compose"; fi)
 OSFILE := docker/opensearch.yml
@@ -28,13 +28,13 @@ test:
 
 # Keyring integration: a disposable session bus + gnome-keyring with a
 # throwaway HOME, so the developer's real wallet is never touched. The tests
-# are opt-in (MEMENTO_KEYRING_TEST=1) because a plain `go test` must not write
+# are opt-in (VELRUNA_KEYRING_TEST=1) because a plain `go test` must not write
 # to a live keychain; CI runs this target on Linux and the equivalent against
 # the macOS Keychain (internal/keyring).
 test-keyring:
 	@command -v dbus-run-session >/dev/null 2>&1 || { echo "test-keyring needs dbus-run-session (dbus) and gnome-keyring-daemon"; exit 1; }
 	@command -v gnome-keyring-daemon >/dev/null 2>&1 || { echo "test-keyring needs gnome-keyring-daemon (package: gnome-keyring)"; exit 1; }
-	dbus-run-session -- bash -c 'h=$$(mktemp -d); export HOME=$$h; eval "$$(echo -n memento-ci | gnome-keyring-daemon --unlock --replace --components=secrets)" >/dev/null 2>&1; MEMENTO_KEYRING_TEST=1 go test ./internal/keyringnative/ -v; rc=$$?; rm -rf "$$h"; exit $$rc'
+	dbus-run-session -- bash -c 'h=$$(mktemp -d); export HOME=$$h; eval "$$(echo -n velruna-ci | gnome-keyring-daemon --unlock --replace --components=secrets)" >/dev/null 2>&1; VELRUNA_KEYRING_TEST=1 go test ./internal/keyringnative/ -v; rc=$$?; rm -rf "$$h"; exit $$rc'
 
 vet:
 	go vet ./...
@@ -70,7 +70,7 @@ dev-opensearch-logs:
 
 # Optional OpenSearch Dashboards on top of the dev node (compose profile
 # "dashboards"): make dev-opensearch first, then this. UI on
-# http://127.0.0.1:5601 (MEMENTO_DASH_PORT to move it). The security plugin
+# http://127.0.0.1:5601 (VELRUNA_DASH_PORT to move it). The security plugin
 # is off on the dev node, so the UI opens without login. The target waits
 # for the UI to answer and then pushes the ready-made bundle (index
 # patterns, visualizations, overview dashboard) into it automatically —
@@ -78,36 +78,36 @@ dev-opensearch-logs:
 # scripts/push-dashboards.sh by hand.
 dev-opensearch-dashboards:
 	$(CONTAINER) -f $(OSFILE) --profile single --profile dashboards up -d
-	@echo "waiting for Dashboards on http://127.0.0.1:$${MEMENTO_DASH_PORT:-5601} ..."
+	@echo "waiting for Dashboards on http://127.0.0.1:$${VELRUNA_DASH_PORT:-5601} ..."
 	@ok=""; for i in $$(seq 1 60); do \
-	  if curl -sf -o /dev/null --max-time 3 "http://127.0.0.1:$${MEMENTO_DASH_PORT:-5601}/api/status"; then ok=1; break; fi; \
+	  if curl -sf -o /dev/null --max-time 3 "http://127.0.0.1:$${VELRUNA_DASH_PORT:-5601}/api/status"; then ok=1; break; fi; \
 	  sleep 3; \
 	done; \
 	if [ -z "$$ok" ]; then \
 	  echo "dashboards did not answer within ~3 minutes"; exit 1; \
 	fi; \
 	for i in $$(seq 1 10); do \
-	  if MEMENTO_OS_URL="http://127.0.0.1:$${MEMENTO_OS_PORT:-9200}" scripts/push-dashboards.sh; then ok=1; break; fi; \
+	  if VELRUNA_OS_URL="http://127.0.0.1:$${VELRUNA_OS_PORT:-9200}" scripts/push-dashboards.sh; then ok=1; break; fi; \
 	  ok=""; echo "bundle push failed (dashboards may still be initializing), retrying in 5s..."; sleep 5; \
 	done; \
 	if [ -z "$$ok" ]; then \
-	  echo "bundle push still failing; manual retry: MEMENTO_OS_URL=http://127.0.0.1:$${MEMENTO_OS_PORT:-9200} scripts/push-dashboards.sh"; exit 1; \
+	  echo "bundle push still failing; manual retry: VELRUNA_OS_URL=http://127.0.0.1:$${VELRUNA_OS_PORT:-9200} scripts/push-dashboards.sh"; exit 1; \
 	fi
 
-# 3-node cluster (topology test): memento stamps replicas automatically
+# 3-node cluster (topology test): velruna stamps replicas automatically
 # (index_replicas=-1: 0 on a lone node, 1 on a real cluster). Endpoints:
-# 127.0.0.1:9400/9401/9402. Point a config at it to smoke-test memento
+# 127.0.0.1:9400/9401/9402. Point a config at it to smoke-test velruna
 # against real shard allocation.
 dev-opensearch-cluster:
 	$(CONTAINER) -f $(OSFILE) --profile cluster up -d
 
 # single node WITH security (auth/https smoke): the image installs the
 # demo security config using the password passed on the make command
-# line — e.g. make dev-opensearch-secure MEMENTO_SECURE_DEV_PASSWORD=...
+# line — e.g. make dev-opensearch-secure VELRUNA_SECURE_DEV_PASSWORD=...
 # then connect with opensearch_url=https://127.0.0.1:9443,
 # opensearch_user=admin and insecure_skip_verify=true (demo certs).
 dev-opensearch-secure:
-	@test -n "$(MEMENTO_SECURE_DEV_PASSWORD)" || { echo "usage: make dev-opensearch-secure MEMENTO_SECURE_DEV_PASSWORD=<pw>"; exit 1; }
+	@test -n "$(VELRUNA_SECURE_DEV_PASSWORD)" || { echo "usage: make dev-opensearch-secure VELRUNA_SECURE_DEV_PASSWORD=<pw>"; exit 1; }
 	$(CONTAINER) -f $(OSFILE) --profile secure up -d
 
 # obscura: one-time installer for the opt-in render fallback (fetch_render=
@@ -127,7 +127,7 @@ obscura:
 	echo "$(OBSCURA_SHA256)  $$tmp" | sha256sum -c -; \
 	tar -xzf "$$tmp" -C $(HOME)/.local/bin obscura obscura-worker; \
 	chmod +x $(HOME)/.local/bin/obscura $(HOME)/.local/bin/obscura-worker
-	@echo "obscura $(OBSCURA_VERSION) installed into $(HOME)/.local/bin; set fetch_render=obscura (env MEMENTO_FETCH_RENDER=obscura) to enable the render fallback"
+	@echo "obscura $(OBSCURA_VERSION) installed into $(HOME)/.local/bin; set fetch_render=obscura (env VELRUNA_FETCH_RENDER=obscura) to enable the render fallback"
 
 clean:
 	rm -f $(BIN)

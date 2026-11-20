@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NemoNobody/memento/internal/config"
+	"github.com/NemoNobody/velruna/internal/config"
 )
 
 // The obscura render fallback: when a plain fetch is refused the way
@@ -100,7 +100,7 @@ func renderObscura(ctx context.Context, cfg *config.Config, normalizedURL string
 		return nil, fmt.Errorf("obscura: waiting for the render slot: %w", ctx.Err())
 	}
 
-	dir, err := os.MkdirTemp("", "memento-obscura-")
+	dir, err := os.MkdirTemp("", "velruna-obscura-")
 	if err != nil {
 		return nil, fmt.Errorf("obscura: temp dir: %w", err)
 	}
@@ -131,8 +131,8 @@ func renderObscura(ctx context.Context, cfg *config.Config, normalizedURL string
 	cctx, cancel := context.WithTimeout(ctx, time.Duration(nav+20)*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(cctx, path, args...)
-	// Scrub the environment: memento's own config (any variable naming
-	// MEMENTO or OPENSEARCH, up to and including the password) never rides
+	// Scrub the environment: velruna's own config (any variable naming
+	// VELRUNA or OPENSEARCH, up to and including the password) never rides
 	// along into the child browser; HOME is parked in the throwaway dir so
 	// no real browser profile or cache is touched. Everything else passes
 	// through so operator wrapper scripts around obscura_bin keep working.
@@ -239,7 +239,7 @@ func renderEgressProxyWith(cfg *config.Config, rawURL string, envProxy func(*htt
 // 169.254.169.254 as the requested host). Direct renders resolve the target
 // through the same blockedIP rule and refuse a non-public answer. With a
 // proxy the proxy is the egress and enforces the policy (the documented
-// model), so memento does not resolve the name locally.
+// model), so velruna does not resolve the name locally.
 //
 // The gate guards the REQUESTED URL only — obscura follows redirects on its
 // own, so a 302 to loopback or the metadata address is not re-checked here
@@ -288,19 +288,19 @@ func blockedInList(ips []net.IPAddr) (net.IP, bool) {
 }
 
 // scrubEnvForRenderer prepares the obscura child environment: everything is
-// inherited except variables naming MEMENTO or OPENSEARCH (the MCP's own
+// inherited except variables naming VELRUNA or OPENSEARCH (the MCP's own
 // config — allowlists, index names, keyring service, up to a password set
 // via env), and HOME, which is parked in the caller's throwaway dir so the
 // renderer cannot touch a real profile or cache. A prefix-free contains()
-// match is deliberate: MEMENTO_* is the documented prefix, but operators
-// also export hand-made names like MY_MEMENTO_PASS.
+// match is deliberate: VELRUNA_* is the documented prefix, but operators
+// also export hand-made names like MY_VELRUNA_PASS.
 func scrubEnvForRenderer(dir string) []string {
 	environ := os.Environ()
 	out := make([]string, 0, len(environ)+1)
 	for _, kv := range environ {
 		name, _, _ := strings.Cut(kv, "=")
 		upper := strings.ToUpper(name)
-		if strings.Contains(upper, "MEMENTO") || strings.Contains(upper, "OPENSEARCH") || name == "HOME" {
+		if strings.Contains(upper, "VELRUNA") || strings.Contains(upper, "OPENSEARCH") || name == "HOME" {
 			continue
 		}
 		out = append(out, kv)

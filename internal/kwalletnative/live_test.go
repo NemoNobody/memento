@@ -14,10 +14,10 @@ import (
 // catches a wrong appId in the D-Bus calls: kwalletd then answers folderList
 // with an empty list and every write with -1 instead of an error.
 func TestLiveKWallet(t *testing.T) {
-	if os.Getenv("MEMENTO_LIVE_KWALLET") != "1" {
-		t.Skip("set MEMENTO_LIVE_KWALLET=1 to exercise the real wallet")
+	if os.Getenv("VELRUNA_LIVE_KWALLET") != "1" {
+		t.Skip("set VELRUNA_LIVE_KWALLET=1 to exercise the real wallet")
 	}
-	const service, user, secret = "memento-live-test", "probe", "probe-secret"
+	const service, user, secret = "velruna-live-test", "probe", "probe-secret"
 
 	c, err := dial()
 	if err != nil {

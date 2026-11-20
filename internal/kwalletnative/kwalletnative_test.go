@@ -16,7 +16,7 @@ import (
 // TestWalletNameFromEnv: an explicit wallet name wins and never touches the
 // daemon (the client here has no connection at all).
 func TestWalletNameFromEnv(t *testing.T) {
-	t.Setenv("MEMENTO_KWALLET_NAME", "wallet-x")
+	t.Setenv("VELRUNA_KWALLET_NAME", "wallet-x")
 	c := &client{}
 	if got := c.walletName(context.Background()); got != "wallet-x" {
 		t.Errorf("walletName = %q, want wallet-x", got)
@@ -26,7 +26,7 @@ func TestWalletNameFromEnv(t *testing.T) {
 // TestWalletNameFromEnvTrimmed: kwalletd would treat " wallet-x" as a different,
 // brand-new wallet, so the override is trimmed.
 func TestWalletNameFromEnvTrimmed(t *testing.T) {
-	t.Setenv("MEMENTO_KWALLET_NAME", "  wallet-x\t")
+	t.Setenv("VELRUNA_KWALLET_NAME", "  wallet-x\t")
 	c := &client{}
 	if got := c.walletName(context.Background()); got != "wallet-x" {
 		t.Errorf("walletName = %q, want wallet-x", got)
@@ -137,11 +137,11 @@ func (f *fakeObj) Destination() string                      { return busName }
 func (f *fakeObj) Path() dbus.ObjectPath                    { return objPath }
 
 // withFake makes dial return a client backed by f for the duration of a test.
-// MEMENTO_KWALLET_NAME is cleared so a developer's shell cannot change which
+// VELRUNA_KWALLET_NAME is cleared so a developer's shell cannot change which
 // calls the test expects.
 func withFake(t *testing.T, f *fakeObj) {
 	t.Helper()
-	t.Setenv("MEMENTO_KWALLET_NAME", "")
+	t.Setenv("VELRUNA_KWALLET_NAME", "")
 	orig := dial
 	dial = func() (*client, error) { return &client{obj: f}, nil }
 	t.Cleanup(func() { dial = orig })

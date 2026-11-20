@@ -35,6 +35,6 @@ var ErrBackend error = errors.New("keyring: no usable backend")
 
 // Backend names the provider the next operation would use ("secret-service",
 // "kwallet-native", the macOS Keychain or Windows Credential Manager), or an
-// empty string when none is reachable. Diagnostic only: `memento creds status`
+// empty string when none is reachable. Diagnostic only: `velruna creds status`
 // prints it so a user with two possible backends knows where the entry lives.
 var Backend func() string

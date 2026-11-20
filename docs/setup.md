@@ -2,17 +2,17 @@
 
 ## Requirements
 
-- **OpenSearch** — you provide it: `memento` connects to an existing cluster and
+- **OpenSearch** — you provide it: `velruna` connects to an existing cluster and
   does not embed a store. Install and configure it per the official
   documentation (see [section 1](#1-opensearch)).
-- **Go 1.26+** — only if you build `memento` from source (`go build -o memento .`).
+- **Go 1.26+** — only if you build `velruna` from source (`go build -o velruna .`).
 
-`memento` talks to OpenSearch over HTTPS with basic auth; the tested version
+`velruna` talks to OpenSearch over HTTPS with basic auth; the tested version
 matrix is 2.19.7, 3.0.0, 3.3.2, 3.8.0 and 3.9.0 (see [section 1](#1-opensearch)).
 
 ## 1. OpenSearch
 
-`memento` needs a reachable OpenSearch — it does not embed a store and does not
+`velruna` needs a reachable OpenSearch — it does not embed a store and does not
 ship one. Install and configure it per the official documentation; that part is
 not covered here:
 
@@ -20,7 +20,7 @@ not covered here:
   — a single local node is enough to start.
 - **Configure** (security, TLS, users): <https://docs.opensearch.org/latest/>
 
-What `memento` expects:
+What `velruna` expects:
 
 | What | Value |
 |---|---|
@@ -35,7 +35,7 @@ curl -k -u admin:<your-password> https://127.0.0.1:9200
 ```
 
 If you get the cluster info JSON back, the cluster is up. Remember the admin
-password — you will put it in the `memento` config below.
+password — you will put it in the `velruna` config below.
 
 ## 2. OpenSearch in a container (dev / single-machine recipe)
 
@@ -44,7 +44,7 @@ password — you will put it in the `memento` config below.
 onboarding path and the dev cycle recipe:
 
 ```
-make dev-opensearch          # up; data in the named volume memento-os-data
+make dev-opensearch          # up; data in the named volume velruna-os-data
 make dev-opensearch-logs     # tail the node logs
 make dev-opensearch-down     # stop; the named volume keeps the data
 ```
@@ -53,9 +53,9 @@ The node binds **127.0.0.1:9200 only** and runs with the security plugin off —
 this is the dev rule: plaintext credentials are acceptable only while the node
 cannot be reached off this machine. Snapshots land in `docker/os-snapshots/`
 on the host (`path.repo` is configured). If this machine already runs
-OpenSearch on 9200, start the dev node beside it: `MEMENTO_OS_PORT=9299 make dev-opensearch`.
+OpenSearch on 9200, start the dev node beside it: `VELRUNA_OS_PORT=9299 make dev-opensearch`.
 
-For a dev node, `memento.conf` uses dummy credentials with plaintext allowed
+For a dev node, `velruna.conf` uses dummy credentials with plaintext allowed
 (the file is `chmod 600`, the node is localhost-only):
 
 ```json
@@ -68,35 +68,35 @@ For a dev node, `memento.conf` uses dummy credentials with plaintext allowed
 ```
 
 Containers love to lose data: before `make dev-opensearch-down` take a
-snapshot (repository `memento-fs` → `/snapshots` → `docker/os-snapshots/`) —
+snapshot (repository `velruna-fs` → `/snapshots` → `docker/os-snapshots/`) —
 see [backup.md](backup.md) §5.
 
 ### Dashboards (optional UI)
 
 `make dev-opensearch-dashboards` adds OpenSearch Dashboards on top of the dev
 node (compose profile `dashboards`, so the plain `up`/`down` cycle does not
-pull it in). UI: http://127.0.0.1:5601 (`MEMENTO_DASH_PORT=5699` to move it);
+pull it in). UI: http://127.0.0.1:5601 (`VELRUNA_DASH_PORT=5699` to move it);
 with the security plugin off it opens without login. The target then waits
 for the UI and pushes the ready-made bundle into it automatically — after it
-finishes, open http://127.0.0.1:5601 and look for "Memento — store overview".
+finishes, open http://127.0.0.1:5601 and look for "Velruna — store overview".
 
 The bundle ships in `docker/dashboards/objects.ndjson`: index patterns for
-`memento`, `memento-history-*` and `memento-docs`, KPI tiles, activity
+`velruna`, `velruna-history-*` and `velruna-docs`, KPI tiles, activity
 trends and journal panels, and the dashboard itself. To install it against
 your own cluster, run the same script by hand:
 
 ```
 scripts/push-dashboards.sh            # defaults to https://127.0.0.1:9200
-MEMENTO_OS_URL=http://db-host:9200 scripts/push-dashboards.sh
+VELRUNA_OS_URL=http://db-host:9200 scripts/push-dashboards.sh
 ```
 
-Re-runnable: objects carry stable `memento-store-*` ids and are overwritten
+Re-runnable: objects carry stable `velruna-store-*` ids and are overwritten
 in place (they go straight into the global Dashboards tenant storage — see
 docker/dashboards/README.md). Against a secured cluster the script resolves
-the password wallet-first: `memento creds get` — the same
+the password wallet-first: `velruna creds get` — the same
 keyring entry the MCP server uses (point at a config outside the cwd with
-`MEMENTO_CONF=...`). Overrides: `MEMENTO_OS_USER`/`OPENSEARCH_PASSWORD` env;
-headless fallback (no session bus): a `~/.config/memento/dashboards.env`
+`VELRUNA_CONF=...`). Overrides: `VELRUNA_OS_USER`/`OPENSEARCH_PASSWORD` env;
+headless fallback (no session bus): a `~/.config/velruna/dashboards.env`
 file (mode 600):
 
 ```sh
@@ -109,48 +109,48 @@ DASHBOARDS_PASSWORD=...
 Two more compose profiles for smoke-testing what a single dev node cannot
 show (all loopback-bound, all torn down by `make dev-opensearch-down`):
 
-- `make dev-opensearch-cluster` — three-node cluster (`memento-cluster`),
+- `make dev-opensearch-cluster` — three-node cluster (`velruna-cluster`),
   endpoints `http://127.0.0.1:9400/9401/9402`. With more than one data node
   the client automatically stamps `number_of_replicas: 1` on the facts index,
   the docs index and the journal template, so shard/replica placement — and
-  survival of one node — can be watched with `_cat/shards/memento*`. Point a
+  survival of one node — can be watched with `_cat/shards/velruna*`. Point a
   config file at any endpoint (`opensearch_url`); the client talks to the
   cluster through one node like any client does.
-- `make dev-opensearch-secure MEMENTO_SECURE_DEV_PASSWORD=<pw>` — single node
+- `make dev-opensearch-secure VELRUNA_SECURE_DEV_PASSWORD=<pw>` — single node
   WITH the security plugin (demo config and self-signed certs installed by
   the image entry point). Endpoint `https://127.0.0.1:9443`; connect with
   `opensearch_user: "admin"`, the password via keyring/env, and
   `insecure_skip_verify: true` for the demo certs.
 
-## 3. Configure memento
+## 3. Configure velruna
 
 Config lookup order:
 
-1. `--conf <path>` flag (`memento mcp` and `memento status` only)
-2. `MEMENTO_CONF` environment variable
-3. `./memento.conf` (current directory)
-4. `memento.conf` next to the binary
-5. `~/.memento.conf`
+1. `--conf <path>` flag (`velruna mcp` and `velruna status` only)
+2. `VELRUNA_CONF` environment variable
+3. `./velruna.conf` (current directory)
+4. `velruna.conf` next to the binary
+5. `~/.velruna.conf`
 
-Create `~/.memento.conf`:
+Create `~/.velruna.conf`:
 
 ```json
 {
   "opensearch_url": "https://127.0.0.1:9200",
   "opensearch_user": "admin",
   "insecure_skip_verify": true,
-  "index_name": "memento",
+  "index_name": "velruna",
   "history_index_period": "month",
   "allow_plaintext": false
 }
 ```
 
 ```bash
-chmod 600 ~/.memento.conf
+chmod 600 ~/.velruna.conf
 ```
 
 - Leave `opensearch_password` out of the file: store the password in the OS
-  keyring with `memento creds set` (run it in a terminal — it prompts for the
+  keyring with `velruna creds set` (run it in a terminal — it prompts for the
   password; the password is never an argument, so it never ends up in shell
   history). Resolution order: `OPENSEARCH_PASSWORD` env → keyring → file.
   A plaintext password in the file is only read when `allow_plaintext: true`
@@ -163,17 +163,17 @@ chmod 600 ~/.memento.conf
   | Desktop | Provider | Notes |
   |---|---|---|
   | GNOME | gnome-keyring | login keyring, alias normally present; covered by the keyring tests |
-  | KDE Plasma with a KWallet-backed Secret Service | kwalletd / ksecretd | KWallet registers the Secret Service name (collection labelled with the wallet name, default alias when present). Works since KF 6.13 when kwalletd is started by PAM and the name is free (verified on Debian 13); `ksecretd` (KF 6.14+) is the separately packaged variant. If the collection is missing, the one labelled by `MEMENTO_KEYRING_COLLECTION` (default `kdewallet`, the KDE wallet name) is used |
+  | KDE Plasma with a KWallet-backed Secret Service | kwalletd / ksecretd | KWallet registers the Secret Service name (collection labelled with the wallet name, default alias when present). Works since KF 6.13 when kwalletd is started by PAM and the name is free (verified on Debian 13); `ksecretd` (KF 6.14+) is the separately packaged variant. If the collection is missing, the one labelled by `VELRUNA_KEYRING_COLLECTION` (default `kdewallet`, the KDE wallet name) is used |
   | KDE Plasma with no Secret Service provider on the bus | KWallet-native (`org.kde.kwalletd6`) | used when the name has no owner: wallet `kdewallet`, folder = service, key = account |
   | XFCE / LXQt / MATE / Cinnamon / tiling WMs | whatever Secret Service is installed (usually gnome-keyring) | works if the daemon runs and the keyring is unlocked |
   | KeePassXC (Secret Service integration) | KeePassXC | entries are namespaced by service + username, same as everywhere |
-  | headless / container / ssh | none | no bus, no keyring: export `OPENSEARCH_PASSWORD`; `memento status` reports `password_from: env` and the keyring error |
+  | headless / container / ssh | none | no bus, no keyring: export `OPENSEARCH_PASSWORD`; `velruna status` reports `password_from: env` and the keyring error |
   | Windows | Windows Credential Manager (zalando/go-keyring) | exercised by the `windows` CI job, but its locked-store and dismissed-prompt policy is unexplored: for a reproducible setup use `OPENSEARCH_PASSWORD` or a config file only the user can read |
 
   A renamed KDE wallet is addressed by label on the Secret Service path:
-  `export MEMENTO_KEYRING_COLLECTION=<wallet label>` (kwalletrc "Default Wallet").
+  `export VELRUNA_KEYRING_COLLECTION=<wallet label>` (kwalletrc "Default Wallet").
   The KWallet-native path asks kwalletd for its default wallet and accepts an
-  override too: `MEMENTO_KWALLET_NAME=<wallet>` (trimmed; empty keeps the
+  override too: `VELRUNA_KWALLET_NAME=<wallet>` (trimmed; empty keeps the
   kwalletd default).
 
   The provider is detected with a read-only probe of the bus owner, and an
@@ -188,7 +188,7 @@ chmod 600 ~/.memento.conf
   - **KDE where `org.freedesktop.secrets` is owned by gnome-keyring** (a
     typical Debian KDE install pulls it in as a dependency): its login
     collection gets an ephemeral master key, so `creds set` "succeeds" and the
-    password is gone after the next logout. That provider is refused; memento
+    password is gone after the next logout. That provider is refused; velruna
     falls back to the KWallet-native backend when it is available, otherwise
     `creds set` fails with a hint.
   - **No owner on the bus** (no daemon, no provider): the keyring is refused
@@ -204,14 +204,14 @@ chmod 600 ~/.memento.conf
     refused).
   - **Credentials do not migrate.** An entry stored through Secret Service and
     one stored in KWallet are different records: after switching backends (or
-    installing ksecretd) run `memento creds set` once more.
+    installing ksecretd) run `velruna creds set` once more.
 
   When the backend refuses, nothing is written: use `OPENSEARCH_PASSWORD`
   (env) or a plaintext `opensearch_password` in a mode-0600 config with
-  `allow_plaintext: true`. `memento creds status` names the refusal reason.
+  `allow_plaintext: true`. `velruna creds status` names the refusal reason.
 
 - The index is created automatically on first use — you do not have to create it.
-- Newly created memento indices stamp a replica count from `index_replicas`
+- Newly created velruna indices stamp a replica count from `index_replicas`
   (config, default `-1` = auto): a single data node gets `0` (a replica there
   could never assign — permanent yellow), two or more data nodes get `1`, so
   losing one node loses neither facts nor journal history. Set an explicit
@@ -226,19 +226,19 @@ chmod 600 ~/.memento.conf
 - The history journal is created automatically on the first accepted write: an
   ingest pipeline `<index>-journal-ts` (stamps entries with the server clock),
   a composable index template `<index>-journal`, and dated journal indices
-  `<index>-history-<period-date>` (e.g. `memento-history-2026.11`) — monthly
+  `<index>-history-<period-date>` (e.g. `velruna-history-2026.11`) — monthly
   by default (`history_index_period`:
   `day`/`week`/`month`/`quarter`/`year`). The store user needs privileges to
   create the template, the pipeline, and `<index>-history-*` indices.
 - Journal entries are append-only and never pruned automatically (write
   forever): disk usage grows with the write rate, not with fact count.
   Dated indices keep old periods cheap to inspect, delete, or snapshot;
-  `memento prune` is a manual admin tool for one key.
+  `velruna prune` is a manual admin tool for one key.
 - Every write is stamped with authorship labels (`author`, `author_source`,
   `model`, `host`, `session`; later writes move `updated_by`). The label comes
   from the store's security plugin (`/_security/authinfo`) when it is
   available, otherwise from the config keys `author`/`model`/`host`/`session`
-  (env `MEMENTO_AUTHOR`/`MEMENTO_MODEL`/`MEMENTO_HOST`/`MEMENTO_SESSION`),
+  (env `VELRUNA_AUTHOR`/`VELRUNA_MODEL`/`VELRUNA_HOST`/`VELRUNA_SESSION`),
   otherwise the OS user. This is self-reported audit metadata — see
   [docs/how-it-works.md](how-it-works.md).
 - Long facts stay skimmable: a value over `summary_min_len` characters
@@ -246,48 +246,48 @@ chmod 600 ~/.memento.conf
   under `summary_max_len` (default 400). Set `summary_min_len: 0` to disable
   the requirement, `summary_max_len: 0` to leave the summary uncapped.
 - Block extraction is tunable: `fetch_block_chars` (env
-  `MEMENTO_FETCH_BLOCK_CHARS`, default 8000, range 1000..64000) is the target
+  `VELRUNA_FETCH_BLOCK_CHARS`, default 8000, range 1000..64000) is the target
   size of one stored block — a longer section is split at a line boundary, not
-  cut; `fetch_doc_chars` (env `MEMENTO_FETCH_DOC_CHARS`, default 100000, `0` =
+  cut; `fetch_doc_chars` (env `VELRUNA_FETCH_DOC_CHARS`, default 100000, `0` =
   the whole document) is the storage budget for one document — when it runs
   out, whole blocks are dropped from the end and the answer says so
   (`truncated`, `chars_stored`/`chars_total`). The physical ceiling stays
   `fetch_max_bytes` (default 2 MB): a bigger page is refused, not trimmed.
-- Upgrading from a pre-journal release: run `memento migrate-history` (prints
+- Upgrading from a pre-journal release: run `velruna migrate-history` (prints
   the plan; `--yes` writes) to move the old in-doc history arrays into the
   journal. Unmigrated facts keep working; their history just stays in-doc.
-- A malformed config file fails loudly — `memento` prints which file it tried to
+- A malformed config file fails loudly — `velruna` prints which file it tried to
   read.
 
-Environment variables override the file (the complete list; `memento status`
+Environment variables override the file (the complete list; `velruna status`
 lists the active ones by name, never by value):
 `OPENSEARCH_URL`, `OPENSEARCH_USER`, `OPENSEARCH_PASSWORD`,
-`OPENSEARCH_INSECURE_SKIP_VERIFY`, `MEMENTO_CONF`, `MEMENTO_INDEX`,
-`MEMENTO_HISTORY_PERIOD`, `MEMENTO_HISTORY_LIMIT`, `MEMENTO_SUMMARY_MIN_LEN`,
-`MEMENTO_SUMMARY_MAX_LEN`, `MEMENTO_SECRET_GUARD`,
-`MEMENTO_ALLOW_PLAINTEXT`,
-`MEMENTO_AUTHOR`, `MEMENTO_MODEL`, `MEMENTO_HOST`, `MEMENTO_SESSION`,
-`MEMENTO_DOCS_INDEX`, `MEMENTO_DOCS_TTL_DAYS`, `MEMENTO_FETCH_TIMEOUT`,
-`MEMENTO_FETCH_MAX_BYTES`, `MEMENTO_FETCH_BLOCK_CHARS`,
-`MEMENTO_FETCH_DOC_CHARS`, `MEMENTO_FETCH_HOSTS`, `MEMENTO_FETCH_USER_AGENT`,
-`MEMENTO_FETCH_PROXY_URL`, `MEMENTO_FETCH_PROXY_FALLBACK`,
-`MEMENTO_FETCH_RESPECT_ROBOTS`, `MEMENTO_FETCH_ALLOW_PRIVATE`,
-`MEMENTO_FETCH_RENDER`, `MEMENTO_FETCH_OBSCURA_PATH`,
-`MEMENTO_FETCH_OBSCURA_STEALTH`,
-`MEMENTO_LOCAL_REPO_ROOTS`, `MEMENTO_REPO_SCAN_DEPTH`.
+`OPENSEARCH_INSECURE_SKIP_VERIFY`, `VELRUNA_CONF`, `VELRUNA_INDEX`,
+`VELRUNA_HISTORY_PERIOD`, `VELRUNA_HISTORY_LIMIT`, `VELRUNA_SUMMARY_MIN_LEN`,
+`VELRUNA_SUMMARY_MAX_LEN`, `VELRUNA_SECRET_GUARD`,
+`VELRUNA_ALLOW_PLAINTEXT`,
+`VELRUNA_AUTHOR`, `VELRUNA_MODEL`, `VELRUNA_HOST`, `VELRUNA_SESSION`,
+`VELRUNA_DOCS_INDEX`, `VELRUNA_DOCS_TTL_DAYS`, `VELRUNA_FETCH_TIMEOUT`,
+`VELRUNA_FETCH_MAX_BYTES`, `VELRUNA_FETCH_BLOCK_CHARS`,
+`VELRUNA_FETCH_DOC_CHARS`, `VELRUNA_FETCH_HOSTS`, `VELRUNA_FETCH_USER_AGENT`,
+`VELRUNA_FETCH_PROXY_URL`, `VELRUNA_FETCH_PROXY_FALLBACK`,
+`VELRUNA_FETCH_RESPECT_ROBOTS`, `VELRUNA_FETCH_ALLOW_PRIVATE`,
+`VELRUNA_FETCH_RENDER`, `VELRUNA_FETCH_OBSCURA_PATH`,
+`VELRUNA_FETCH_OBSCURA_STEALTH`,
+`VELRUNA_LOCAL_REPO_ROOTS`, `VELRUNA_REPO_SCAN_DEPTH`.
 
 ## 4. Verify
 
 ```
-memento status
+velruna status
 ```
 
 Expected output:
 
 ```
-config file: /home/you/.memento.conf
+config file: /home/you/.velruna.conf
 url: https://127.0.0.1:9200
-index: memento
+index: velruna
 history_index_period: month
 history_limit: 20
 secret_guard: reject
@@ -300,7 +300,7 @@ status: OK
 ```
 
 `password:` shows where the password resolves from (`env`, `keyring`, `file`,
-`none`); the value is never printed. `memento creds status` shows the same
+`none`); the value is never printed. `velruna creds status` shows the same
 plus the keyring state. `author:` is the label stamped on new writes and
 which chain link produced it (`security` / `config` / `os`); it is absent
 when nothing resolves.
@@ -312,23 +312,23 @@ it is listed under `env overrides` — check that first when a setting looks wro
 ## 5. First fact
 
 ```
-memento add global:demo:hello "hello world" behavior
-memento get global:demo:hello
-memento search hello
-memento list global
-memento obsolete global:demo:hello "demo removed"
+velruna add global:demo:hello "hello world" behavior
+velruna get global:demo:hello
+velruna search hello
+velruna list global
+velruna obsolete global:demo:hello "demo removed"
 ```
 
 ## 6. curl recipes (raw OpenSearch)
 
-`memento` never prints the password, so raw curl takes it from one of the
+`velruna` never prints the password, so raw curl takes it from one of the
 sources:
 
 - **Keyring** (desktop; needs the tools package, e.g. `libsecret-tools` on
   Debian/Ubuntu):
 
   ```bash
-  curl -k -u admin:"$(secret-tool lookup service memento username 127.0.0.1:9200)" \
+  curl -k -u admin:"$(secret-tool lookup service velruna username 127.0.0.1:9200)" \
        https://127.0.0.1:9200
   ```
 
@@ -339,7 +339,7 @@ sources:
 
 ## 7. Least-privilege store user (security plugin)
 
-With the security plugin enabled, `memento` does not need an admin account.
+With the security plugin enabled, `velruna` does not need an admin account.
 Create a dedicated user whose role can do exactly what the app does — and
 **cannot delete the facts index**. The names below use the default index
 names; if you set `index_name`/`docs_index_name`, adjust the patterns
@@ -350,16 +350,16 @@ What the app touches, permission by permission:
 | Target | Why | Actions |
 |---|---|---|
 | cluster | version probe, `status` health/disk, journal infra | `cluster:monitor/main`, `cluster:monitor/health`, `cluster:monitor/nodes/stats`, `manage_index_templates`, `manage_ingest_pipelines` |
-| `memento` (facts) | index checks, read, search, create/update docs, replica-count realignment | `read`, `search`, `indices:admin/get`, `indices:data/write/index`, `indices:data/write/update`, `indices:admin/create`, `indices:admin/settings/update` (drift correction of `number_of_replicas`) — **no delete** (the app never deletes facts; `obsolete` is a status, and index loss must be an admin decision) |
-| `memento-history-*` | append entries, read journal, `prune`, pin the ts pipeline | `read`, `search`, `indices:admin/get`, `indices:data/write/*` (append-only by app design; `delete` here exists only for the manual `prune`), `indices:admin/create` (a new period index is auto-created on the first append of that period), `indices:admin/settings/update` (the app pins the ts pipeline on journal indices) |
-| `memento-docs` | fetch cache: store, read, search, re-tag snapshots, replica-count realignment | `read`, `search`, `indices:admin/get`, `indices:data/write/index`, `indices:data/write/update` (re-tagging a stored snapshot with a different project), `indices:admin/create`, `indices:admin/settings/update` |
+| `velruna` (facts) | index checks, read, search, create/update docs, replica-count realignment | `read`, `search`, `indices:admin/get`, `indices:data/write/index`, `indices:data/write/update`, `indices:admin/create`, `indices:admin/settings/update` (drift correction of `number_of_replicas`) — **no delete** (the app never deletes facts; `obsolete` is a status, and index loss must be an admin decision) |
+| `velruna-history-*` | append entries, read journal, `prune`, pin the ts pipeline | `read`, `search`, `indices:admin/get`, `indices:data/write/*` (append-only by app design; `delete` here exists only for the manual `prune`), `indices:admin/create` (a new period index is auto-created on the first append of that period), `indices:admin/settings/update` (the app pins the ts pipeline on journal indices) |
+| `velruna-docs` | fetch cache: store, read, search, re-tag snapshots, replica-count realignment | `read`, `search`, `indices:admin/get`, `indices:data/write/index`, `indices:data/write/update` (re-tagging a stored snapshot with a different project), `indices:admin/create`, `indices:admin/settings/update` |
 
 `indices:admin/get` covers the index-existence HEAD the app runs on every
-start and the `GET /<index>` settings read behind `memento status`.
+start and the `GET /<index>` settings read behind `velruna status`.
 
 An older role may be missing a later permission: journal appends also need
 `indices:admin/create` and `indices:admin/settings/update` on
-`memento-history-*` (without them appends fail loudly with 403), the docs index
+`velruna-history-*` (without them appends fail loudly with 403), the docs index
 needs `indices:data/write/update` for re-tagging, and since 0.8.0 the facts
 and docs patterns also need `indices:admin/settings/update`: the client realigns
 replica counts at startup, and without the permission that realignment is
@@ -374,7 +374,7 @@ Create it as admin (passwords via prompts so they never land in shell history):
 ```bash
 read -rs OS_ADMIN_PW
 
-cat > /tmp/memento_role.json << 'EOF'
+cat > /tmp/velruna_role.json << 'EOF'
 {
   "cluster_permissions": [
     "cluster:monitor/main",
@@ -384,16 +384,16 @@ cat > /tmp/memento_role.json << 'EOF'
     "manage_ingest_pipelines"
   ],
   "index_permissions": [
-    {"index_patterns": ["memento"],
+    {"index_patterns": ["velruna"],
      "allowed_actions": ["read", "search", "indices:admin/get",
                          "indices:data/write/index",
                          "indices:data/write/update", "indices:admin/create",
                          "indices:admin/settings/update"]},
-    {"index_patterns": ["memento-history-*"],
+    {"index_patterns": ["velruna-history-*"],
      "allowed_actions": ["read", "search", "indices:admin/get",
                          "indices:data/write/*",
                          "indices:admin/create", "indices:admin/settings/update"]},
-    {"index_patterns": ["memento-docs"],
+    {"index_patterns": ["velruna-docs"],
      "allowed_actions": ["read", "search", "indices:admin/get",
                          "indices:data/write/index",
                          "indices:data/write/update",
@@ -404,35 +404,35 @@ cat > /tmp/memento_role.json << 'EOF'
 EOF
 
 curl -k -u "admin:$OS_ADMIN_PW" -X PUT \
-  https://127.0.0.1:9200/_plugins/_security/api/roles/memento_app \
-  -H 'Content-Type: application/json' -d @/tmp/memento_role.json
+  https://127.0.0.1:9200/_plugins/_security/api/roles/velruna_app \
+  -H 'Content-Type: application/json' -d @/tmp/velruna_role.json
 
 # the app user (the prompt reads the password; the value stays in your shell).
 # jq builds valid JSON no matter what the password contains (", \, $...).
-read -rs MEMENTO_USER_PW
+read -rs VELRUNA_USER_PW
 curl -k -u "admin:$OS_ADMIN_PW" -X PUT \
-  https://127.0.0.1:9200/_plugins/_security/api/internalusers/memento \
+  https://127.0.0.1:9200/_plugins/_security/api/internalusers/velruna \
   -H 'Content-Type: application/json' \
-  -d "$(jq -n --arg pw "$MEMENTO_USER_PW" '{password: $pw}')"
+  -d "$(jq -n --arg pw "$VELRUNA_USER_PW" '{password: $pw}')"
 
 # map the role to the user
 curl -k -u "admin:$OS_ADMIN_PW" -X PUT \
-  https://127.0.0.1:9200/_plugins/_security/api/rolesmapping/memento_app \
-  -H 'Content-Type: application/json' -d '{"users":["memento"]}'
-rm -f /tmp/memento_role.json
+  https://127.0.0.1:9200/_plugins/_security/api/rolesmapping/velruna_app \
+  -H 'Content-Type: application/json' -d '{"users":["velruna"]}'
+rm -f /tmp/velruna_role.json
 ```
 
-Then set `opensearch_user: "memento"` in the config and run `memento creds set`
-(and `memento status`). Two side effects worth knowing:
+Then set `opensearch_user: "velruna"` in the config and run `velruna creds set`
+(and `velruna status`). Two side effects worth knowing:
 
-- Writes now stamp `author: "memento" (security)` — the name the *server*
+- Writes now stamp `author: "velruna" (security)` — the name the *server*
   authenticated, which is exactly the point of a shared store.
 - The journal template stamps `index.number_of_replicas: 0` on a single-node
   cluster: journal indices stay green (replicas would hang unassigned — the
   classic single-node trap). On a multi-node store the app raises it to `1`
   automatically, and it re-aligns both the template and existing indices at
   every client start — so hand-edits to the stamped replica count do not
-  survive; pin the count with `index_replicas` in the memento config instead.
+  survive; pin the count with `index_replicas` in the velruna config instead.
 
 ### Shared store: several users, project separation
 
@@ -441,8 +441,8 @@ reasons the store is a server, not an embedded file. Two ways to draw the
 boundaries, composable:
 
 - **Separate index namespaces (simplest, hard isolation).** Give each team its
-  own config: `index_name: team-a-memento`, `docs_index_name:
-  team-a-memento-docs`. Everything the app manages — journal indices,
+  own config: `index_name: team-a-velruna`, `docs_index_name:
+  team-a-velruna-docs`. Everything the app manages — journal indices,
   templates, pipelines — derives from the prefix, so namespaces never touch.
   One least-privilege role per namespace (swap the patterns in the recipe
   above). Cross-team visibility then requires an explicit shared project or a
@@ -452,12 +452,12 @@ boundaries, composable:
   query on the `project` field:
 
   ```json
-  {"index_patterns": ["memento"],
+  {"index_patterns": ["velruna"],
    "dls": "{\"term\":{\"project\":\"team-a\"}}",
    "allowed_actions": ["read", "search", "indices:admin/get",
                        "indices:data/write/index",
                        "indices:data/write/update", "indices:admin/create"]},
-  {"index_patterns": ["memento-history-*"],
+  {"index_patterns": ["velruna-history-*"],
    "dls": "{\"term\":{\"project\":\"team-a\"}}",
    "allowed_actions": ["read", "search", "indices:admin/get",
                        "indices:data/write/*", "indices:admin/create"]}
@@ -511,7 +511,7 @@ make obscura
 installs `obscura` and `obscura-worker` into `~/.local/bin` (keep them in
 one directory) from the sha256-pinned 0.2.6 stealth release; put the
 directory on PATH or point `fetch_obscura_path` at the binary. Enable with
-`fetch_render: "obscura"` (env `MEMENTO_FETCH_RENDER`); a typo in the value
+`fetch_render: "obscura"` (env `VELRUNA_FETCH_RENDER`); a typo in the value
 is a startup error, never a silent plain fetch. Rendered docs are marked
 `via: obscura`; rendered pages flow through the same robots gate, guard and
 TTL pipeline as plain fetches. v1 limitation: `final_url` of a rendered doc
@@ -547,7 +547,7 @@ opt-in for self-hosted targets). With a proxy the proxy is the egress and
 enforces the policy — run the renderer behind a proxy if you need the
 allowlist and the internal-address rule enforced on the render route: obscura
 follows redirects on its own, and a DNS-rebinding window between the
-pre-check and obscura's dial cannot be closed from memento's side.
+pre-check and obscura's dial cannot be closed from velruna's side.
 Stored docs also drop image references aimed at internal hosts (the
 drop sets `truncated`; `fetch_allow_private` keeps them for self-hosted
 documentation).
@@ -560,12 +560,12 @@ to a different host is checked by the allowlist/SSRF wall, not by a re-read
 robots file); response bodies are treated as UTF-8 — a server declaring
 another charset is not transcoded (mojibake is visible in the stored text;
 the renderer or a manual re-encode are the cures), and the renderer's
-environment drops every variable naming MEMENTO or OPENSEARCH (the MCP's
+environment drops every variable naming VELRUNA or OPENSEARCH (the MCP's
 own config, up to a password set via env) plus a sandboxed HOME; the rest
 of the operator environment passes through, so wrapper scripts around
 `obscura_bin` keep working.
 
-Time budget of one `memento fetch` / `memento_fetch_doc`, worst case: the
+Time budget of one `velruna fetch` / `velruna_fetch_doc`, worst case: the
 polite 429 retry (a ~2 s pause + one more request) plus the proxy fallback
 (one more `fetch_timeout`) plus the render fallback (the nav timeout + 20 s
 of process headroom) — a few times `fetch_timeout` plus the render window.
@@ -579,10 +579,10 @@ set their own tool timeouts).
 | `connection refused` | OpenSearch is not running (or not at the configured URL) — check your cluster and `opensearch_url` |
 | `x509: certificate signed by unknown authority` | Self-signed certificate: set `insecure_skip_verify: true` |
 | `401 Unauthorized` | Wrong user/password (env, keyring, or config file) — or the security plugin was never initialized |
-| `password: none` and a REFUSED hint | The file has a plaintext password while `allow_plaintext` is off: run `memento creds set`, then delete `opensearch_password` from the file |
+| `password: none` and a REFUSED hint | The file has a plaintext password while `allow_plaintext` is off: run `velruna creds set`, then delete `opensearch_password` from the file |
 | Timeout after 30s | Host unreachable (firewall, wrong host/port) — requests time out after 30s |
-| `status` shows an unexpected config file | The lookup chain picked another file — pass `--conf <path>`, or set `MEMENTO_CONF` |
-| `search` misses a fact by its key | Search covers `value`, `notes` and `summary`, not keys — use `memento get <key>` |
+| `status` shows an unexpected config file | The lookup chain picked another file — pass `--conf <path>`, or set `VELRUNA_CONF` |
+| `search` misses a fact by its key | Search covers `value`, `notes` and `summary`, not keys — use `velruna get <key>` |
 | render error reports both reasons, obscura side: `navigation exceeded ... deadline` | The renderer ran but could not load the page: raise `fetch_timeout_seconds` (it is the nav budget) or the site hangs the render route |
 | a doc with `via: obscura` whose body is a block page ("Access denied", IP-Block/Country-Block) | The site gates on egress IP/country, not the fingerprint — the renderer passes the TLS wall only: configure `fetch_proxy_url` (the renderer inherits it; a proxy is a new IP), then re-fetch with `--refresh` (the block page stays cached until TTL) |
 
@@ -593,12 +593,12 @@ set their own tool timeouts).
   in the config: `reject` (default), `ask` (confirm a false positive with
   `--allow-secret` / `confirm_secret: true`), `allow` (scanning off). A real
   credential refuses the write; a heuristic hit (a long hash, base64) is
-  replaced with `[memento-redacted:pattern]` and listed in `redactions`, so the
+  replaced with `[velruna-redacted:pattern]` and listed in `redactions`, so the
   stored value ends up shorter than what was written. Detection is best effort:
   the rule is still the first line of defense.
-- The OpenSearch password lives in the OS keyring (`memento creds set`), not in
+- The OpenSearch password lives in the OS keyring (`velruna creds set`), not in
   the config file: `allow_plaintext` is off by default, so a file password is
-  refused. `memento creds status` shows the source; neither command prints the
+  refused. `velruna creds status` shows the source; neither command prints the
   value.
 - Change the default `admin` password before the cluster is reachable by anyone else.
 - The facts index is the accumulated memory — back it up (snapshot API; recipe:
@@ -606,6 +606,6 @@ set their own tool timeouts).
 - `insecure_skip_verify: true` disables certificate verification. TLS is
   verified by default; enable this only for a local node with the demo
   certificate, never for anything shared.
-- On a cluster with the security plugin, run `memento` as a least-privilege
+- On a cluster with the security plugin, run `velruna` as a least-privilege
   user (§7): the app cannot delete the facts index, and every write carries
   the authorship label the server authenticated.

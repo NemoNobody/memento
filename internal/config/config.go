@@ -12,7 +12,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/NemoNobody/memento/internal/keyring"
+	"github.com/NemoNobody/velruna/internal/keyring"
 )
 
 // Secret guard levels: how the write paths treat credential-like text.
@@ -51,7 +51,7 @@ const (
 // fingerprint. The value is config (fetch_user_agent), never personal.
 const DefaultFetchUserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
 
-// Config holds configuration for the memento CLI.
+// Config holds configuration for the velruna CLI.
 type Config struct {
 	OpenSearchURL      string `json:"opensearch_url"`
 	OpenSearchUser     string `json:"opensearch_user"`
@@ -74,7 +74,7 @@ type Config struct {
 	HistoryIndexPeriod string `json:"history_index_period"`
 
 	// SecretGuard is one of GuardReject / GuardAsk / GuardAllow. It applies to
-	// every write path (CLI add/obsolete, MCP memento_add/memento_obsolete).
+	// every write path (CLI add/obsolete, MCP velruna_add/velruna_obsolete).
 	SecretGuard string `json:"secret_guard"`
 
 	// DocsIndexName is the index that holds fetched documents. It is separate
@@ -82,7 +82,7 @@ type Config struct {
 	// a small trusted set that searches cheaply.
 	DocsIndexName string `json:"docs_index_name"`
 
-	// IndexReplicas is the replica count stamped on every memento index the
+	// IndexReplicas is the replica count stamped on every velruna index the
 	// client creates (facts, docs, journal template). -1 (default) = auto:
 	// a lone data node gets 0 (a replica there could never assign: permanent
 	// yellow), a real cluster gets 1 so one node going down loses neither
@@ -172,7 +172,7 @@ type Config struct {
 
 	// AllowPlaintext makes the plaintext config-file password a valid
 	// credential source. Off by default: the password lives in the OS keyring
-	// (memento creds set) or the environment (containers, headless); a file
+	// (velruna creds set) or the environment (containers, headless); a file
 	// carrying a credential is the legacy shape, opt in explicitly.
 	AllowPlaintext bool `json:"allow_plaintext"`
 
@@ -217,7 +217,7 @@ type Config struct {
 
 // KeyringService is the service name under which OpenSearch credentials live
 // in the OS keyring; the account is the host[:port] of the effective URL.
-const KeyringService = "memento"
+const KeyringService = "velruna"
 
 // DefaultConfig returns the default configuration.
 func DefaultConfig() *Config {
@@ -229,11 +229,11 @@ func DefaultConfig() *Config {
 		// transit a MITM-able channel. Self-signed dev clusters (the common
 		// local case) set insecure_skip_verify explicitly.
 		InsecureSkipVerify:  false,
-		IndexName:           "memento",
+		IndexName:           "velruna",
 		HistoryLimit:        20,
 		HistoryIndexPeriod:  PeriodMonth,
 		SecretGuard:         GuardReject,
-		DocsIndexName:       "memento-docs",
+		DocsIndexName:       "velruna-docs",
 		IndexReplicas:       -1,
 		FetchTimeoutSeconds: 30,
 		FetchMaxBytes:       2_000_000,
@@ -270,30 +270,30 @@ func LoadConfig() (*Config, error) {
 // variables always override values from the file.
 //
 // The default lookup chain (see FindConfigPath) is:
-//  1. MEMENTO_CONF env var (explicit path)
-//  2. memento.conf in the current working directory
-//  3. memento.conf next to the executable
-//  4. ~/.memento.conf
+//  1. VELRUNA_CONF env var (explicit path)
+//  2. velruna.conf in the current working directory
+//  3. velruna.conf next to the executable
+//  4. ~/.velruna.conf
 //
 // Env vars override the file: OPENSEARCH_URL, OPENSEARCH_USER,
-// OPENSEARCH_PASSWORD, OPENSEARCH_INSECURE_SKIP_VERIFY, MEMENTO_INDEX,
-// MEMENTO_HISTORY_LIMIT, MEMENTO_HISTORY_PERIOD, MEMENTO_SUMMARY_MIN_LEN,
-// MEMENTO_SUMMARY_MAX_LEN, MEMENTO_SECRET_GUARD, MEMENTO_ALLOW_PLAINTEXT,
-// MEMENTO_AUTHOR, MEMENTO_MODEL, MEMENTO_HOST, MEMENTO_SESSION,
-// MEMENTO_DOCS_INDEX, MEMENTO_FETCH_TIMEOUT, MEMENTO_FETCH_MAX_BYTES,
-// MEMENTO_FETCH_BLOCK_CHARS, MEMENTO_FETCH_DOC_CHARS,
-// MEMENTO_DOCS_TTL_DAYS, MEMENTO_FETCH_HOSTS (comma-separated),
-// MEMENTO_FETCH_USER_AGENT, MEMENTO_FETCH_PROXY_URL,
-// MEMENTO_FETCH_PROXY_FALLBACK, MEMENTO_FETCH_RESPECT_ROBOTS,
-// MEMENTO_FETCH_ALLOW_PRIVATE, MEMENTO_FETCH_RENDER,
-// MEMENTO_FETCH_OBSCURA_PATH, MEMENTO_FETCH_OBSCURA_STEALTH,
-// MEMENTO_LOCAL_REPO_ROOTS (comma-separated), MEMENTO_REPO_SCAN_DEPTH.
+// OPENSEARCH_PASSWORD, OPENSEARCH_INSECURE_SKIP_VERIFY, VELRUNA_INDEX,
+// VELRUNA_HISTORY_LIMIT, VELRUNA_HISTORY_PERIOD, VELRUNA_SUMMARY_MIN_LEN,
+// VELRUNA_SUMMARY_MAX_LEN, VELRUNA_SECRET_GUARD, VELRUNA_ALLOW_PLAINTEXT,
+// VELRUNA_AUTHOR, VELRUNA_MODEL, VELRUNA_HOST, VELRUNA_SESSION,
+// VELRUNA_DOCS_INDEX, VELRUNA_FETCH_TIMEOUT, VELRUNA_FETCH_MAX_BYTES,
+// VELRUNA_FETCH_BLOCK_CHARS, VELRUNA_FETCH_DOC_CHARS,
+// VELRUNA_DOCS_TTL_DAYS, VELRUNA_FETCH_HOSTS (comma-separated),
+// VELRUNA_FETCH_USER_AGENT, VELRUNA_FETCH_PROXY_URL,
+// VELRUNA_FETCH_PROXY_FALLBACK, VELRUNA_FETCH_RESPECT_ROBOTS,
+// VELRUNA_FETCH_ALLOW_PRIVATE, VELRUNA_FETCH_RENDER,
+// VELRUNA_FETCH_OBSCURA_PATH, VELRUNA_FETCH_OBSCURA_STEALTH,
+// VELRUNA_LOCAL_REPO_ROOTS (comma-separated), VELRUNA_REPO_SCAN_DEPTH.
 func LoadConfigFrom(explicitPath string) (*Config, error) {
 	return loadConfig(explicitPath, FindConfigPath)
 }
 
 // LoadConfigNoCWD loads the config ignoring the working-directory entry
-// (see FindConfigPathNoCWD). This is what `memento mcp` uses when no
+// (see FindConfigPathNoCWD). This is what `velruna mcp` uses when no
 // explicit --conf was given.
 func LoadConfigNoCWD() (*Config, error) {
 	return loadConfig("", FindConfigPathNoCWD)
@@ -326,186 +326,186 @@ func loadConfig(explicitPath string, finder func() string) (*Config, error) {
 		}
 		cfg.InsecureSkipVerify = b
 	}
-	if idx := os.Getenv("MEMENTO_INDEX"); idx != "" {
+	if idx := os.Getenv("VELRUNA_INDEX"); idx != "" {
 		cfg.IndexName = idx
 	}
-	if v := os.Getenv("MEMENTO_HISTORY_LIMIT"); v != "" {
+	if v := os.Getenv("VELRUNA_HISTORY_LIMIT"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
-			return nil, fmt.Errorf("MEMENTO_HISTORY_LIMIT: %w", err)
+			return nil, fmt.Errorf("VELRUNA_HISTORY_LIMIT: %w", err)
 		}
 		cfg.HistoryLimit = n
 	}
-	if v := os.Getenv("MEMENTO_HISTORY_PERIOD"); v != "" {
+	if v := os.Getenv("VELRUNA_HISTORY_PERIOD"); v != "" {
 		p, err := normalizePeriod(v)
 		if err != nil {
-			return nil, fmt.Errorf("MEMENTO_HISTORY_PERIOD: %w", err)
+			return nil, fmt.Errorf("VELRUNA_HISTORY_PERIOD: %w", err)
 		}
 		cfg.HistoryIndexPeriod = p
 	}
-	if v := os.Getenv("MEMENTO_SECRET_GUARD"); v != "" {
+	if v := os.Getenv("VELRUNA_SECRET_GUARD"); v != "" {
 		g, err := normalizeGuard(v)
 		if err != nil {
-			return nil, fmt.Errorf("MEMENTO_SECRET_GUARD: %w", err)
+			return nil, fmt.Errorf("VELRUNA_SECRET_GUARD: %w", err)
 		}
 		cfg.SecretGuard = g
 	}
-	if v := os.Getenv("MEMENTO_ALLOW_PLAINTEXT"); v != "" {
+	if v := os.Getenv("VELRUNA_ALLOW_PLAINTEXT"); v != "" {
 		b, err := strconv.ParseBool(v)
 		if err != nil {
-			return nil, fmt.Errorf("MEMENTO_ALLOW_PLAINTEXT: %w", err)
+			return nil, fmt.Errorf("VELRUNA_ALLOW_PLAINTEXT: %w", err)
 		}
 		cfg.AllowPlaintext = b
 	}
-	if v := os.Getenv("MEMENTO_AUTHOR"); v != "" {
+	if v := os.Getenv("VELRUNA_AUTHOR"); v != "" {
 		a, err := NormalizeLabel(v)
 		if err != nil {
-			return nil, fmt.Errorf("MEMENTO_AUTHOR: %w", err)
+			return nil, fmt.Errorf("VELRUNA_AUTHOR: %w", err)
 		}
 		cfg.Author = a
 	}
-	if v := os.Getenv("MEMENTO_MODEL"); v != "" {
+	if v := os.Getenv("VELRUNA_MODEL"); v != "" {
 		m, err := NormalizeLabel(v)
 		if err != nil {
-			return nil, fmt.Errorf("MEMENTO_MODEL: %w", err)
+			return nil, fmt.Errorf("VELRUNA_MODEL: %w", err)
 		}
 		cfg.Model = m
 	}
-	if v := os.Getenv("MEMENTO_HOST"); v != "" {
+	if v := os.Getenv("VELRUNA_HOST"); v != "" {
 		h, err := NormalizeLabel(v)
 		if err != nil {
-			return nil, fmt.Errorf("MEMENTO_HOST: %w", err)
+			return nil, fmt.Errorf("VELRUNA_HOST: %w", err)
 		}
 		cfg.Host = h
 	}
-	if v := os.Getenv("MEMENTO_SESSION"); v != "" {
+	if v := os.Getenv("VELRUNA_SESSION"); v != "" {
 		s, err := NormalizeLabel(v)
 		if err != nil {
-			return nil, fmt.Errorf("MEMENTO_SESSION: %w", err)
+			return nil, fmt.Errorf("VELRUNA_SESSION: %w", err)
 		}
 		cfg.Session = s
 	}
-	if v := os.Getenv("MEMENTO_SUMMARY_MIN_LEN"); v != "" {
+	if v := os.Getenv("VELRUNA_SUMMARY_MIN_LEN"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
-			return nil, fmt.Errorf("MEMENTO_SUMMARY_MIN_LEN: %w", err)
+			return nil, fmt.Errorf("VELRUNA_SUMMARY_MIN_LEN: %w", err)
 		}
 		// Same bound as the file path: a negative min would silently disable
 		// the summary requirement (the check is "> 0"), a negative cap the cap.
 		if n < 0 {
-			return nil, fmt.Errorf("MEMENTO_SUMMARY_MIN_LEN: must be >= 0, got %d", n)
+			return nil, fmt.Errorf("VELRUNA_SUMMARY_MIN_LEN: must be >= 0, got %d", n)
 		}
 		cfg.SummaryMinLen = n
 	}
-	if v := os.Getenv("MEMENTO_SUMMARY_MAX_LEN"); v != "" {
+	if v := os.Getenv("VELRUNA_SUMMARY_MAX_LEN"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
-			return nil, fmt.Errorf("MEMENTO_SUMMARY_MAX_LEN: %w", err)
+			return nil, fmt.Errorf("VELRUNA_SUMMARY_MAX_LEN: %w", err)
 		}
 		if n < 0 {
-			return nil, fmt.Errorf("MEMENTO_SUMMARY_MAX_LEN: must be >= 0, got %d", n)
+			return nil, fmt.Errorf("VELRUNA_SUMMARY_MAX_LEN: must be >= 0, got %d", n)
 		}
 		cfg.SummaryMaxLen = n
 	}
-	if v := os.Getenv("MEMENTO_DOCS_INDEX"); v != "" {
+	if v := os.Getenv("VELRUNA_DOCS_INDEX"); v != "" {
 		cfg.DocsIndexName = v
 	}
-	if v := os.Getenv("MEMENTO_FETCH_TIMEOUT"); v != "" {
+	if v := os.Getenv("VELRUNA_FETCH_TIMEOUT"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
-			return nil, fmt.Errorf("MEMENTO_FETCH_TIMEOUT: %w", err)
+			return nil, fmt.Errorf("VELRUNA_FETCH_TIMEOUT: %w", err)
 		}
 		cfg.FetchTimeoutSeconds = n
 	}
-	if v := os.Getenv("MEMENTO_FETCH_MAX_BYTES"); v != "" {
+	if v := os.Getenv("VELRUNA_FETCH_MAX_BYTES"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
-			return nil, fmt.Errorf("MEMENTO_FETCH_MAX_BYTES: %w", err)
+			return nil, fmt.Errorf("VELRUNA_FETCH_MAX_BYTES: %w", err)
 		}
 		cfg.FetchMaxBytes = n
 	}
-	if v := os.Getenv("MEMENTO_FETCH_BLOCK_CHARS"); v != "" {
+	if v := os.Getenv("VELRUNA_FETCH_BLOCK_CHARS"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
-			return nil, fmt.Errorf("MEMENTO_FETCH_BLOCK_CHARS: %w", err)
+			return nil, fmt.Errorf("VELRUNA_FETCH_BLOCK_CHARS: %w", err)
 		}
 		cfg.FetchBlockChars = n
 	}
-	if v := os.Getenv("MEMENTO_FETCH_DOC_CHARS"); v != "" {
+	if v := os.Getenv("VELRUNA_FETCH_DOC_CHARS"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
-			return nil, fmt.Errorf("MEMENTO_FETCH_DOC_CHARS: %w", err)
+			return nil, fmt.Errorf("VELRUNA_FETCH_DOC_CHARS: %w", err)
 		}
 		cfg.FetchDocChars = n
 	}
-	if v := os.Getenv("MEMENTO_DOCS_TTL_DAYS"); v != "" {
+	if v := os.Getenv("VELRUNA_DOCS_TTL_DAYS"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
-			return nil, fmt.Errorf("MEMENTO_DOCS_TTL_DAYS: %w", err)
+			return nil, fmt.Errorf("VELRUNA_DOCS_TTL_DAYS: %w", err)
 		}
 		cfg.DocsTTLDays = n
 	}
-	if v := os.Getenv("MEMENTO_FETCH_HOSTS"); v != "" {
+	if v := os.Getenv("VELRUNA_FETCH_HOSTS"); v != "" {
 		hosts := splitHosts(v)
 		// A set-but-empty value (e.g. ",") must not silently delete the
 		// file's allowlist: an empty allowlist means "any public host", so
 		// the SSRF scope would widen without anyone noticing.
 		if len(hosts) == 0 {
-			return nil, fmt.Errorf("MEMENTO_FETCH_HOSTS is set but names no hosts: separate them with commas, or unset the variable to keep the config file's fetch_allow_hosts")
+			return nil, fmt.Errorf("VELRUNA_FETCH_HOSTS is set but names no hosts: separate them with commas, or unset the variable to keep the config file's fetch_allow_hosts")
 		}
 		cfg.FetchAllowHosts = hosts
 	}
-	if v := os.Getenv("MEMENTO_FETCH_USER_AGENT"); v != "" {
+	if v := os.Getenv("VELRUNA_FETCH_USER_AGENT"); v != "" {
 		cfg.FetchUserAgent = v
 	}
-	if v := os.Getenv("MEMENTO_FETCH_RENDER"); v != "" {
+	if v := os.Getenv("VELRUNA_FETCH_RENDER"); v != "" {
 		r, err := normalizeRender(v)
 		if err != nil {
-			return nil, fmt.Errorf("MEMENTO_FETCH_RENDER: %w", err)
+			return nil, fmt.Errorf("VELRUNA_FETCH_RENDER: %w", err)
 		}
 		cfg.FetchRender = r
 	}
-	if v := os.Getenv("MEMENTO_FETCH_OBSCURA_PATH"); v != "" {
+	if v := os.Getenv("VELRUNA_FETCH_OBSCURA_PATH"); v != "" {
 		cfg.FetchObscuraPath = v
 	}
-	if v := os.Getenv("MEMENTO_FETCH_OBSCURA_STEALTH"); v != "" {
+	if v := os.Getenv("VELRUNA_FETCH_OBSCURA_STEALTH"); v != "" {
 		b, err := strconv.ParseBool(v)
 		if err != nil {
-			return nil, fmt.Errorf("MEMENTO_FETCH_OBSCURA_STEALTH: %w", err)
+			return nil, fmt.Errorf("VELRUNA_FETCH_OBSCURA_STEALTH: %w", err)
 		}
 		cfg.FetchObscuraStealth = b
 	}
-	if v := os.Getenv("MEMENTO_FETCH_RESPECT_ROBOTS"); v != "" {
+	if v := os.Getenv("VELRUNA_FETCH_RESPECT_ROBOTS"); v != "" {
 		b, err := strconv.ParseBool(v)
 		if err != nil {
-			return nil, fmt.Errorf("MEMENTO_FETCH_RESPECT_ROBOTS: %w", err)
+			return nil, fmt.Errorf("VELRUNA_FETCH_RESPECT_ROBOTS: %w", err)
 		}
 		cfg.FetchRespectRobots = b
 	}
-	if v := os.Getenv("MEMENTO_FETCH_PROXY_URL"); v != "" {
+	if v := os.Getenv("VELRUNA_FETCH_PROXY_URL"); v != "" {
 		cfg.FetchProxyURL = v
 	}
-	if v := os.Getenv("MEMENTO_FETCH_PROXY_FALLBACK"); v != "" {
+	if v := os.Getenv("VELRUNA_FETCH_PROXY_FALLBACK"); v != "" {
 		b, err := strconv.ParseBool(v)
 		if err != nil {
-			return nil, fmt.Errorf("MEMENTO_FETCH_PROXY_FALLBACK: %w", err)
+			return nil, fmt.Errorf("VELRUNA_FETCH_PROXY_FALLBACK: %w", err)
 		}
 		cfg.FetchProxyFallback = b
 	}
-	if v := os.Getenv("MEMENTO_FETCH_ALLOW_PRIVATE"); v != "" {
+	if v := os.Getenv("VELRUNA_FETCH_ALLOW_PRIVATE"); v != "" {
 		b, err := strconv.ParseBool(v)
 		if err != nil {
-			return nil, fmt.Errorf("MEMENTO_FETCH_ALLOW_PRIVATE: %w", err)
+			return nil, fmt.Errorf("VELRUNA_FETCH_ALLOW_PRIVATE: %w", err)
 		}
 		cfg.FetchAllowPrivate = b
 	}
-	if v := os.Getenv("MEMENTO_LOCAL_REPO_ROOTS"); v != "" {
+	if v := os.Getenv("VELRUNA_LOCAL_REPO_ROOTS"); v != "" {
 		cfg.LocalRepoRoots = splitCSV(v)
 	}
-	if v := os.Getenv("MEMENTO_REPO_SCAN_DEPTH"); v != "" {
+	if v := os.Getenv("VELRUNA_REPO_SCAN_DEPTH"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
-			return nil, fmt.Errorf("MEMENTO_REPO_SCAN_DEPTH: %w", err)
+			return nil, fmt.Errorf("VELRUNA_REPO_SCAN_DEPTH: %w", err)
 		}
 		cfg.LocalRepoScanDepth = n
 	}
@@ -638,7 +638,7 @@ func resolvePassword(cfg *Config) {
 }
 
 // KeyringAccount derives the keyring account (host[:port]) from the URL so
-// one keyring serves several OpenSearch deployments. Exported so `memento
+// one keyring serves several OpenSearch deployments. Exported so `velruna
 // creds` and the config loader cannot drift apart on which entry a password
 // lives under. An unparseable URL that carries user info is never echoed
 // back as the account name (creds prints "account=..."); config load
@@ -942,37 +942,37 @@ func NormalizeLabel(v string) (string, error) {
 
 // FindConfigPath returns the path of the config file to use, or "" when none
 // exists. Lookup order:
-//  1. MEMENTO_CONF env var (explicit path)
-//  2. memento.conf in the current working directory
-//  3. memento.conf next to the executable
-//  4. ~/.memento.conf
+//  1. VELRUNA_CONF env var (explicit path)
+//  2. velruna.conf in the current working directory
+//  3. velruna.conf next to the executable
+//  4. ~/.velruna.conf
 func FindConfigPath() string { return findConfigPath(true) }
 
 // FindConfigPathNoCWD is FindConfigPath without the working-directory entry.
-// It exists for `memento mcp`: the MCP server runs with the cwd of whatever
-// project the editor opened, and a cloned repository's memento.conf must
+// It exists for `velruna mcp`: the MCP server runs with the cwd of whatever
+// project the editor opened, and a cloned repository's velruna.conf must
 // never hijack the store endpoint (that file decides where the user's
 // credentials and facts are sent).
 func FindConfigPathNoCWD() string { return findConfigPath(false) }
 
 func findConfigPath(includeCWD bool) string {
-	if p := os.Getenv("MEMENTO_CONF"); p != "" {
+	if p := os.Getenv("VELRUNA_CONF"); p != "" {
 		return p
 	}
 	if includeCWD {
-		if _, err := os.Stat("memento.conf"); err == nil {
-			return "memento.conf"
+		if _, err := os.Stat("velruna.conf"); err == nil {
+			return "velruna.conf"
 		}
 	}
 	if execPath, err := os.Executable(); err == nil {
-		p := filepath.Join(filepath.Dir(execPath), "memento.conf")
+		p := filepath.Join(filepath.Dir(execPath), "velruna.conf")
 		if _, err := os.Stat(p); err == nil {
 			return p
 		}
 	}
 	home, err := os.UserHomeDir()
 	if err == nil {
-		p := filepath.Join(home, ".memento.conf")
+		p := filepath.Join(home, ".velruna.conf")
 		if _, err := os.Stat(p); err == nil {
 			return p
 		}

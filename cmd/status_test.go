@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/NemoNobody/memento/internal/client"
-	"github.com/NemoNobody/memento/internal/config"
+	"github.com/NemoNobody/velruna/internal/client"
+	"github.com/NemoNobody/velruna/internal/config"
 )
 
 func TestStorageNote(t *testing.T) {
@@ -62,8 +62,8 @@ func TestPrintStorage_IndexAbsent(t *testing.T) {
 // permWarning is the config-file hygiene flag: a plaintext password in a
 // file group/others can read is an invitation.
 func TestPermWarning(t *testing.T) {
-	got := permWarning(&config.Config{FileHasPlaintext: true, FilePerm: 0o644}, "memento.conf")
-	if !strings.Contains(got, "chmod 600 memento.conf") || !strings.Contains(got, "644") {
+	got := permWarning(&config.Config{FileHasPlaintext: true, FilePerm: 0o644}, "velruna.conf")
+	if !strings.Contains(got, "chmod 600 velruna.conf") || !strings.Contains(got, "644") {
 		t.Errorf("permWarning = %q, want the chmod hint with the mode", got)
 	}
 	if got := permWarning(&config.Config{FileHasPlaintext: true, FilePerm: 0o600}, "x"); got != "" {
@@ -79,7 +79,7 @@ func TestPermWarning(t *testing.T) {
 func TestPrintStatusFetchLimits(t *testing.T) {
 	rep := statusReport{
 		URL:                "http://localhost:9200",
-		Index:              "memento",
+		Index:              "velruna",
 		HistoryIndexPeriod: "day",
 		SecretGuard:        config.GuardReject,
 		PasswordFrom:       "env",
@@ -140,16 +140,16 @@ func TestStatusEnvVarsMatchConfig(t *testing.T) {
 
 // TestCollectStatusConfigChain is the credential-hijack boundary: the MCP
 // server resolves config through the NoCWD chain, so a cloned repo's
-// memento.conf in the editor's cwd cannot move the report (and its
+// velruna.conf in the editor's cwd cannot move the report (and its
 // credentialed request) to an attacker endpoint. The CLI keeps the cwd entry.
 func TestCollectStatusConfigChain(t *testing.T) {
 	dir := t.TempDir()
 	hijack := `{"opensearch_url":"https://hijack.invalid:9999","opensearch_user":"u","opensearch_password":"p","allow_plaintext":true}`
-	if err := os.WriteFile(filepath.Join(dir, "memento.conf"), []byte(hijack), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "velruna.conf"), []byte(hijack), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Chdir(dir)
-	t.Setenv("MEMENTO_CONF", "")
+	t.Setenv("VELRUNA_CONF", "")
 	t.Setenv("OPENSEARCH_URL", "")
 	t.Setenv("OPENSEARCH_PASSWORD", "")
 	// Both names: os.UserHomeDir reads USERPROFILE on Windows.
@@ -157,7 +157,7 @@ func TestCollectStatusConfigChain(t *testing.T) {
 	t.Setenv("USERPROFILE", dir)
 
 	rep := collectStatus(context.Background(), "", true)
-	if rep.ConfigFile == "memento.conf" || rep.ConfigFile == filepath.Join(dir, "memento.conf") {
+	if rep.ConfigFile == "velruna.conf" || rep.ConfigFile == filepath.Join(dir, "velruna.conf") {
 		t.Errorf("MCP status read the cwd config: %q", rep.ConfigFile)
 	}
 	if strings.Contains(rep.URL, "9999") {
@@ -166,8 +166,8 @@ func TestCollectStatusConfigChain(t *testing.T) {
 
 	// The CLI chain is allowed to pick the cwd file (explicit local use).
 	rep = collectStatus(context.Background(), "", false)
-	if rep.ConfigFile != "memento.conf" {
-		t.Errorf("CLI status: config_file = %q, want the cwd memento.conf", rep.ConfigFile)
+	if rep.ConfigFile != "velruna.conf" {
+		t.Errorf("CLI status: config_file = %q, want the cwd velruna.conf", rep.ConfigFile)
 	}
 	if !strings.Contains(rep.URL, "9999") {
 		t.Errorf("CLI status URL = %q, want the cwd file's endpoint", rep.URL)

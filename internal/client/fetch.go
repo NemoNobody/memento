@@ -18,8 +18,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/NemoNobody/memento/internal/config"
-	"github.com/NemoNobody/memento/internal/model"
+	"github.com/NemoNobody/velruna/internal/config"
+	"github.com/NemoNobody/velruna/internal/model"
 )
 
 // maxFetchRedirects bounds redirect hops: more than a handful is a loop or a
@@ -203,7 +203,7 @@ func blockedHost(host string) bool {
 // guardedDialContext refuses connections whose resolved address is not public
 // (SSRF/DNS-rebinding defense). It is installed on direct (non-proxied)
 // transports only: with a proxy configured, the user chose where the traffic
-// exits, and the proxy — not memento — enforces the target policy.
+// exits, and the proxy — not velruna — enforces the target policy.
 //
 // allowAddr (nil = nothing allowed) exempts specific dial addresses: the env
 // proxy's resolved IPs, so a loopback HTTP_PROXY keeps working while every
@@ -488,7 +488,7 @@ func fetchHTTP(ctx context.Context, cfg *config.Config, normalizedURL string, co
 		req.Header.Set("Accept", "text/html, text/plain;q=0.8, text/markdown;q=0.6")
 		ua := cfg.FetchUserAgent
 		if ua == "" {
-			ua = "memento/fetch (+OpenSearch docs cache)"
+			ua = "velruna/fetch (+OpenSearch docs cache)"
 		}
 		req.Header.Set("User-Agent", ua)
 		// Conditional revalidation: the cached copy's validators ask the
@@ -636,7 +636,7 @@ type fetchOutcome struct {
 
 // FetchPage downloads a page and extracts it into a full Doc snapshot
 // (without storing it). The raw HTML is carried for storage only: no read
-// path of memento serves it (context economy — raw pages are curl's job).
+// path of velruna serves it (context economy — raw pages are curl's job).
 //
 // content-type routing: HTML goes through section+image extraction,
 // text/plain and markdown are chunked directly; anything else (PDF, images,

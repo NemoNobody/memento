@@ -12,8 +12,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/NemoNobody/memento/internal/config"
-	"github.com/NemoNobody/memento/internal/model"
+	"github.com/NemoNobody/velruna/internal/config"
+	"github.com/NemoNobody/velruna/internal/model"
 
 	"github.com/google/uuid"
 	"github.com/opensearch-project/opensearch-go/v4"
@@ -85,7 +85,7 @@ func NewClient(cfg *config.Config) (*Client, error) {
 			return nil, fmt.Errorf("OpenSearch password is empty: the keyring is unavailable (%s). "+
 				"Fix the keyring backend, export OPENSEARCH_PASSWORD, or set allow_plaintext=true in the config", cfg.KeyringError)
 		}
-		return nil, fmt.Errorf("OpenSearch password is empty: store one with 'memento creds set' " +
+		return nil, fmt.Errorf("OpenSearch password is empty: store one with 'velruna creds set' " +
 			"(OS keyring), export OPENSEARCH_PASSWORD, or set allow_plaintext=true in the config")
 	}
 	api, err := opensearchapi.NewClient(opensearchapi.Config{
@@ -119,7 +119,7 @@ func isNotFound(err error) bool {
 }
 
 // isAlreadyExists reports OpenSearch's "the index you are creating is already
-// there". Two memento processes on a fresh cluster (two Zed windows, CLI +
+// there". Two velruna processes on a fresh cluster (two Zed windows, CLI +
 // MCP) both pass the HEAD check and race to create the index; the loser must
 // treat the collision as success, not as a tool failure.
 func isAlreadyExists(err error) bool {
@@ -221,7 +221,7 @@ func isClusterBlock(err error) bool {
 }
 
 // wrapWriteError turns a cluster-side block into an actionable message: the
-// caller must know this is not a memento bug and that retrying will not help. The
+// caller must know this is not a velruna bug and that retrying will not help. The
 // guidance comes first and the raw cluster error last, because the raw dump is
 // long (type + reason + root_cause) and would otherwise bury the one thing the
 // reader needs to act on.
@@ -251,7 +251,7 @@ func (c *Client) URL() string { return c.cfg.OpenSearchURL }
 // IndexName returns the configured index name.
 func (c *Client) IndexName() string { return c.cfg.IndexName }
 
-// indexReplicas is the replica count stamped on newly created memento
+// indexReplicas is the replica count stamped on newly created velruna
 // indices. With the auto default (config -1) the cluster is asked once per
 // process: a single data node can never assign a copy (the index would sit
 // yellow forever), so it gets 0; a real cluster gets 1 so losing a node
@@ -367,7 +367,7 @@ func (c *Client) EnsureIndex(ctx context.Context) error {
 //
 // The in-doc history array is no longer maintained: the journal index is the
 // history. Facts created before the journal keep their array until
-// 'memento migrate-history' moves it.
+// 'velruna migrate-history' moves it.
 const addCorrectionScript = `
 ctx._source.value = params.value;
 // The guard audit describes the value: a clean correction clears the rows of
@@ -1543,7 +1543,7 @@ func patchUpdateParams(entry *model.JournalEntry, valueChanged bool, seqNo, prim
 
 // pruneHistoryScript keeps only the newest params.keep history entries in
 // the legacy in-doc array. It serves facts that predate the journal until
-// 'memento migrate-history' moves their array; journal pruning is
+// 'velruna migrate-history' moves their array; journal pruning is
 // PruneJournal (the journal index is the history for journal-era facts).
 const pruneHistoryScript = `
 def h = ctx._source.history;

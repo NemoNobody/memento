@@ -40,13 +40,13 @@ func cleanupCLITrimBuild() {
 func cliTrimBinary(t *testing.T) string {
 	t.Helper()
 	cliTrimBuildOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "memento-cli-trim-")
+		dir, err := os.MkdirTemp("", "velruna-cli-trim-")
 		if err != nil {
 			cliTrimBuildErr = err
 			return
 		}
 		cliTrimBuildDir = dir
-		exe := filepath.Join(dir, "memento-under-test")
+		exe := filepath.Join(dir, "velruna-under-test")
 		build := exec.Command("go", "build", "-o", exe, ".")
 		build.Dir = projectRoot(t)
 		if out, err := build.CombinedOutput(); err != nil {
@@ -54,9 +54,9 @@ func cliTrimBinary(t *testing.T) string {
 		}
 	})
 	if cliTrimBuildErr != nil {
-		t.Fatalf("build memento for CLI test: %v", cliTrimBuildErr)
+		t.Fatalf("build velruna for CLI test: %v", cliTrimBuildErr)
 	}
-	return filepath.Join(cliTrimBuildDir, "memento-under-test")
+	return filepath.Join(cliTrimBuildDir, "velruna-under-test")
 }
 
 // trimFacts is the source served for document GETs when found=true: a minimal
@@ -99,15 +99,15 @@ func startTrimFake(t *testing.T, found bool) (*httptest.Server, func() []recorde
 			w.WriteHeader(http.StatusOK)
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/_doc/"):
 			if found {
-				_, _ = w.Write([]byte(`{"_index":"memento","_id":"k","_version":1,"found":true,"_source":` + trimFacts + `}`))
+				_, _ = w.Write([]byte(`{"_index":"velruna","_id":"k","_version":1,"found":true,"_source":` + trimFacts + `}`))
 				return
 			}
 			w.WriteHeader(http.StatusNotFound)
-			_, _ = w.Write([]byte(`{"error":{"type":"document_missing_exception","reason":"Document with id k not found.","index":"memento"},"status":404}`))
+			_, _ = w.Write([]byte(`{"error":{"type":"document_missing_exception","reason":"Document with id k not found.","index":"velruna"},"status":404}`))
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/_search"):
 			_, _ = w.Write([]byte(`{"took":1,"timed_out":false,"hits":{"total":{"value":0},"max_score":null,"hits":[]}}`))
 		default:
-			_, _ = w.Write([]byte(`{"_index":"memento","_id":"k","_version":1,"result":"ok","_shards":{"total":1,"successful":1,"failed":0}}`))
+			_, _ = w.Write([]byte(`{"_index":"velruna","_id":"k","_version":1,"result":"ok","_shards":{"total":1,"successful":1,"failed":0}}`))
 		}
 	}))
 	t.Cleanup(fake.Close)
@@ -133,12 +133,12 @@ func runCLISubprocessEnv(t *testing.T, fakeURL string, extraEnv []string, args .
 	dir := t.TempDir()
 	cmd := exec.Command(exe, args...)
 	cmd.Dir = dir
-	// t.TempDir HOME: no user ~/.memento.conf; MEMENTO_CONF="" blocks the
+	// t.TempDir HOME: no user ~/.velruna.conf; VELRUNA_CONF="" blocks the
 	// cwd config; the env endpoint/password pin the fake exactly.
 	env := childEnv(append([]string{
 		"HOME=" + dir,
-		"MEMENTO_CONF=",
-		"MEMENTO_ALLOW_PLAINTEXT=1",
+		"VELRUNA_CONF=",
+		"VELRUNA_ALLOW_PLAINTEXT=1",
 		"OPENSEARCH_URL=" + fakeURL,
 		"OPENSEARCH_USER=testuser",
 		"OPENSEARCH_PASSWORD=testpw",
@@ -194,7 +194,7 @@ func TestCLITrimParity(t *testing.T) {
 			args:    []string{"get", " k "},
 			found:   true,
 			wantOut: []string{`key: "k"`},
-			wantReq: []string{"/memento/_doc/k"},
+			wantReq: []string{"/velruna/_doc/k"},
 			deny:    []string{"%20k", "k%20", `" k "`},
 		},
 		{
@@ -264,7 +264,7 @@ func TestCLITrimParity(t *testing.T) {
 			name:    "fetch-project",
 			prefix:  "/page",
 			args:    []string{"--project", " proj "},
-			env:     []string{"MEMENTO_FETCH_ALLOW_PRIVATE=1"},
+			env:     []string{"VELRUNA_FETCH_ALLOW_PRIVATE=1"},
 			found:   true,
 			wantReq: []string{`"project":"proj"`},
 			deny:    []string{`"project":" proj "`},
@@ -351,7 +351,7 @@ func TestCLIStatusAndLimitShapeBeforeStore(t *testing.T) {
 		{[]string{"docs", "  "}, nil},
 		// history_limit=0 without --keep is a config-state refusal: it needs
 		// no store, so it must not pay for an index ensure.
-		{[]string{"prune", "k"}, []string{"MEMENTO_HISTORY_LIMIT=0"}},
+		{[]string{"prune", "k"}, []string{"VELRUNA_HISTORY_LIMIT=0"}},
 	}
 	for _, tc := range cases {
 		out, code := runCLISubprocessEnv(t, fake.URL, tc.env, tc.args...)
@@ -400,9 +400,9 @@ func TestCLITrimTabsNewline(t *testing.T) {
 
 	var sawGet bool
 	for _, c := range calls() {
-		if c.method == http.MethodGet && strings.HasPrefix(c.path, "/memento/_doc/") {
+		if c.method == http.MethodGet && strings.HasPrefix(c.path, "/velruna/_doc/") {
 			sawGet = true
-			if got := strings.TrimPrefix(c.path, "/memento/_doc/"); got != "k" {
+			if got := strings.TrimPrefix(c.path, "/velruna/_doc/"); got != "k" {
 				t.Errorf("document id path = %q, want %q", got, "k")
 			}
 		}

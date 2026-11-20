@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Raw stdio smoke test for `memento mcp` — independent of the Go SDK.
+"""Raw stdio smoke test for `velruna mcp` — independent of the Go SDK.
 
 Acts like a spec-compliant client: sends one JSON-RPC message, awaits its
 response, keeping stdin open in between (newline-delimited JSON, MCP stdio
@@ -18,7 +18,7 @@ import sys
 import time
 from pathlib import Path
 
-BIN = str(Path(__file__).resolve().parent.parent / "memento")
+BIN = str(Path(__file__).resolve().parent.parent / "velruna")
 KEY = "demo:api:port"
 
 
@@ -77,7 +77,7 @@ def main() -> int:
         print("tools/list  :", brief(tools))
 
     send({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
-        "name": "memento_get", "arguments": {"key": KEY},
+        "name": "velruna_get", "arguments": {"key": KEY},
     }})
     print("tools/call  :", brief(await_msg(20), 800))
 

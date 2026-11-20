@@ -1,6 +1,6 @@
-# memento
+# velruna
 
-[![CI](https://github.com/NemoNobody/memento/actions/workflows/ci.yml/badge.svg)](https://github.com/NemoNobody/memento/actions/workflows/ci.yml)
+[![CI](https://github.com/NemoNobody/velruna/actions/workflows/ci.yml/badge.svg)](https://github.com/NemoNobody/velruna/actions/workflows/ci.yml)
 
 Persistent, provenance-carrying memory for AI agents (and humans).
 
@@ -8,15 +8,22 @@ Persistent, provenance-carrying memory for AI agents (and humans).
 > cannot name. It is a catalogue of facts a session has already verified —
 > found by text (BM25) or by key, and read in pieces. Matching meaning is the
 > job of the model holding the context, not of the store.
+>
+> The name is coined: Old Norse *vél* "device, craft" (modern Icelandic
+> "machine") + *rún* "secret; carved mark". Runestones and the Bergen trade
+> tags were durable authored records — written once, read by strangers long
+> after — and that is the model here. In Younger Futhark, ᚢᛁᛚᚱᚢᚾᛅ (ᚢ writes
+> /v/). The word is invented; the metaphor is not. Up to v0.8.6 the project
+> was published as `memento`.
 
 ## What it is
 
-`memento` stores **facts you or an agent have verified** about your projects —
+`velruna` stores **facts you or an agent have verified** about your projects —
 file locations, endpoint and config values, behavior — in an OpenSearch index.
 Every agent session relearns the same paths, ports and quirks; this stores them
 once, with the evidence and an age. The aim is to stop re-verifying the same
 path in every session: an agent that keeps the store in the loop (the rule file
-is [rules/memento.md](rules/memento.md)) reads the fact with its observation
+is [rules/velruna.md](rules/velruna.md)) reads the fact with its observation
 date and source, and goes back to the source only when the age says it may have
 moved. The store records that evidence, who wrote it and when; it cannot verify
 anything itself. It is an advisory memory with an audit trail, not an oracle.
@@ -45,7 +52,7 @@ Each fact carries evidence, not verdicts:
   self-reported audit label, not authentication) and which model/host/session
   produced it; the birth labels are write-once, corrections move `updated_by`;
 - **re-verification**: `confirmed_by` lists who verified the *current* value
-  (creator first, user+host per entry); `memento_patch reverify` moves
+  (creator first, user+host per entry); `velruna_patch reverify` moves
   `observed_at` and journals an `op=rediscovery` entry, so a stale fact can
   actually become fresh again;
 - **summary**: a value over `summary_min_len` must ship a short table-of-
@@ -81,9 +88,9 @@ attribution, not trust.
 
 ## Reading is selective
 
-A session pays only for what it reads. `memento_list` and `memento_search`
+A session pays only for what it reads. `velruna_list` and `velruna_search`
 return compact rows — key, summary, category, status, age — and the full value
-is one `memento_get` away; a body over `summary_min_len` must ship a summary,
+is one `velruna_get` away; a body over `summary_min_len` must ship a summary,
 so a listing stays skimmable; a fetched page is split into blocks — a section too
 long for one block is split, not cut — and read one block at a time. The store
 never decides to push a document into the context: that is what lets it work
@@ -111,22 +118,22 @@ A 20-second tour (`hack/quickstart-demo.sh` against a throwaway node — add a
 fact with provenance and a tag, read it back, correct it, and watch the journal
 keep both values):
 
-![memento in a terminal: add, get, correct, journal](docs/media/quickstart.gif)
+![velruna in a terminal: add, get, correct, journal](docs/media/quickstart.gif)
 
 Build (Go 1.26+):
 
 ```
-go build -o memento .
+go build -o velruna .
 ```
 
 Or install directly:
 
 ```
-go install github.com/NemoNobody/memento@latest
+go install github.com/NemoNobody/velruna@latest
 ```
 
 Or download the binary for your platform from
-[Releases](https://github.com/NemoNobody/memento/releases); with the repo
+[Releases](https://github.com/NemoNobody/velruna/releases); with the repo
 cloned, `scripts/install.sh` picks it, verifies the sha256 and puts it in
 `~/.local/bin`.
 
@@ -134,9 +141,9 @@ You also need a reachable OpenSearch (a single local node is enough). Quickest:
 `make dev-opensearch` runs one in a container (localhost-only, security plugin
 off, 512 MB heap, named volume — [docs/setup.md](docs/setup.md) §2). A system install follows
 the [official documentation](https://docs.opensearch.org/latest/install-and-configure/install-opensearch/index/);
-[docs/setup.md](docs/setup.md) covers what `memento` expects.
+[docs/setup.md](docs/setup.md) covers what `velruna` expects.
 
-Configure: copy `memento.conf.example` to `memento.conf` (or `~/.memento.conf`).
+Configure: copy `velruna.conf.example` to `velruna.conf` (or `~/.velruna.conf`).
 Against the dev node — no TLS, security off, reachable only from this machine:
 
 ```json
@@ -149,53 +156,53 @@ Against the dev node — no TLS, security off, reachable only from this machine:
 ```
 
 Against a real cluster: `https://…`, drop `allow_plaintext`, and keep the
-password out of the file — in the OS keyring (`memento creds set`) or in
+password out of the file — in the OS keyring (`velruna creds set`) or in
 `OPENSEARCH_PASSWORD` for containers and headless setups. A plaintext file
 password is only read when `allow_plaintext` is on, which is off by default.
 The full annotated example (index names, TTLs, fetch options) is
-`memento.conf.example`; `insecure_skip_verify: true` is for a self-signed
+`velruna.conf.example`; `insecure_skip_verify: true` is for a self-signed
 local node only — verification is on by default.
 
 The index is created automatically on first use. Env vars override the file:
 `OPENSEARCH_URL`, `OPENSEARCH_USER`, `OPENSEARCH_PASSWORD`,
-`OPENSEARCH_INSECURE_SKIP_VERIFY`, `MEMENTO_INDEX`, `MEMENTO_HISTORY_PERIOD`,
-`MEMENTO_HISTORY_LIMIT`, `MEMENTO_SUMMARY_MIN_LEN`, `MEMENTO_SUMMARY_MAX_LEN`,
-`MEMENTO_SECRET_GUARD`, `MEMENTO_ALLOW_PLAINTEXT`,
-`MEMENTO_AUTHOR`, `MEMENTO_MODEL`, `MEMENTO_HOST`, `MEMENTO_SESSION`;
-`MEMENTO_CONF` points at an explicit config file. Fetch
-options (`memento fetch`): `MEMENTO_DOCS_INDEX`, `MEMENTO_DOCS_TTL_DAYS`,
-`MEMENTO_FETCH_TIMEOUT`, `MEMENTO_FETCH_MAX_BYTES`, `MEMENTO_FETCH_BLOCK_CHARS`,
-`MEMENTO_FETCH_DOC_CHARS`, `MEMENTO_FETCH_HOSTS`, `MEMENTO_FETCH_USER_AGENT`,
-`MEMENTO_FETCH_PROXY_URL`,
-`MEMENTO_FETCH_PROXY_FALLBACK`, `MEMENTO_FETCH_RESPECT_ROBOTS`,
-`MEMENTO_FETCH_ALLOW_PRIVATE`, `MEMENTO_FETCH_RENDER`,
-`MEMENTO_FETCH_OBSCURA_PATH`, `MEMENTO_FETCH_OBSCURA_STEALTH`,
-`MEMENTO_LOCAL_REPO_ROOTS`,
-`MEMENTO_REPO_SCAN_DEPTH`.
+`OPENSEARCH_INSECURE_SKIP_VERIFY`, `VELRUNA_INDEX`, `VELRUNA_HISTORY_PERIOD`,
+`VELRUNA_HISTORY_LIMIT`, `VELRUNA_SUMMARY_MIN_LEN`, `VELRUNA_SUMMARY_MAX_LEN`,
+`VELRUNA_SECRET_GUARD`, `VELRUNA_ALLOW_PLAINTEXT`,
+`VELRUNA_AUTHOR`, `VELRUNA_MODEL`, `VELRUNA_HOST`, `VELRUNA_SESSION`;
+`VELRUNA_CONF` points at an explicit config file. Fetch
+options (`velruna fetch`): `VELRUNA_DOCS_INDEX`, `VELRUNA_DOCS_TTL_DAYS`,
+`VELRUNA_FETCH_TIMEOUT`, `VELRUNA_FETCH_MAX_BYTES`, `VELRUNA_FETCH_BLOCK_CHARS`,
+`VELRUNA_FETCH_DOC_CHARS`, `VELRUNA_FETCH_HOSTS`, `VELRUNA_FETCH_USER_AGENT`,
+`VELRUNA_FETCH_PROXY_URL`,
+`VELRUNA_FETCH_PROXY_FALLBACK`, `VELRUNA_FETCH_RESPECT_ROBOTS`,
+`VELRUNA_FETCH_ALLOW_PRIVATE`, `VELRUNA_FETCH_RENDER`,
+`VELRUNA_FETCH_OBSCURA_PATH`, `VELRUNA_FETCH_OBSCURA_STEALTH`,
+`VELRUNA_LOCAL_REPO_ROOTS`,
+`VELRUNA_REPO_SCAN_DEPTH`.
 
 The password resolves from `OPENSEARCH_PASSWORD`, then the OS keyring (service
-`memento`, account `host[:port]`), then the config file — the file only when
-`allow_plaintext` is on. `memento creds set` reads a hidden prompt (the password
+`velruna`, account `host[:port]`), then the config file — the file only when
+`allow_plaintext` is on. `velruna creds set` reads a hidden prompt (the password
 is never taken from argv). Check the connection:
 
 ```
-memento status
+velruna status
 ```
 
 Store and read back a fact:
 
 ```
-memento add demo:api:port "API port is 8080" endpoint -p demo -s tool:read_file
-memento get demo:api:port
-memento search "api port"
+velruna add demo:api:port "API port is 8080" endpoint -p demo -s tool:read_file
+velruna get demo:api:port
+velruna search "api port"
 ```
 
 Fetch a web page into the docs index and read it back block by block:
 
 ```
-memento fetch https://www.postgresql.org/docs/current/tutorial.html
-memento doc <hash-from-output> 1      # the "Part I. Tutorial" block
-memento docs "tutorial"
+velruna fetch https://www.postgresql.org/docs/current/tutorial.html
+velruna doc <hash-from-output> 1      # the "Part I. Tutorial" block
+velruna docs "tutorial"
 ```
 
 The page is parsed with the HTML5 tokenizer (`golang.org/x/net/html`), split on
@@ -223,22 +230,22 @@ the 2 MB `fetch_max_bytes` limit is refused with an error, not trimmed.
 
 | Command | Description |
 |---------|-------------|
-| `memento add <key> <value> <category> [--project <p>] [--source <s>] [--notes <n>] [--summary <s>] [--allow-secret]` | Add or correct a fact (prints `added`/`updated`/`touched (same value)`; the accepted value is appended to the journal; values over `summary_min_len` require `--summary`) |
-| `memento get <key> [--history]` | Get a fact by key (history is off by default; `--history` prints the legacy in-doc chain, or the newest journal entries for journal-era facts — the full journal is one `memento journal` away) |
-| `memento search <query> [--project <p>] [--category <c>] [--status <s>] [--limit N]` | Full-text search over values, notes and summaries (`--status any` disables the status filter; `--limit 0` = up to 1000, larger values are clamped to it) |
-| `memento keys [prefix] [--match <s>] [--project <p>] [--status <s>]` | Find facts by key: prefix and/or substring (`*`, `?` wildcards in `--match`), across projects |
-| `memento list <project> [--prefix <p>]` | List all facts for a project, optionally narrowed to a key prefix (trailing `*` allowed) |
-| `memento journal <key> [--limit N]` | Read the journal: the append-only history of a key, newest first |
-| `memento history-info <key>` | Compact journal overview: writes, rediscoveries, time range (no entry text) |
-| `memento prune <key> [--keep N] [--yes]` | Drop old journal entries, keeping the newest N (manual admin tool: destructive, without `--yes` only the plan is printed) |
-| `memento migrate-history [--project <p>] [--yes]` | Move pre-journal in-doc history arrays into the journal (one-time; plan first, `--yes` to write) |
-| `memento obsolete <key> [reason] [--allow-secret]` | Mark a fact obsolete because its subject is gone (reason appended to notes) |
-| `memento status [--conf <path>]` | Check connectivity and show the effective configuration (env overrides are listed by name, never values) |
-| `memento creds set\|get\|status\|rm [--url <u>]` | Manage the OpenSearch password in the OS keyring: `set` reads a hidden prompt (piped stdin for scripts), `get` prints the stored password (for scripts that need it), `status` shows only the source (`env\|keyring\|file\|none`), `rm` deletes the entry |
-| `memento fetch <url> [--refresh] [-p <p>] [--allow-secret] [--max-chars N] [--block-chars N]` | Fetch a page into the docs index and print its outline: cache-aware, blocks are read on demand; `--max-chars 0` stores the whole document (default `fetch_doc_chars`), `--block-chars` sets the target block size; github URLs that match a local clone print the file path |
-| `memento doc <hash> [n\|--section N] [--blocks N] [--full]` | Read a stored document: the outline (default), block `n`, `--blocks N` consecutive blocks, or every block with `--full` (answers are capped at 32000 runes; `next` names the next block; one block is always returned whole even when it alone exceeds the cap) |
-| `memento docs <query> [--limit N] [-p <p>]` | BM25 search over stored documents (the extracted blocks, never the raw page) |
-| `memento mcp` | Run as an MCP server over stdio |
+| `velruna add <key> <value> <category> [--project <p>] [--source <s>] [--notes <n>] [--summary <s>] [--allow-secret]` | Add or correct a fact (prints `added`/`updated`/`touched (same value)`; the accepted value is appended to the journal; values over `summary_min_len` require `--summary`) |
+| `velruna get <key> [--history]` | Get a fact by key (history is off by default; `--history` prints the legacy in-doc chain, or the newest journal entries for journal-era facts — the full journal is one `velruna journal` away) |
+| `velruna search <query> [--project <p>] [--category <c>] [--status <s>] [--limit N]` | Full-text search over values, notes and summaries (`--status any` disables the status filter; `--limit 0` = up to 1000, larger values are clamped to it) |
+| `velruna keys [prefix] [--match <s>] [--project <p>] [--status <s>]` | Find facts by key: prefix and/or substring (`*`, `?` wildcards in `--match`), across projects |
+| `velruna list <project> [--prefix <p>]` | List all facts for a project, optionally narrowed to a key prefix (trailing `*` allowed) |
+| `velruna journal <key> [--limit N]` | Read the journal: the append-only history of a key, newest first |
+| `velruna history-info <key>` | Compact journal overview: writes, rediscoveries, time range (no entry text) |
+| `velruna prune <key> [--keep N] [--yes]` | Drop old journal entries, keeping the newest N (manual admin tool: destructive, without `--yes` only the plan is printed) |
+| `velruna migrate-history [--project <p>] [--yes]` | Move pre-journal in-doc history arrays into the journal (one-time; plan first, `--yes` to write) |
+| `velruna obsolete <key> [reason] [--allow-secret]` | Mark a fact obsolete because its subject is gone (reason appended to notes) |
+| `velruna status [--conf <path>]` | Check connectivity and show the effective configuration (env overrides are listed by name, never values) |
+| `velruna creds set\|get\|status\|rm [--url <u>]` | Manage the OpenSearch password in the OS keyring: `set` reads a hidden prompt (piped stdin for scripts), `get` prints the stored password (for scripts that need it), `status` shows only the source (`env\|keyring\|file\|none`), `rm` deletes the entry |
+| `velruna fetch <url> [--refresh] [-p <p>] [--allow-secret] [--max-chars N] [--block-chars N]` | Fetch a page into the docs index and print its outline: cache-aware, blocks are read on demand; `--max-chars 0` stores the whole document (default `fetch_doc_chars`), `--block-chars` sets the target block size; github URLs that match a local clone print the file path |
+| `velruna doc <hash> [n\|--section N] [--blocks N] [--full]` | Read a stored document: the outline (default), block `n`, `--blocks N` consecutive blocks, or every block with `--full` (answers are capped at 32000 runes; `next` names the next block; one block is always returned whole even when it alone exceeds the cap) |
+| `velruna docs <query> [--limit N] [-p <p>]` | BM25 search over stored documents (the extracted blocks, never the raw page) |
+| `velruna mcp` | Run as an MCP server over stdio |
 
 Exit codes: `0` success, `1` any error, `3` the named key does not exist
 (`get`/`obsolete`/`prune`) — scripts can tell a missing fact from an
@@ -251,37 +258,37 @@ same value updates notes only and leaves the journal untouched.
 
 ## MCP server
 
-`memento mcp` speaks MCP over stdio, so agents (VS Code, others) call
-`memento_status`, `memento_search`, `memento_get`, `memento_add`,
-`memento_add_batch`, `memento_patch`, `memento_patch_batch`, `memento_list`,
-`memento_keys`, `memento_journal`, `memento_history_info`, `memento_prune`,
-`memento_obsolete`, `memento_fetch_doc`, `memento_get_doc` and
-`memento_search_docs` directly. Reads omit
+`velruna mcp` speaks MCP over stdio, so agents (VS Code, others) call
+`velruna_status`, `velruna_search`, `velruna_get`, `velruna_add`,
+`velruna_add_batch`, `velruna_patch`, `velruna_patch_batch`, `velruna_list`,
+`velruna_keys`, `velruna_journal`, `velruna_history_info`, `velruna_prune`,
+`velruna_obsolete`, `velruna_fetch_doc`, `velruna_get_doc` and
+`velruna_search_docs` directly. Reads omit
 history unless
 `include_history=true` is passed (that chain is the legacy pre-journal
-in-doc array; journal history is read with `memento_journal` /
-`memento_history_info`), and carry `age_days`/`stale`. `memento_list` is
+in-doc array; journal history is read with `velruna_journal` /
+`velruna_history_info`), and carry `age_days`/`stale`. `velruna_list` is
 compact by default (a table of contents: key/summary/state/age — the full
-value is one `memento_get` away) and newest-activity-first; cheap partial
-updates (dated note, status flip) go through `memento_patch` without
-re-sending the value; `memento_add_batch` packs the session-end ritual into
+value is one `velruna_get` away) and newest-activity-first; cheap partial
+updates (dated note, status flip) go through `velruna_patch` without
+re-sending the value; `velruna_add_batch` packs the session-end ritual into
 one round-trip. Registration and
 troubleshooting: [docs/mcp.md](docs/mcp.md).
 
 ## Use with agents
 
-An importable rule lives in [rules/memento.md](rules/memento.md): copy it — or
+An importable rule lives in [rules/velruna.md](rules/velruna.md): copy it — or
 just its compact block — into `AGENTS.md`, `.github/copilot-instructions.md`,
 `.cursor/rules/`, or your editor's always-on instructions (drop the YAML
 frontmatter when pasting into a rule file). The file is also shaped as a skill:
-put it at `<skills-dir>/memento-memory/SKILL.md` to have an agent load it on
+put it at `<skills-dir>/velruna-memory/SKILL.md` to have an agent load it on
 demand. It tells the agent when to consult and update memory, and how to keep it
 honest.
 
 ## Dashboards
 
 `docker/dashboards/objects.ndjson` — a ready-made OpenSearch Dashboards
-overview ("Memento — store overview"): KPI row for facts/journal/docs,
+overview ("Velruna — store overview"): KPI row for facts/journal/docs,
 activity trends, breakdowns by project/category/status, journal ops and the
 top fact keys. `make dev-opensearch-dashboards` pushes it automatically on the
 dev stack; elsewhere use `scripts/push-dashboards.sh`. Install instructions
@@ -316,8 +323,8 @@ The cost is honest: a JVM service to run and a plaintext store to protect. That
 is the deliberate trade; the security posture is below and in
 [docs/setup.md](docs/setup.md).
 
-Facts live in a single OpenSearch index (default `memento`). One node is enough
-to start; a proper cluster works the same way. How to point `memento` at a
+Facts live in a single OpenSearch index (default `velruna`). One node is enough
+to start; a proper cluster works the same way. How to point `velruna` at a
 cluster: [docs/setup.md](docs/setup.md). Schema and design:
 [docs/how-it-works.md](docs/how-it-works.md). Backup and restore (the standard
 OpenSearch snapshot API): [docs/backup.md](docs/backup.md).
@@ -327,7 +334,7 @@ agents and humans, not a guarantee: the store is plaintext, and the
 best-effort secret guard (default `reject`) scans writes. A high-confidence
 credential refuses the write; a heuristic hit (an unnamed 40-character hash, a
 base64 blob, an opaque token, a weak assignment) is replaced with
-`[memento-redacted:pattern]` before the fact is stored and listed in the
+`[velruna-redacted:pattern]` before the fact is stored and listed in the
 answer's `redactions`, so a legitimate fact is not lost to a false positive —
 but the stored value is then shorter than the one written; a hit in an identity
 field (`key`, `project`, `source`, `keywords`) refuses, because a rewritten key
@@ -357,7 +364,7 @@ x86_64, glibc 2.35+) that **executes page JS locally**. Install it pinned:
 make obscura   # sha256-pinned v0.2.6 stealth build → ~/.local/bin
 ```
 
-then set `fetch_render: "obscura"` (env `MEMENTO_FETCH_RENDER`).
+then set `fetch_render: "obscura"` (env `VELRUNA_FETCH_RENDER`).
 `fetch_obscura_path` points at the binary (default: `obscura` via PATH);
 `fetch_obscura_stealth` (default `true`) passes `--stealth`.
 

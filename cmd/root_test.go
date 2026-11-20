@@ -157,8 +157,8 @@ func TestSearchCmdFlagDefaultsAndParse(t *testing.T) {
 
 func TestRootCmdRegistersSubcommands(t *testing.T) {
 	root := NewRootCmd()
-	if root.Use != "memento" {
-		t.Errorf("root Use = %q, want memento", root.Use)
+	if root.Use != "velruna" {
+		t.Errorf("root Use = %q, want velruna", root.Use)
 	}
 	want := map[string]bool{
 		"add": false, "get": false, "list": false,

@@ -9,12 +9,12 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/NemoNobody/memento/internal/config"
+	"github.com/NemoNobody/velruna/internal/config"
 )
 
 func TestUAToken(t *testing.T) {
 	cases := []struct{ in, want string }{
-		{"memento/fetch (+OpenSearch docs cache)", "memento"},
+		{"velruna/fetch (+OpenSearch docs cache)", "velruna"},
 		{"Googlebot/2.1 (+http://www.google.com/bot.html)", "googlebot"},
 		{"  Bot-Name 1.0 ", "bot-name"},
 	}
@@ -28,7 +28,7 @@ func TestUAToken(t *testing.T) {
 func TestParseRobots(t *testing.T) {
 	body := `
 # top comment
-User-agent: memento
+User-agent: velruna
 Disallow: /secret
 Allow: /secret/public
 
@@ -40,7 +40,7 @@ Disallow: /private
 		t.Fatalf("groups = %d, want 2: %+v", len(groups), groups)
 	}
 	g := groups[0]
-	if len(g.agents) != 1 || g.agents[0] != "memento" || len(g.disallow) != 1 || g.disallow[0] != "/secret" ||
+	if len(g.agents) != 1 || g.agents[0] != "velruna" || len(g.disallow) != 1 || g.disallow[0] != "/secret" ||
 		len(g.allow) != 1 || g.allow[0] != "/secret/public" {
 		t.Errorf("group[0] = %+v", g)
 	}
@@ -50,15 +50,15 @@ Disallow: /private
 	// RFC 9309: consecutive User-agent lines before any rule bind ALL of
 	// them to the one rule set (keeping only the last left the earlier
 	// agents unrestricted while the file clearly bound them).
-	multi := parseRobots("User-agent: memento\nUser-agent: other\nDisallow: /x\n")
+	multi := parseRobots("User-agent: velruna\nUser-agent: other\nDisallow: /x\n")
 	if len(multi) != 1 || len(multi[0].agents) != 2 {
 		t.Fatalf("multi-agent group parsed as %+v, want one group with two agents", multi)
 	}
 	eMulti := robotsEntry{groups: multi}
-	if robotsAllowed(eMulti, "memento", "/x") {
+	if robotsAllowed(eMulti, "velruna", "/x") {
 		t.Error("the first listed agent must be bound by the group's rules")
 	}
-	if !robotsAllowed(eMulti, "memento", "/y") {
+	if !robotsAllowed(eMulti, "velruna", "/y") {
 		t.Error("paths outside the rule stay allowed")
 	}
 }
@@ -76,10 +76,10 @@ Disallow: /old
 User-agent: *
 Disallow: /new
 
-User-agent: memento
+User-agent: velruna
 Disallow: /a
 
-User-agent: memento
+User-agent: velruna
 Disallow: /b
 `)}
 	if robotsAllowed(e, "anyone", "/new") {
@@ -88,13 +88,13 @@ Disallow: /b
 	if robotsAllowed(e, "anyone", "/old") {
 		t.Error("the earlier wildcard group's deny must apply too (rules are merged)")
 	}
-	if robotsAllowed(e, "memento", "/b") {
+	if robotsAllowed(e, "velruna", "/b") {
 		t.Error("the later exact group's deny must apply")
 	}
-	if robotsAllowed(e, "memento", "/a") {
+	if robotsAllowed(e, "velruna", "/a") {
 		t.Error("the earlier exact group's deny must apply too (rules are merged)")
 	}
-	if !robotsAllowed(e, "memento", "/new") {
+	if !robotsAllowed(e, "velruna", "/new") {
 		t.Error("the exact-agent class must supersede the wildcard class entirely")
 	}
 }
@@ -102,17 +102,17 @@ Disallow: /b
 func TestRobotsAllowed(t *testing.T) {
 	e := robotsEntry{groups: []robotsGroup{
 		{agents: []string{"*"}, disallow: []string{"/private"}},
-		{agents: []string{"memento"}, disallow: []string{"/secret", "/"}, allow: []string{"/secret/public"}},
+		{agents: []string{"velruna"}, disallow: []string{"/secret", "/"}, allow: []string{"/secret/public"}},
 		{agents: []string{"friendly"}, disallow: []string{}},
 	}}
 	cases := []struct {
 		agent, path string
 		want        bool
 	}{
-		{"memento", "/secret/one", false},
-		{"memento", "/secret/public/x", true}, // Allow beats Disallow on longer match
-		{"memento", "/public", false},         // bare Disallow: / blocks the rest
-		{"memento", "/", false},
+		{"velruna", "/secret/one", false},
+		{"velruna", "/secret/public/x", true}, // Allow beats Disallow on longer match
+		{"velruna", "/public", false},         // bare Disallow: / blocks the rest
+		{"velruna", "/", false},
 		{"other", "/private/x", false},
 		{"other", "/public", true},
 		{"friendly", "/anything", true}, // empty Disallow list: no restrictions
@@ -165,13 +165,13 @@ func robotsCfg() *config.Config {
 
 	cfg.FetchAllowPrivate = true
 	cfg.FetchRespectRobots = true
-	cfg.FetchUserAgent = "memento/test (robots test)"
+	cfg.FetchUserAgent = "velruna/test (robots test)"
 	return cfg
 }
 
 func TestCheckRobots(t *testing.T) {
 	var hits int32
-	srv := newRobotsServer(t, "User-agent: memento\nDisallow: /secret\n", &hits)
+	srv := newRobotsServer(t, "User-agent: velruna\nDisallow: /secret\n", &hits)
 	ctx := context.Background()
 	cfg := robotsCfg()
 
@@ -192,7 +192,7 @@ func TestCheckRobots(t *testing.T) {
 
 	off.FetchAllowPrivate = true
 	off.FetchRespectRobots = false
-	off.FetchUserAgent = "memento/test"
+	off.FetchUserAgent = "velruna/test"
 	if err := CheckRobots(ctx, off, srv.URL+"/secret"); err != nil {
 		t.Errorf("robots off: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestCheckRobots404FailsOpen(t *testing.T) {
 // rules for the whole 24h TTL.
 func TestRobotsCancelledNotCached(t *testing.T) {
 	var hits int32
-	srv := newRobotsServer(t, "User-agent: memento\nDisallow: /secret\n", &hits)
+	srv := newRobotsServer(t, "User-agent: velruna\nDisallow: /secret\n", &hits)
 	cfg := robotsCfg()
 	u, err := url.Parse(srv.URL + "/secret")
 	if err != nil {
@@ -256,21 +256,21 @@ func TestRobotsWildcards(t *testing.T) {
 		{"/public/a.png", true}, // no matching deny
 	}
 	for _, tc := range cases {
-		if got := robotsAllowed(e, "memento", tc.path); got != tc.want {
+		if got := robotsAllowed(e, "velruna", tc.path); got != tc.want {
 			t.Errorf("robotsAllowed(%q) = %v, want %v", tc.path, got, tc.want)
 		}
 	}
 	// A bare "*" rule denies everything (it used to match nothing).
 	e2 := robotsEntry{groups: parseRobots("User-agent: *\nDisallow: *\n")}
-	if robotsAllowed(e2, "memento", "/anything") {
+	if robotsAllowed(e2, "velruna", "/anything") {
 		t.Error("Disallow: * must deny")
 	}
 	// Longest-match still wins: an allow with a wildcard beats a shorter deny.
 	e3 := robotsEntry{groups: parseRobots("User-agent: *\nDisallow: /private\nAllow: /private/public*\n")}
-	if !robotsAllowed(e3, "memento", "/private/public/x") {
+	if !robotsAllowed(e3, "velruna", "/private/public/x") {
 		t.Error("the longer wildcard allow must win")
 	}
-	if robotsAllowed(e3, "memento", "/private/x") {
+	if robotsAllowed(e3, "velruna", "/private/x") {
 		t.Error("the deny still covers the rest")
 	}
 }

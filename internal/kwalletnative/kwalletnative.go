@@ -6,7 +6,7 @@
 // that name only when it was started by PAM and nobody else holds it, so on a
 // box where gnome-keyring owns the name a Secret Service client has nowhere to
 // go. The wallet itself is always reachable through org.kde.KWallet:
-// folder = service, key = account, application = "memento".
+// folder = service, key = account, application = "velruna".
 //
 // Every call carries a deadline. open() on a locked wallet makes kwalletd show
 // a desktop password dialog, so it gets the longer budget and a timeout is
@@ -31,7 +31,7 @@ const (
 	busName = "org.kde.kwalletd6"
 	objPath = "/modules/kwalletd6"
 	iface   = "org.kde.KWallet"
-	appID   = "memento"
+	appID   = "velruna"
 
 	// defaultWallet is used when kwalletd does not name one (normally
 	// localWallet() returns kwalletrc "Default Wallet").
@@ -134,12 +134,12 @@ func (c *client) call(ctx context.Context, method string, args ...any) *dbus.Cal
 	return c.obj.CallWithContext(cctx, iface+"."+method, 0, args...)
 }
 
-// walletName resolves the wallet to use: an explicit MEMENTO_KWALLET_NAME,
+// walletName resolves the wallet to use: an explicit VELRUNA_KWALLET_NAME,
 // then kwalletd's localWallet() (kwalletrc "Default Wallet"), then the
 // conventional name. The override is trimmed: kwalletd would treat
 // " kdewallet" as a different, brand-new (empty) wallet.
 func (c *client) walletName(ctx context.Context) string {
-	if v := strings.TrimSpace(os.Getenv("MEMENTO_KWALLET_NAME")); v != "" {
+	if v := strings.TrimSpace(os.Getenv("VELRUNA_KWALLET_NAME")); v != "" {
 		return v
 	}
 	var name string

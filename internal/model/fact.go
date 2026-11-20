@@ -74,7 +74,7 @@ type Fact struct {
 
 	// ConfirmedBy is who has verified that the CURRENT value is true, in order
 	// of first confirmation. It starts with the creator (adding a fact is the
-	// first verification) and grows on memento_patch reverify. A value change
+	// first verification) and grows on velruna_patch reverify. A value change
 	// or a resurrection resets it: those confirmations were about a different
 	// value (or a fact that was declared dead) and must not count. The full
 	// log of every confirmation — time, model, session — is the journal.

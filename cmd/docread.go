@@ -5,9 +5,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/NemoNobody/memento/internal/client"
-	"github.com/NemoNobody/memento/internal/config"
-	"github.com/NemoNobody/memento/internal/model"
+	"github.com/NemoNobody/velruna/internal/client"
+	"github.com/NemoNobody/velruna/internal/config"
+	"github.com/NemoNobody/velruna/internal/model"
 )
 
 // Per-call budgets. They bound one answer, not the store: the document keeps

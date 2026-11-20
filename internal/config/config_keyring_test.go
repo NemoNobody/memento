@@ -6,13 +6,13 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/NemoNobody/memento/internal/keyring"
+	"github.com/NemoNobody/velruna/internal/keyring"
 )
 
 // writePlainConf writes a config file with a plaintext password.
 func writePlainConf(t *testing.T, dir string, body string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, "memento.conf"), []byte(body), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "velruna.conf"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -43,16 +43,16 @@ func TestPasswordPrecedence(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			clearEnv(t)
-			if err := os.WriteFile(filepath.Join(dir, "memento.conf"), []byte(fileBody), 0o600); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, "velruna.conf"), []byte(fileBody), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			t.Cleanup(func() { removeFile(t, filepath.Join(dir, "memento.conf")) })
+			t.Cleanup(func() { removeFile(t, filepath.Join(dir, "velruna.conf")) })
 			fakeKeyring(t, tc.keyringPw, tc.keyringErr)
 			if tc.envPw != "" {
 				t.Setenv("OPENSEARCH_PASSWORD", tc.envPw)
 			}
 			if tc.plaintext {
-				t.Setenv("MEMENTO_ALLOW_PLAINTEXT", "true")
+				t.Setenv("VELRUNA_ALLOW_PLAINTEXT", "true")
 			}
 			cfg, err := LoadConfig()
 			if err != nil {
@@ -69,8 +69,8 @@ func TestPasswordPrecedence(t *testing.T) {
 }
 
 func TestKeyringServiceAndAccount(t *testing.T) {
-	if KeyringService != "memento" {
-		t.Errorf("service = %q, want memento", KeyringService)
+	if KeyringService != "velruna" {
+		t.Errorf("service = %q, want velruna", KeyringService)
 	}
 	cases := map[string]string{
 		"https://127.0.0.1:9200":              "127.0.0.1:9200",
@@ -100,7 +100,7 @@ func TestAllowPlaintextDefaultsOff(t *testing.T) {
 	defer restore()
 	clearEnv(t)
 	writePlainConf(t, dir, `{"opensearch_url": "https://127.0.0.1:9200"}`)
-	t.Cleanup(func() { removeFile(t, filepath.Join(dir, "memento.conf")) })
+	t.Cleanup(func() { removeFile(t, filepath.Join(dir, "velruna.conf")) })
 
 	cfg, err := LoadConfig()
 	if err != nil {
@@ -120,7 +120,7 @@ func TestAllowPlaintextFileField(t *testing.T) {
 	defer restore()
 	clearEnv(t)
 	writePlainConf(t, dir, `{"allow_plaintext": true, "opensearch_password": "filepw"}`)
-	t.Cleanup(func() { removeFile(t, filepath.Join(dir, "memento.conf")) })
+	t.Cleanup(func() { removeFile(t, filepath.Join(dir, "velruna.conf")) })
 
 	cfg, err := LoadConfig()
 	if err != nil {

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NemoNobody/memento/internal/client"
+	"github.com/NemoNobody/velruna/internal/client"
 	"github.com/spf13/cobra"
 )
 
@@ -28,7 +28,7 @@ func JournalCmd() *cobra.Command {
 
 The journal is the history: every accepted value for the key is one entry
 (op=write; op=rediscovery records a re-confirmation of the same value,
-written by memento_patch reverify; op=retire marks a verified→obsolete
+written by velruna_patch reverify; op=retire marks a verified→obsolete
 transition). Counts after an admin deleted old
 journal indices are lower bounds — the surviving journal, not the lifetime.`,
 		Args: cobra.ExactArgs(1),
@@ -88,7 +88,7 @@ journal indices are lower bounds — the surviving journal, not the lifetime.`,
 				} else {
 					// The caller already asked for the ceiling: "raise --limit"
 					// would be advice that cannot be followed.
-					b.WriteString(" (at the navigation cap: use memento history-info for counts)")
+					b.WriteString(" (at the navigation cap: use velruna history-info for counts)")
 				}
 			}
 			if meta.Skipped > 0 {

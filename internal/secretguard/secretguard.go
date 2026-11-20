@@ -78,7 +78,7 @@ var patterns = []pattern{
 	// quoted values: "api_key": "S3cr3t") and refuses a right-hand side that
 	// starts with '[' — the redaction marker. Without that exclusion the
 	// post-redaction guard scan fires on its own marker (an infinite
-	// self-reject: the redacted text "secret = [memento-redacted:...]" reads
+	// self-reject: the redacted text "secret = [velruna-redacted:...]" reads
 	// as a fresh assignment).
 	{"credential-assignment", regexp.MustCompile(`(?i)\b(?:password|passwd|secret|token|api[_-]?key|access[_-]?key|secret[_-]?key)\b["']?\s*[:=]\s*["']?[^\s"'\[]{6,}`), ConfMedium, true, false, false},
 	{"long-hex", regexp.MustCompile(`\b[0-9a-fA-F]{32,}\b`), ConfMedium, false, true, false},
@@ -217,9 +217,9 @@ func RedactAll(field, text string) (string, []Finding) {
 }
 
 // markerPrefix opens the placeholder Redact writes in place of a span.
-const markerPrefix = "[memento-redacted:"
+const markerPrefix = "[velruna-redacted:"
 
-var markerRE = regexp.MustCompile(`\[memento-redacted:[^\]]+\]`)
+var markerRE = regexp.MustCompile(`\[velruna-redacted:[^\]]+\]`)
 
 // HasContent reports whether text still carries readable content once the
 // redaction markers are removed. A field that was nothing but one flagged

@@ -1,11 +1,11 @@
 ---
-name: memento-memory
-description: Persistent memento fact store (OpenSearch, memento_* tools). Use at session start, before re-verifying any project fact, when storing or correcting facts, when a fact is stale, and when the store is unavailable. Covers keys, statuses, staleness, notes, secret guard, degradation.
+name: velruna-memory
+description: Persistent velruna fact store (OpenSearch, velruna_* tools). Use at session start, before re-verifying any project fact, when storing or correcting facts, when a fact is stale, and when the store is unavailable. Covers keys, statuses, staleness, notes, secret guard, degradation.
 ---
 
-# memento — agent rule
+# velruna — agent rule
 
-An importable rule for AI agents: how to use **memento** as persistent,
+An importable rule for AI agents: how to use **velruna** as persistent,
 provenance-carrying memory. Keep it where your agent reads its rules:
 
 - `AGENTS.md` / `.github/copilot-instructions.md` (repo-level)
@@ -18,26 +18,26 @@ provenance-carrying memory. Keep it where your agent reads its rules:
 Paste this into your always-on rules:
 
 ```
-- Start of a session in a project → `memento_list <project>` (always; compact
-  by default — a table of contents, newest-activity first; `memento_get` reads
+- Start of a session in a project → `velruna_list <project>` (always; compact
+  by default — a table of contents, newest-activity first; `velruna_get` reads
   any row in full).
-- End of a session → `memento_add_batch` with the state facts (the project's
+- End of a session → `velruna_add_batch` with the state facts (the project's
   open items and its git state) — one round-trip.
-- Before re-verifying something → `memento_search <query>` / `memento_get <key>`; after verifying something new → `memento_add`. Keys are navigated with `memento_keys` (search matches values/notes/summaries, not keys).
+- Before re-verifying something → `velruna_search <query>` / `velruna_get <key>`; after verifying something new → `velruna_add`. Keys are navigated with `velruna_keys` (search matches values/notes/summaries, not keys).
 - Value changed → correct via the same key; the accepted value is appended to the history journal. A key names a stable subject — predictable English, not a value (`proj:api:port`, not `proj:api:v1`).
-- Qualifiers and doubts → `notes` ("checked the dev config only"); the cheap qualifier update is `memento_patch` with `notes_append` (dated line, atomic, no value resend). Subject gone → `memento_obsolete <key> [reason]`.
-- Long value (over `summary_min_len`) → `memento_add` requires a `summary`: a short table-of-contents rendering (under `summary_max_len`) — search/find by summary, read the full value by key.
-- Reads return the current value only (`stale`/`age_days` included); history costs context — use `memento_history_info` (cheap counts) and `memento_journal` (the entries) only when the history matters. `stale: true` → re-verify against the source before trusting.
-- `memento_prune` is destructive and manual (the journal is write-forever by design): without `confirm: true` it only returns the plan; show the plan to the user and confirm only after their approval.
+- Qualifiers and doubts → `notes` ("checked the dev config only"); the cheap qualifier update is `velruna_patch` with `notes_append` (dated line, atomic, no value resend). Subject gone → `velruna_obsolete <key> [reason]`.
+- Long value (over `summary_min_len`) → `velruna_add` requires a `summary`: a short table-of-contents rendering (under `summary_max_len`) — search/find by summary, read the full value by key.
+- Reads return the current value only (`stale`/`age_days` included); history costs context — use `velruna_history_info` (cheap counts) and `velruna_journal` (the entries) only when the history matters. `stale: true` → re-verify against the source before trusting.
+- `velruna_prune` is destructive and manual (the journal is write-forever by design): without `confirm: true` it only returns the plan; show the plan to the user and confirm only after their approval.
 - **Never store secrets** (passwords, tokens, keys) — the store is plaintext;
   a best-effort secret guard (default `reject`) scans writes, but it is not
   protection: the rule is on you.
-- Store unreachable → say so (via `memento_status`); never silently re-verify and never retry in a loop.
+- Store unreachable → say so (via `velruna_status`); never silently re-verify and never retry in a loop.
 ```
 
 ## Full version
 
-`memento` is **memory**; the LLM is **reasoning**. The store holds evidence —
+`velruna` is **memory**; the LLM is **reasoning**. The store holds evidence —
 value, source, observation time, history, notes — and the agent judges trust and
 staleness in context. The store never decides.
 
@@ -45,21 +45,21 @@ staleness in context. The store never decides.
 
 | Tool | Purpose |
 |---|---|
-| `memento_status` | is the store reachable; never fails — `ok=false` plus a hint |
-| `memento_list <project>` | all facts of a project — session start |
-| `memento_keys [prefix] [match]` | key navigation: prefix and/or substring, across projects (search does **not** match keys) |
-| `memento_search <query>` | search in `value`, `notes` and `summary` (not in keys) |
-| `memento_get <key>` | exact key (`found=false` when absent) |
-| `memento_add <key> <value> [category] [project] [source] [notes]` | upsert (categories: location, config, endpoint, behavior, context_map, recipe, rule — unknown ones are rejected); long values require a `summary` (see below) |
-| `memento_add_batch` | 1..10 facts in one call (session-end ritual); per-item guard, partial success |
-| `memento_patch` | partial update of an existing fact: `notes_append`, status flip (`verified`\|`obsolete`), value/source — omitted fields untouched |
-| `memento_history_info <key>` | cheap history overview: writes, rediscoveries, first/last — no entry bodies |
-| `memento_journal <key> [limit]` | the journal: every accepted value, newest first (read it only when the history matters) |
-| `memento_prune <key> [keep]` | drop old journal entries (destructive: plan first, `confirm=true` only after the user approves) |
-| `memento_obsolete <key> [reason]` | the subject is gone |
+| `velruna_status` | is the store reachable; never fails — `ok=false` plus a hint |
+| `velruna_list <project>` | all facts of a project — session start |
+| `velruna_keys [prefix] [match]` | key navigation: prefix and/or substring, across projects (search does **not** match keys) |
+| `velruna_search <query>` | search in `value`, `notes` and `summary` (not in keys) |
+| `velruna_get <key>` | exact key (`found=false` when absent) |
+| `velruna_add <key> <value> [category] [project] [source] [notes]` | upsert (categories: location, config, endpoint, behavior, context_map, recipe, rule — unknown ones are rejected); long values require a `summary` (see below) |
+| `velruna_add_batch` | 1..10 facts in one call (session-end ritual); per-item guard, partial success |
+| `velruna_patch` | partial update of an existing fact: `notes_append`, status flip (`verified`\|`obsolete`), value/source — omitted fields untouched |
+| `velruna_history_info <key>` | cheap history overview: writes, rediscoveries, first/last — no entry bodies |
+| `velruna_journal <key> [limit]` | the journal: every accepted value, newest first (read it only when the history matters) |
+| `velruna_prune <key> [keep]` | drop old journal entries (destructive: plan first, `confirm=true` only after the user approves) |
+| `velruna_obsolete <key> [reason]` | the subject is gone |
 
-The page-cache tools (`memento_fetch_doc`, `memento_get_doc`,
-`memento_search_docs`) live beside these: they store fetched web pages in a
+The page-cache tools (`velruna_fetch_doc`, `velruna_get_doc`,
+`velruna_search_docs`) live beside these: they store fetched web pages in a
 separate docs index. See `docs/mcp.md` — this rule is about the facts.
 
 ### When to search, when to store
@@ -82,7 +82,7 @@ separate docs index. See `docs/mcp.md` — this rule is about the facts.
 
 - `verified` — the subject exists; `obsolete` — the subject is gone (file
   deleted, endpoint removed without a successor).
-- **Value changed** → `memento_add` with the same key: the accepted value is
+- **Value changed** → `velruna_add` with the same key: the accepted value is
   journaled and the fact points at it, `observed_at` = now. That is a
   correction, not a loss.
 - **Same key + same value** → no journal entry and `observed_at` stays (the
@@ -90,9 +90,9 @@ separate docs index. See `docs/mcp.md` — this rule is about the facts.
   move only when supplied, while `category` is rewritten by every add (it sets
   the TTL base). The exception is a dead fact: re-declaring it alive
   is a resurrection and is journaled.
-- **Subject gone** → `memento_obsolete <key> [reason]`: value and `observed_at`
+- **Subject gone** → `velruna_obsolete <key> [reason]`: value and `observed_at`
   are kept, the reason is appended to `notes`.
-- **Subject back** → `memento_add` resurrects it: `obsolete` → `verified`, the
+- **Subject back** → `velruna_add` resurrects it: `obsolete` → `verified`, the
   new observation is journaled.
 - `obsolete` ≠ "the fact became false": "false" usually means the value
   changed — that is a correction.
@@ -145,12 +145,12 @@ categories — you cannot tell how old it is.
 
 ### History is off by default
 
-Reads (`memento_get`/`memento_search`/`memento_list`) return the current value
+Reads (`velruna_get`/`velruna_search`/`velruna_list`) return the current value
 only. The history of accepted values lives in the append-only journal: use
-`memento_history_info` first (writes, rediscoveries, the time range — cheap),
-and `memento_journal` when the entries themselves are needed. `include_history`
+`velruna_history_info` first (writes, rediscoveries, the time range — cheap),
+and `velruna_journal` when the entries themselves are needed. `include_history`
 returns the legacy in-doc array of pre-journal facts. The journal is
-write-forever; `memento_prune` trims one key on demand and is destructive: the
+write-forever; `velruna_prune` trims one key on demand and is destructive: the
 plan comes back without `confirm: true`; write only after the user approves.
 
 ### Security
@@ -158,7 +158,7 @@ plan comes back without `confirm: true`; write only after the user approves.
 - The store is **plaintext**. A best-effort secret guard scans what is written:
   a credential-shaped value **refuses** the write; a heuristic hit (a long
   hash/base64/opaque token, a weak `password = …`) in a text field is
-  **replaced** with `[memento-redacted:pattern]` and the write proceeds — the
+  **replaced** with `[velruna-redacted:pattern]` and the write proceeds — the
   answer lists `redactions` (field, pattern, size, never the text), so the
   stored value is shorter than what you sent; a hit in an identity field
   (`key`/`project`/`source`/`keywords`) refuses, and so does a value that is
@@ -176,7 +176,7 @@ plan comes back without `confirm: true`; write only after the user approves.
 
 ### Degradation (store unreachable)
 
-- `memento_status` → `ok=false` plus a hint; tell the user explicitly.
+- `velruna_status` → `ok=false` plus a hint; tell the user explicitly.
 - An empty answer is not "no such fact": the store tools fail loudly instead of
   staying silent.
 - A page reports `truncated` (the cluster saw more matches than the cap —
@@ -186,5 +186,5 @@ plan comes back without `confirm: true`; write only after the user approves.
 
 ### Session start
 
-`memento_list <project>` — always, before the first verification about the
+`velruna_list <project>` — always, before the first verification about the
 project.

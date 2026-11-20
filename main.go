@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/NemoNobody/memento/cmd"
+	"github.com/NemoNobody/velruna/cmd"
 )
 
 func main() {

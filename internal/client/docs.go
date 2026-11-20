@@ -13,7 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/NemoNobody/memento/internal/model"
+	"github.com/NemoNobody/velruna/internal/model"
 
 	"github.com/opensearch-project/opensearch-go/v4/opensearchapi"
 )

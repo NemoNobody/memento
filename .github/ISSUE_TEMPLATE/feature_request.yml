@@ -1,5 +1,5 @@
 name: Feature request or feedback
-description: A capability you are missing, or how memento works for your workflow
+description: A capability you are missing, or how velruna works for your workflow
 title: "feat: "
 labels: ["enhancement"]
 body:
@@ -10,14 +10,14 @@ body:
         part hurts" are the same conversation. The second kind is often more
         useful — it tells where the tool actually sits in a workflow.
 
-        Scope note: memento is verified memory over OpenSearch (facts + provenance +
+        Scope note: velruna is verified memory over OpenSearch (facts + provenance +
         journal + a fetched-docs cache). See README "Non-goals" before proposing a
         different storage backend, semantic search or secret storage.
   - type: textarea
     id: problem
     attributes:
       label: The problem
-      description: What are you trying to do, and where does memento get in the way? Describe the workflow, not only the missing command.
+      description: What are you trying to do, and where does velruna get in the way? Describe the workflow, not only the missing command.
     validations:
       required: true
   - type: textarea
@@ -30,7 +30,7 @@ body:
   - type: textarea
     id: usage
     attributes:
-      label: How you use memento (optional)
+      label: How you use velruna (optional)
       description: |
         Single agent or several? One machine or a shared store? Facts only, or the docs cache too?
         This shapes priorities more than the number of votes.

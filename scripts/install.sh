@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# memento installer. Downloads the binaries published by
-# release.yml (memento-<os>-<arch> + checksums.txt), verifies sha256 and
-# installs into ~/.local/bin (override: --install-dir / MEMENTO_INSTALL_DIR).
+# velruna installer. Downloads the binaries published by
+# release.yml (velruna-<os>-<arch> + checksums.txt), verifies sha256 and
+# installs into ~/.local/bin (override: --install-dir / VELRUNA_INSTALL_DIR).
 #
 #   scripts/install.sh [--version v0.8.6] [--install-dir DIR]
 #
@@ -9,15 +9,15 @@
 # or mirror needs GITHUB_TOKEN (a fine-grained PAT with contents:read); public
 # installs need no token. BASE_URL exists for tests (mirrors the release
 # download layout).
-# Windows: download memento-windows-amd64.exe from the release page and place
+# Windows: download velruna-windows-amd64.exe from the release page and place
 # it on PATH — this script covers linux/darwin.
 set -euo pipefail
 
-REPO="NemoNobody/memento"
+REPO="NemoNobody/velruna"
 API="https://api.github.com"
 BASE_URL="${BASE_URL:-https://github.com/$REPO}"
 VERSION=""
-INSTALL_DIR="${MEMENTO_INSTALL_DIR:-$HOME/.local/bin}"
+INSTALL_DIR="${VELRUNA_INSTALL_DIR:-$HOME/.local/bin}"
 
 usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0; }
 
@@ -63,7 +63,7 @@ if [ -z "$VERSION" ]; then
   VERSION=$(printf '%s' "$latest" | python3 -c 'import json,sys;print(json.load(sys.stdin)["tag_name"])')
 fi
 
-ASSET="memento-$os-$arch"
+ASSET="velruna-$os-$arch"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
@@ -72,7 +72,7 @@ curl "${curlargs[@]}" -o "$tmp/$ASSET"        "$BASE_URL/releases/download/$VERS
 curl "${curlargs[@]}" -o "$tmp/checksums.txt" "$BASE_URL/releases/download/$VERSION/checksums.txt"
 
 # Verify sha256 against the release checksums. The second field is compared
-# exactly (memento-linux-amd64 must not match memento-linux-arm64's line).
+# exactly (velruna-linux-amd64 must not match velruna-linux-arm64's line).
 want=$(awk -v a="$ASSET" '$2==a{print $1}' "$tmp/checksums.txt")
 if [ -z "$want" ]; then echo "no checksum line for $ASSET in checksums.txt" >&2; exit 1; fi
 if command -v sha256sum >/dev/null; then got=$(sha256sum "$tmp/$ASSET" | awk '{print $1}');
@@ -82,9 +82,9 @@ echo "checksum verified: $got"
 
 chmod +x "$tmp/$ASSET"
 mkdir -p "$INSTALL_DIR"
-mv "$tmp/$ASSET" "$INSTALL_DIR/memento"
-echo "installed: $INSTALL_DIR/memento"
-"$INSTALL_DIR/memento" --version || true
+mv "$tmp/$ASSET" "$INSTALL_DIR/velruna"
+echo "installed: $INSTALL_DIR/velruna"
+"$INSTALL_DIR/velruna" --version || true
 
 case ":$PATH:" in
   *":$INSTALL_DIR:"*) ;;
@@ -94,13 +94,13 @@ esac
 cat <<'SNIPPET'
 
 Next steps (see docs/setup.md for the full walkthrough):
-  1. Create a config — the default lookup finds ~/.memento.conf:
+  1. Create a config — the default lookup finds ~/.velruna.conf:
        {
          "opensearch_url": "https://127.0.0.1:9200",
          "opensearch_user": "admin",
          "insecure_skip_verify": true
        }
-     Store the password in the OS keyring:  memento creds set
-  2. Sanity check:  memento status
+     Store the password in the OS keyring:  velruna creds set
+  2. Sanity check:  velruna status
   3. Register the MCP server in your editor (docs/mcp.md).
 SNIPPET

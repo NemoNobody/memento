@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# CLI smoke over one live memento store. Exit 0 = all checks
-# passed. Runs against MEMENTO_CONF (or the default config lookup), exercising
+# CLI smoke over one live velruna store. Exit 0 = all checks
+# passed. Runs against VELRUNA_CONF (or the default config lookup), exercising
 # the paths whose OpenSearch calls changed across versions: index creation,
 # composable templates + ingest pipeline (journal), scripted corrections,
 # optimistic concurrency, search, prune scripts.
 #
-# Usage: MEMENTO_CONF=<conf> [MEMENTO_BIN=<path>] hack/cli-smoke.sh
+# Usage: VELRUNA_CONF=<conf> [VELRUNA_BIN=<path>] hack/cli-smoke.sh
 # The run writes throwaway facts under a timestamped "smoke:<runid>:" prefix,
 # so it is safe on any store you are willing to pollute a few KB of.
 set -uo pipefail
-BIN=${MEMENTO_BIN:-memento}
+BIN=${VELRUNA_BIN:-velruna}
 K="smoke:$(date +%s%N)"
 FAILS=0
 PASSES=0
@@ -53,7 +53,7 @@ step "obsolete"                $BIN obsolete "$K:two" "smoke cleanup"
 neg  "secret guard rejects"    $BIN add "$K:sec" 'aws access key AKIA1234567890ABCDEF leaked' config --project smoke
 step "secret guard redacts"    $BIN add "$K:hex" 'deployment id 0123456789abcdef0123456789abcdef0123456789abcdef' config --project smoke
 check "the write is stored" "added fact"
-step "redacted value stored"   $BIN get "$K:hex";                  check "marker in the value" "memento-redacted:long-hex"
+step "redacted value stored"   $BIN get "$K:hex";                  check "marker in the value" "velruna-redacted:long-hex"
 check "audit on the fact" "redacted: value=long-hex"
 step "prune dry run"           $BIN prune "$K:one" --keep 1;         check "dry run prints a plan" "plan"
 step "prune --yes"             $BIN prune "$K:one" --keep 1 --yes

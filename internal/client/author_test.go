@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NemoNobody/memento/internal/config"
-	"github.com/NemoNobody/memento/internal/model"
+	"github.com/NemoNobody/velruna/internal/config"
+	"github.com/NemoNobody/velruna/internal/model"
 )
 
 // The author chain is the audit spine of a shared store: the store's
@@ -99,13 +99,13 @@ func TestAddCreateCarriesAuthorLabels(t *testing.T) {
 		switch {
 		case r.Method == http.MethodGet && r.Path == "/_security/authinfo":
 			return http.StatusNotFound, `{"status":404}`
-		case r.Method == http.MethodGet && r.Path == "/memento/_doc/new":
+		case r.Method == http.MethodGet && r.Path == "/velruna/_doc/new":
 			return http.StatusNotFound, `{"status":404,"error":"document_missing_exception"}`
-		case r.Method == http.MethodPut && r.Path == "/memento/_doc/new":
+		case r.Method == http.MethodPut && r.Path == "/velruna/_doc/new":
 			putBody = r.Body
-			return http.StatusCreated, `{"_index":"memento","_id":"new","result":"created"}`
-		case r.Method == http.MethodPost && r.Path == "/memento/_update/new":
-			return http.StatusOK, `{"_index":"memento","_id":"new","result":"updated"}`
+			return http.StatusCreated, `{"_index":"velruna","_id":"new","result":"created"}`
+		case r.Method == http.MethodPost && r.Path == "/velruna/_update/new":
+			return http.StatusOK, `{"_index":"velruna","_id":"new","result":"updated"}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Path + `"}`
 	})
@@ -125,10 +125,10 @@ func TestAddCreateCarriesAuthorLabels(t *testing.T) {
 			t.Errorf("create body lacks %s: %s", want, putBody)
 		}
 	}
-	if len(fake.requestsFor(http.MethodPost, "/memento-history-2026.11/_doc")) == 0 {
+	if len(fake.requestsFor(http.MethodPost, "/velruna-history-2026.11/_doc")) == 0 {
 		// the journal entry of the birth value carries the same labels
 		// (month index asserted loosely: naming is pinned by journal tests)
-		if !fake.sawAnyPrefix("/memento-history-") {
+		if !fake.sawAnyPrefix("/velruna-history-") {
 			t.Error("birth value was not journaled")
 		}
 	}
@@ -138,7 +138,7 @@ func TestAddCorrectionCarriesUpdatedBy(t *testing.T) {
 	var updateBody, journalBody string
 	c, _ := newFakeClientCfg(t, func(cfg *config.Config) { cfg.Author = "bob" },
 		func(r recordedRequest) (int, string) {
-			if (r.Method == http.MethodPost || r.Method == http.MethodPut) && strings.HasPrefix(r.Path, "/memento-history-") && strings.Contains(r.Path, "/_doc") {
+			if (r.Method == http.MethodPost || r.Method == http.MethodPut) && strings.HasPrefix(r.Path, "/velruna-history-") && strings.Contains(r.Path, "/_doc") {
 				journalBody = r.Body
 				return http.StatusOK, `{"_id":"j1","result":"created"}`
 			}
@@ -148,13 +148,13 @@ func TestAddCorrectionCarriesUpdatedBy(t *testing.T) {
 			switch {
 			case r.Method == http.MethodGet && r.Path == "/_security/authinfo":
 				return http.StatusNotFound, `{"status":404}`
-			case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
-				return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
+			case r.Method == http.MethodGet && r.Path == "/velruna/_doc/k":
+				return http.StatusOK, `{"_index":"velruna","_id":"k","found":true,"_source":{
 					"key":"k","value":"old","author":"alice","author_source":"config",
 					"category":"config","status":"verified"}}`
-			case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+			case r.Method == http.MethodPost && r.Path == "/velruna/_update/k":
 				updateBody = r.Body
-				return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+				return http.StatusOK, `{"_index":"velruna","_id":"k","result":"updated"}`
 			}
 			return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Path + `"}`
 		})
@@ -187,12 +187,12 @@ func TestAddSameValueCarriesUpdatedBy(t *testing.T) {
 			switch {
 			case r.Method == http.MethodGet && r.Path == "/_security/authinfo":
 				return http.StatusNotFound, `{"status":404}`
-			case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
-				return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
+			case r.Method == http.MethodGet && r.Path == "/velruna/_doc/k":
+				return http.StatusOK, `{"_index":"velruna","_id":"k","found":true,"_source":{
 					"key":"k","value":"same","author":"alice","status":"verified"}}`
-			case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+			case r.Method == http.MethodPost && r.Path == "/velruna/_update/k":
 				updateBody = r.Body
-				return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+				return http.StatusOK, `{"_index":"velruna","_id":"k","result":"updated"}`
 			}
 			return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Path + `"}`
 		})

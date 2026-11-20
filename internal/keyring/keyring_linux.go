@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/NemoNobody/memento/internal/keyringnative"
-	"github.com/NemoNobody/memento/internal/kwalletnative"
+	"github.com/NemoNobody/velruna/internal/keyringnative"
+	"github.com/NemoNobody/velruna/internal/kwalletnative"
 )
 
 // Linux provider order:

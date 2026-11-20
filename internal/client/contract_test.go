@@ -12,8 +12,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/NemoNobody/memento/internal/config"
-	"github.com/NemoNobody/memento/internal/model"
+	"github.com/NemoNobody/velruna/internal/config"
+	"github.com/NemoNobody/velruna/internal/model"
 
 	"github.com/opensearch-project/opensearch-go/v4"
 )
@@ -92,7 +92,7 @@ func newFakeClientCfg(t *testing.T, mutate func(*config.Config),
 
 	cfg := &config.Config{
 		OpenSearchURL:      fake.URL,
-		IndexName:          "memento",
+		IndexName:          "velruna",
 		OpenSearchPassword: "testpw",
 		InsecureSkipVerify: true,
 	}
@@ -170,7 +170,7 @@ func TestIsNotFound(t *testing.T) {
 // before any read.
 func TestEnsureIndexDoesNotWriteWhenIndexExists(t *testing.T) {
 	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
-		if r.Method == http.MethodHead && r.Path == "/memento" {
+		if r.Method == http.MethodHead && r.Path == "/velruna" {
 			return http.StatusOK, ""
 		}
 		return http.StatusTooManyRequests,
@@ -180,7 +180,7 @@ func TestEnsureIndexDoesNotWriteWhenIndexExists(t *testing.T) {
 	if err := c.EnsureIndex(context.Background()); err != nil {
 		t.Fatalf("EnsureIndex on an existing index: %v", err)
 	}
-	if puts := fake.requestsFor(http.MethodPut, "/memento"); len(puts) != 0 {
+	if puts := fake.requestsFor(http.MethodPut, "/velruna"); len(puts) != 0 {
 		t.Errorf("EnsureIndex wrote to an existing index (%d PUT requests); "+
 			"a read-only index would break read commands", len(puts))
 	}
@@ -193,7 +193,7 @@ func TestEnsureIndexCreatesWhenMissing(t *testing.T) {
 		switch {
 		case r.Method == http.MethodHead:
 			return http.StatusNotFound, `{"status":404,"error":"index_not_found_exception"}`
-		case r.Method == http.MethodPut && r.Path == "/memento":
+		case r.Method == http.MethodPut && r.Path == "/velruna":
 			return http.StatusOK, `{"acknowledged":true}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected"}`
@@ -202,7 +202,7 @@ func TestEnsureIndexCreatesWhenMissing(t *testing.T) {
 	if err := c.EnsureIndex(context.Background()); err != nil {
 		t.Fatalf("EnsureIndex: %v", err)
 	}
-	if puts := fake.requestsFor(http.MethodPut, "/memento"); len(puts) != 1 {
+	if puts := fake.requestsFor(http.MethodPut, "/velruna"); len(puts) != 1 {
 		t.Fatalf("expected exactly one create, got %d", len(puts))
 	}
 }
@@ -215,9 +215,9 @@ func TestEnsureIndexToleratesCreateRace(t *testing.T) {
 		switch {
 		case r.Method == http.MethodHead:
 			return http.StatusNotFound, `{"status":404,"error":"index_not_found_exception"}`
-		case r.Method == http.MethodPut && r.Path == "/memento":
+		case r.Method == http.MethodPut && r.Path == "/velruna":
 			return http.StatusBadRequest,
-				`{"error":{"type":"resource_already_exists_exception","reason":"index [memento/uuid] already exists"},"status":400}`
+				`{"error":{"type":"resource_already_exists_exception","reason":"index [velruna/uuid] already exists"},"status":400}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected"}`
 	})
@@ -225,7 +225,7 @@ func TestEnsureIndexToleratesCreateRace(t *testing.T) {
 	if err := c.EnsureIndex(context.Background()); err != nil {
 		t.Fatalf("losing the create race must be success, got: %v", err)
 	}
-	if puts := fake.requestsFor(http.MethodPut, "/memento"); len(puts) != 1 {
+	if puts := fake.requestsFor(http.MethodPut, "/velruna"); len(puts) != 1 {
 		t.Fatalf("expected exactly one create attempt, got %d", len(puts))
 	}
 }
@@ -234,8 +234,8 @@ func TestEnsureIndexToleratesCreateRace(t *testing.T) {
 // realtime document endpoint, not a search (which lags behind the refresh).
 func TestGetUsesRealtimeDocumentAPI(t *testing.T) {
 	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
-		if r.Method == http.MethodGet && r.Path == "/memento/_doc/some:key" {
-			return http.StatusOK, `{"_index":"memento","_id":"some:key","found":true,
+		if r.Method == http.MethodGet && r.Path == "/velruna/_doc/some:key" {
+			return http.StatusOK, `{"_index":"velruna","_id":"some:key","found":true,
 				"_source":{"key":"some:key","value":"v","category":"config","project":"p","status":"verified"}}`
 		}
 		return http.StatusNotFound, `{"status":404,"error":"document_missing_exception"}`
@@ -248,7 +248,7 @@ func TestGetUsesRealtimeDocumentAPI(t *testing.T) {
 	if f.Value != "v" {
 		t.Errorf("value = %q, want v", f.Value)
 	}
-	if fake.sawAnyPrefix("/memento/_search") {
+	if fake.sawAnyPrefix("/velruna/_search") {
 		t.Error("Get used the search API; it must use the realtime document API " +
 			"or reads right after a write will miss the document")
 	}
@@ -267,14 +267,14 @@ func TestAddCorrectionUsesScriptedUpdate(t *testing.T) {
 			return code, body
 		}
 		switch {
-		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
-			return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
+		case r.Method == http.MethodGet && r.Path == "/velruna/_doc/k":
+			return http.StatusOK, `{"_index":"velruna","_id":"k","found":true,"_source":{
 				"fact_id":"existing-id","key":"k","value":"old",
 				"created_at":"2020-01-01T00:00:00Z","updated_at":"2020-01-01T00:00:00Z",
 				"observed_at":"2020-01-01T00:00:00Z"}}`
-		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+		case r.Method == http.MethodPost && r.Path == "/velruna/_update/k":
 			updateBody = r.Body
-			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+			return http.StatusOK, `{"_index":"velruna","_id":"k","result":"updated"}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected"}`
 	})
@@ -287,10 +287,10 @@ func TestAddCorrectionUsesScriptedUpdate(t *testing.T) {
 		t.Error("created = true when the fact already existed")
 	}
 
-	if puts := fake.requestsFor(http.MethodPut, "/memento/_doc/k"); len(puts) != 0 {
+	if puts := fake.requestsFor(http.MethodPut, "/velruna/_doc/k"); len(puts) != 0 {
 		t.Errorf("value change used PUT (%d); the old value would be lost — must be a scripted update", len(puts))
 	}
-	updates := fake.requestsFor(http.MethodPost, "/memento/_update/k")
+	updates := fake.requestsFor(http.MethodPost, "/velruna/_update/k")
 	if len(updates) != 1 {
 		t.Fatalf("expected one scripted update, got %d", len(updates))
 	}
@@ -330,14 +330,14 @@ func TestAddSameValueUpdatesNotesOnly(t *testing.T) {
 	var updateBody string
 	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
 		switch {
-		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
-			return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
+		case r.Method == http.MethodGet && r.Path == "/velruna/_doc/k":
+			return http.StatusOK, `{"_index":"velruna","_id":"k","found":true,"_source":{
 				"fact_id":"existing-id","key":"k","value":"same",
 				"created_at":"2020-01-01T00:00:00Z","updated_at":"2020-01-01T00:00:00Z",
 				"observed_at":"2020-01-01T00:00:00Z"}}`
-		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+		case r.Method == http.MethodPost && r.Path == "/velruna/_update/k":
 			updateBody = r.Body
-			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+			return http.StatusOK, `{"_index":"velruna","_id":"k","result":"updated"}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected"}`
 	})
@@ -350,7 +350,7 @@ func TestAddSameValueUpdatesNotesOnly(t *testing.T) {
 		t.Error("created = true for an existing fact")
 	}
 
-	updates := fake.requestsFor(http.MethodPost, "/memento/_update/k")
+	updates := fake.requestsFor(http.MethodPost, "/velruna/_update/k")
 	if len(updates) != 1 {
 		t.Fatalf("expected one update, got %d", len(updates))
 	}
@@ -384,14 +384,14 @@ func TestAddEmptyNotesPreservesNotes(t *testing.T) {
 	var updateBody string
 	c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
 		switch {
-		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
-			return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
+		case r.Method == http.MethodGet && r.Path == "/velruna/_doc/k":
+			return http.StatusOK, `{"_index":"velruna","_id":"k","found":true,"_source":{
 				"fact_id":"existing-id","key":"k","value":"same","notes":"dev config only",
 				"created_at":"2020-01-01T00:00:00Z","updated_at":"2020-01-01T00:00:00Z",
 				"observed_at":"2020-01-01T00:00:00Z"}}`
-		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+		case r.Method == http.MethodPost && r.Path == "/velruna/_update/k":
 			updateBody = r.Body
-			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+			return http.StatusOK, `{"_index":"velruna","_id":"k","result":"updated"}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected"}`
 	})
@@ -412,14 +412,14 @@ func TestAddEmptyNotesPreservesNotes(t *testing.T) {
 			return code, body
 		}
 		switch {
-		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
-			return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
+		case r.Method == http.MethodGet && r.Path == "/velruna/_doc/k":
+			return http.StatusOK, `{"_index":"velruna","_id":"k","found":true,"_source":{
 				"fact_id":"existing-id","key":"k","value":"old","notes":"dev config only",
 				"created_at":"2020-01-01T00:00:00Z","updated_at":"2020-01-01T00:00:00Z",
 				"observed_at":"2020-01-01T00:00:00Z"}}`
-		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+		case r.Method == http.MethodPost && r.Path == "/velruna/_update/k":
 			updateBody = r.Body
-			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+			return http.StatusOK, `{"_index":"velruna","_id":"k","result":"updated"}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected"}`
 	})
@@ -439,14 +439,14 @@ func TestAddEmptySourcePreservesSource(t *testing.T) {
 	var updateBody string
 	c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
 		switch {
-		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
-			return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
+		case r.Method == http.MethodGet && r.Path == "/velruna/_doc/k":
+			return http.StatusOK, `{"_index":"velruna","_id":"k","found":true,"_source":{
 				"fact_id":"existing-id","key":"k","value":"same","source":"doc:README",
 				"created_at":"2020-01-01T00:00:00Z","updated_at":"2020-01-01T00:00:00Z",
 				"observed_at":"2020-01-01T00:00:00Z"}}`
-		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+		case r.Method == http.MethodPost && r.Path == "/velruna/_update/k":
 			updateBody = r.Body
-			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+			return http.StatusOK, `{"_index":"velruna","_id":"k","result":"updated"}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected"}`
 	})
@@ -464,7 +464,7 @@ func TestAddEmptySourcePreservesSource(t *testing.T) {
 	updateBody = ""
 	var journalBody string
 	c2, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
-		if (r.Method == http.MethodPost || r.Method == http.MethodPut) && strings.HasPrefix(r.Path, "/memento-history-") && strings.Contains(r.Path, "/_doc") {
+		if (r.Method == http.MethodPost || r.Method == http.MethodPut) && strings.HasPrefix(r.Path, "/velruna-history-") && strings.Contains(r.Path, "/_doc") {
 			journalBody = r.Body
 			return http.StatusOK, `{"_id":"journal-entry-1","result":"created"}`
 		}
@@ -472,15 +472,15 @@ func TestAddEmptySourcePreservesSource(t *testing.T) {
 			return code, body
 		}
 		switch {
-		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
-			return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
+		case r.Method == http.MethodGet && r.Path == "/velruna/_doc/k":
+			return http.StatusOK, `{"_index":"velruna","_id":"k","found":true,"_source":{
 				"fact_id":"existing-id","key":"k","value":"old","source":"doc:README",
 				"notes":"dev config only",
 				"created_at":"2020-01-01T00:00:00Z","updated_at":"2020-01-01T00:00:00Z",
 				"observed_at":"2020-01-01T00:00:00Z"}}`
-		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+		case r.Method == http.MethodPost && r.Path == "/velruna/_update/k":
 			updateBody = r.Body
-			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+			return http.StatusOK, `{"_index":"velruna","_id":"k","result":"updated"}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected"}`
 	})
@@ -506,7 +506,7 @@ func TestAddEmptySourcePreservesSource(t *testing.T) {
 func TestAddCorrectionJournalsStoredProject(t *testing.T) {
 	var journalBody string
 	c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
-		if (r.Method == http.MethodPost || r.Method == http.MethodPut) && strings.HasPrefix(r.Path, "/memento-history-") && strings.Contains(r.Path, "/_doc") {
+		if (r.Method == http.MethodPost || r.Method == http.MethodPut) && strings.HasPrefix(r.Path, "/velruna-history-") && strings.Contains(r.Path, "/_doc") {
 			journalBody = r.Body
 			return http.StatusOK, `{"_id":"journal-entry-1","result":"created"}`
 		}
@@ -514,14 +514,14 @@ func TestAddCorrectionJournalsStoredProject(t *testing.T) {
 			return code, body
 		}
 		switch {
-		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
-			return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
+		case r.Method == http.MethodGet && r.Path == "/velruna/_doc/k":
+			return http.StatusOK, `{"_index":"velruna","_id":"k","found":true,"_source":{
 				"fact_id":"existing-id","key":"k","value":"old","project":"dev-tools",
 				"category":"config","status":"verified",
 				"created_at":"2020-01-01T00:00:00Z","updated_at":"2020-01-01T00:00:00Z",
 				"observed_at":"2020-01-01T00:00:00Z"}}`
-		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
-			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+		case r.Method == http.MethodPost && r.Path == "/velruna/_update/k":
+			return http.StatusOK, `{"_index":"velruna","_id":"k","result":"updated"}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected"}`
 	})
@@ -544,7 +544,7 @@ func TestAddCorrectionJournalsStoredProject(t *testing.T) {
 func TestAddResurrectJournalsMovedCategory(t *testing.T) {
 	var journalBody string
 	c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
-		if (r.Method == http.MethodPost || r.Method == http.MethodPut) && strings.HasPrefix(r.Path, "/memento-history-") && strings.Contains(r.Path, "/_doc") {
+		if (r.Method == http.MethodPost || r.Method == http.MethodPut) && strings.HasPrefix(r.Path, "/velruna-history-") && strings.Contains(r.Path, "/_doc") {
 			journalBody = r.Body
 			return http.StatusOK, `{"_id":"journal-entry-1","result":"created"}`
 		}
@@ -552,14 +552,14 @@ func TestAddResurrectJournalsMovedCategory(t *testing.T) {
 			return code, body
 		}
 		switch {
-		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
-			return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
+		case r.Method == http.MethodGet && r.Path == "/velruna/_doc/k":
+			return http.StatusOK, `{"_index":"velruna","_id":"k","found":true,"_source":{
 				"fact_id":"existing-id","key":"k","value":"same","project":"p",
 				"category":"location","status":"obsolete",
 				"created_at":"2020-01-01T00:00:00Z","updated_at":"2020-01-01T00:00:00Z",
 				"observed_at":"2020-01-01T00:00:00Z"}}`
-		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
-			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+		case r.Method == http.MethodPost && r.Path == "/velruna/_update/k":
+			return http.StatusOK, `{"_index":"velruna","_id":"k","result":"updated"}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected"}`
 	})
@@ -580,12 +580,12 @@ func TestAddSendsRefreshWaitForForNewFacts(t *testing.T) {
 			return code, body
 		}
 		switch {
-		case r.Method == http.MethodGet && r.Path == "/memento/_doc/new":
+		case r.Method == http.MethodGet && r.Path == "/velruna/_doc/new":
 			return http.StatusNotFound, `{"status":404,"error":"document_missing_exception"}`
-		case r.Method == http.MethodPut && r.Path == "/memento/_doc/new":
-			return http.StatusCreated, `{"_index":"memento","_id":"new","result":"created"}`
-		case r.Method == http.MethodPost && r.Path == "/memento/_update/new":
-			return http.StatusOK, `{"_index":"memento","_id":"new","result":"updated"}`
+		case r.Method == http.MethodPut && r.Path == "/velruna/_doc/new":
+			return http.StatusCreated, `{"_index":"velruna","_id":"new","result":"created"}`
+		case r.Method == http.MethodPost && r.Path == "/velruna/_update/new":
+			return http.StatusOK, `{"_index":"velruna","_id":"new","result":"updated"}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected"}`
 	})
@@ -597,7 +597,7 @@ func TestAddSendsRefreshWaitForForNewFacts(t *testing.T) {
 	if !res.Created {
 		t.Error("created = false for a brand-new fact")
 	}
-	puts := fake.requestsFor(http.MethodPut, "/memento/_doc/new")
+	puts := fake.requestsFor(http.MethodPut, "/velruna/_doc/new")
 	if len(puts) != 1 {
 		t.Fatalf("expected one write, got %d", len(puts))
 	}
@@ -621,20 +621,20 @@ func TestAddCreateRaceFallsToCorrection(t *testing.T) {
 			return code, body
 		}
 		switch {
-		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
+		case r.Method == http.MethodGet && r.Path == "/velruna/_doc/k":
 			gets++
 			if gets == 1 {
 				return http.StatusNotFound, `{"status":404,"error":"document_missing_exception"}`
 			}
-			return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
+			return http.StatusOK, `{"_index":"velruna","_id":"k","found":true,"_source":{
 				"fact_id":"winner-id","key":"k","value":"winner",
 				"created_at":"2020-01-01T00:00:00Z","updated_at":"2020-01-01T00:00:00Z",
 				"observed_at":"2020-01-01T00:00:00Z"}}`
-		case r.Method == http.MethodPut && r.Path == "/memento/_doc/k":
+		case r.Method == http.MethodPut && r.Path == "/velruna/_doc/k":
 			return http.StatusConflict, `{"error":{"type":"version_conflict_engine_exception","reason":"[k]: version conflict, document already exists"},"status":409}`
-		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+		case r.Method == http.MethodPost && r.Path == "/velruna/_update/k":
 			updateBody = r.Body
-			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+			return http.StatusOK, `{"_index":"velruna","_id":"k","result":"updated"}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected request: ` + r.Method + ` ` + r.Path + `"}`
 	})
@@ -649,7 +649,7 @@ func TestAddCreateRaceFallsToCorrection(t *testing.T) {
 	if gets != 2 {
 		t.Errorf("gets = %d, want 2 (miss, then re-read of the winner)", gets)
 	}
-	if len(fake.requestsFor(http.MethodPost, "/memento/_update/k")) != 1 {
+	if len(fake.requestsFor(http.MethodPost, "/velruna/_update/k")) != 1 {
 		t.Fatalf("no scripted correction after the create conflict: %+v", fake.requests)
 	}
 	// The correction script points the fact at the journal entry that carries
@@ -699,19 +699,19 @@ func TestPruneScriptedUpdate(t *testing.T) {
 			return code, body
 		}
 		switch {
-		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
+		case r.Method == http.MethodGet && r.Path == "/velruna/_doc/k":
 			if !updated {
-				return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
+				return http.StatusOK, `{"_index":"velruna","_id":"k","found":true,"_source":{
 					"key":"k","value":"v","category":"config","project":"p","status":"verified",
 					"history":[{"value":"h1"},{"value":"h2"},{"value":"h3"},{"value":"h4"},{"value":"h5"}]}}`
 			}
-			return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
+			return http.StatusOK, `{"_index":"velruna","_id":"k","found":true,"_source":{
 				"key":"k","value":"v","category":"config","project":"p","status":"verified",
 				"history":[{"value":"h4"},{"value":"h5"}]}}`
-		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+		case r.Method == http.MethodPost && r.Path == "/velruna/_update/k":
 			updateBody = r.Body
 			updated = true
-			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+			return http.StatusOK, `{"_index":"velruna","_id":"k","result":"updated"}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected"}`
 	})
@@ -724,7 +724,7 @@ func TestPruneScriptedUpdate(t *testing.T) {
 		t.Errorf("removed = %d, want 3", removed)
 	}
 
-	updates := fake.requestsFor(http.MethodPost, "/memento/_update/k")
+	updates := fake.requestsFor(http.MethodPost, "/velruna/_update/k")
 	if len(updates) != 1 {
 		t.Fatalf("expected one scripted update, got %d", len(updates))
 	}
@@ -761,8 +761,8 @@ func TestPruneNoWriteWhenWithinLimit(t *testing.T) {
 		if code, body := journalRoutesOK(r); code != http.StatusInternalServerError {
 			return code, body
 		}
-		if r.Method == http.MethodGet && r.Path == "/memento/_doc/k" {
-			return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
+		if r.Method == http.MethodGet && r.Path == "/velruna/_doc/k" {
+			return http.StatusOK, `{"_index":"velruna","_id":"k","found":true,"_source":{
 				"key":"k","value":"v","category":"config","project":"p","status":"verified",
 				"history":[{"value":"h1"},{"value":"h2"}]}}`
 		}
@@ -776,7 +776,7 @@ func TestPruneNoWriteWhenWithinLimit(t *testing.T) {
 	if removed != 0 {
 		t.Errorf("removed = %d, want 0", removed)
 	}
-	if updates := fake.requestsFor(http.MethodPost, "/memento/_update/k"); len(updates) != 0 {
+	if updates := fake.requestsFor(http.MethodPost, "/velruna/_update/k"); len(updates) != 0 {
 		t.Errorf("prune within the limit wrote %d times; a no-op must not touch the document", len(updates))
 	}
 }
@@ -797,7 +797,7 @@ func TestPruneMissingFactIsNotFound(t *testing.T) {
 // and observed_at are left untouched (there is no new observation), the reason
 // appends INSIDE the script (a doc-side notes replace from the stale Get
 // would race a concurrent notes_append and drop it), and the transition is
-// journaled (audit symmetry with memento_add/memento_patch).
+// journaled (audit symmetry with velruna_add/velruna_patch).
 func TestObsoleteKeepsValueAndAppendsReason(t *testing.T) {
 	var updateBody string
 	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
@@ -805,12 +805,12 @@ func TestObsoleteKeepsValueAndAppendsReason(t *testing.T) {
 			return code, body
 		}
 		switch {
-		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
-			return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
+		case r.Method == http.MethodGet && r.Path == "/velruna/_doc/k":
+			return http.StatusOK, `{"_index":"velruna","_id":"k","found":true,"_source":{
 				"key":"k","value":"v","notes":"old note","status":"verified"}}`
-		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+		case r.Method == http.MethodPost && r.Path == "/velruna/_update/k":
 			updateBody = r.Body
-			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+			return http.StatusOK, `{"_index":"velruna","_id":"k","result":"updated"}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected"}`
 	})
@@ -819,7 +819,7 @@ func TestObsoleteKeepsValueAndAppendsReason(t *testing.T) {
 		t.Fatalf("Obsolete: %v", err)
 	}
 
-	updates := fake.requestsFor(http.MethodPost, "/memento/_update/k")
+	updates := fake.requestsFor(http.MethodPost, "/velruna/_update/k")
 	if len(updates) != 1 {
 		t.Fatalf("expected one update, got %d", len(updates))
 	}
@@ -873,16 +873,16 @@ func TestObsoleteMissingFactIsNotFound(t *testing.T) {
 // and an invalid prefix fails before any request is made.
 func TestListPrefixScope(t *testing.T) {
 	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
-		if r.Method == http.MethodPost && r.Path == "/memento/_search" {
+		if r.Method == http.MethodPost && r.Path == "/velruna/_search" {
 			return http.StatusOK, `{"hits":{"hits":[]}}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected request: ` + r.Method + ` ` + r.Path + `"}`
 	})
 
-	if _, _, err := c.List(context.Background(), "memento", "memento:state:*", "key"); err != nil {
+	if _, _, err := c.List(context.Background(), "velruna", "velruna:state:*", "key"); err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	reqs := fake.requestsFor(http.MethodPost, "/memento/_search")
+	reqs := fake.requestsFor(http.MethodPost, "/velruna/_search")
 	if len(reqs) != 1 {
 		t.Fatalf("expected one search request, got %d", len(reqs))
 	}
@@ -902,18 +902,18 @@ func TestListPrefixScope(t *testing.T) {
 			prefix = p.(map[string]interface{})["key"].(string)
 		}
 	}
-	if prefix != "memento:state:" {
-		t.Errorf("prefix on wire = %q, want memento:state:", prefix)
+	if prefix != "velruna:state:" {
+		t.Errorf("prefix on wire = %q, want velruna:state:", prefix)
 	}
 
 	fake.mu.Lock()
 	fake.requests = nil
 	fake.mu.Unlock()
 
-	if _, _, err := c.List(context.Background(), "memento", "a*b", "key"); err == nil {
+	if _, _, err := c.List(context.Background(), "velruna", "a*b", "key"); err == nil {
 		t.Error("List with middle * must fail")
 	}
-	if len(fake.requestsFor(http.MethodPost, "/memento/_search")) != 0 {
+	if len(fake.requestsFor(http.MethodPost, "/velruna/_search")) != 0 {
 		t.Error("invalid prefix must not produce a request")
 	}
 }
@@ -923,7 +923,7 @@ func TestListPrefixScope(t *testing.T) {
 // _source fails to decode must surface as Skipped, never vanish silently.
 func TestSearchMetaTotalAndSkipped(t *testing.T) {
 	c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
-		if r.Method == http.MethodPost && r.Path == "/memento/_search" {
+		if r.Method == http.MethodPost && r.Path == "/velruna/_search" {
 			return http.StatusOK, `{"hits":{"total":{"value":9,"relation":"eq"},"hits":[` +
 				`{"_id":"1","_source":{"key":"a:one","value":"v1","category":"config","project":"p","status":"verified"}},` +
 				`{"_id":"2","_source":{"key":123}}]}}`
@@ -953,7 +953,7 @@ func TestSearchMetaTotalAndSkipped(t *testing.T) {
 // prefix/match is required, and both clauses reach the wire sorted by key.
 func TestKeysGuards(t *testing.T) {
 	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
-		if r.Method == http.MethodPost && r.Path == "/memento/_search" {
+		if r.Method == http.MethodPost && r.Path == "/velruna/_search" {
 			return http.StatusOK, `{"hits":{"hits":[]}}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected request: ` + r.Method + ` ` + r.Path + `"}`
@@ -962,14 +962,14 @@ func TestKeysGuards(t *testing.T) {
 	if _, _, err := c.Keys(context.Background(), "", "", "", ""); err == nil {
 		t.Error("Keys with no prefix and no match must fail (context flood guard)")
 	}
-	if len(fake.requestsFor(http.MethodPost, "/memento/_search")) != 0 {
+	if len(fake.requestsFor(http.MethodPost, "/velruna/_search")) != 0 {
 		t.Error("empty Keys query must not produce a request")
 	}
 
-	if _, _, err := c.Keys(context.Background(), "zed:", "state", "memento", "verified"); err != nil {
+	if _, _, err := c.Keys(context.Background(), "zed:", "state", "velruna", "verified"); err != nil {
 		t.Fatalf("Keys: %v", err)
 	}
-	reqs := fake.requestsFor(http.MethodPost, "/memento/_search")
+	reqs := fake.requestsFor(http.MethodPost, "/velruna/_search")
 	if len(reqs) != 1 {
 		t.Fatalf("expected one search request, got %d", len(reqs))
 	}
@@ -999,7 +999,7 @@ func TestAddLongValueRequiresSummary(t *testing.T) {
 	c, _ := newFakeClientCfg(t, func(cfg *config.Config) { cfg.SummaryMinLen = 10 },
 		func(r recordedRequest) (int, string) {
 			switch {
-			case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
+			case r.Method == http.MethodGet && r.Path == "/velruna/_doc/k":
 				return http.StatusNotFound, `{"status":404,"error":"document_missing_exception"}`
 			}
 			return http.StatusInternalServerError, `{"status":500,"error":"unexpected"}`
@@ -1021,13 +1021,13 @@ func TestAddLongValueWithSummaryIsStored(t *testing.T) {
 				return code, body
 			}
 			switch {
-			case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
+			case r.Method == http.MethodGet && r.Path == "/velruna/_doc/k":
 				return http.StatusNotFound, `{"status":404,"error":"document_missing_exception"}`
-			case r.Method == http.MethodPut && r.Path == "/memento/_doc/k":
+			case r.Method == http.MethodPut && r.Path == "/velruna/_doc/k":
 				putBody = r.Body
-				return http.StatusCreated, `{"_index":"memento","_id":"k","result":"created"}`
-			case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
-				return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+				return http.StatusCreated, `{"_index":"velruna","_id":"k","result":"created"}`
+			case r.Method == http.MethodPost && r.Path == "/velruna/_update/k":
+				return http.StatusOK, `{"_index":"velruna","_id":"k","result":"updated"}`
 			}
 			return http.StatusInternalServerError, `{"status":500,"error":"unexpected"}`
 		})
@@ -1069,12 +1069,12 @@ func TestAddSameValueSkipsSummaryCheck(t *testing.T) {
 	c, fake := newFakeClientCfg(t, func(cfg *config.Config) { cfg.SummaryMinLen = 10 },
 		func(r recordedRequest) (int, string) {
 			switch {
-			case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
-				return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
+			case r.Method == http.MethodGet && r.Path == "/velruna/_doc/k":
+				return http.StatusOK, `{"_index":"velruna","_id":"k","found":true,"_source":{
 					"key":"k","value":"` + strings.Repeat("v", 20) + `",
 					"category":"config","status":"verified"}}`
-			case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
-				return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+			case r.Method == http.MethodPost && r.Path == "/velruna/_update/k":
+				return http.StatusOK, `{"_index":"velruna","_id":"k","result":"updated"}`
 			}
 			return http.StatusInternalServerError, `{"status":500,"error":"unexpected"}`
 		})
@@ -1083,7 +1083,7 @@ func TestAddSameValueSkipsSummaryCheck(t *testing.T) {
 	if _, err := c.Add(context.Background(), model.NewFact("k", long, "config", "p", "test:contract", "note")); err != nil {
 		t.Fatalf("notes-only update on a long value without summary: %v", err)
 	}
-	if len(fake.requestsFor(http.MethodPost, "/memento/_update/k")) != 1 {
+	if len(fake.requestsFor(http.MethodPost, "/velruna/_update/k")) != 1 {
 		t.Error("expected the notes-only doc update")
 	}
 }
@@ -1094,8 +1094,8 @@ func TestAddCorrectionOfLongValueRequiresSummary(t *testing.T) {
 	c, fake := newFakeClientCfg(t, func(cfg *config.Config) { cfg.SummaryMinLen = 10 },
 		func(r recordedRequest) (int, string) {
 			switch {
-			case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
-				return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
+			case r.Method == http.MethodGet && r.Path == "/velruna/_doc/k":
+				return http.StatusOK, `{"_index":"velruna","_id":"k","found":true,"_source":{
 					"key":"k","value":"` + strings.Repeat("o", 12) + `",
 					"category":"config","status":"verified"}}`
 			}
@@ -1108,7 +1108,7 @@ func TestAddCorrectionOfLongValueRequiresSummary(t *testing.T) {
 	}
 	// The rejection must happen before the journal append: a value that is
 	// never accepted must never enter the log.
-	if fake.sawAnyPrefix("/memento-history-") {
+	if fake.sawAnyPrefix("/velruna-history-") {
 		t.Error("rejected value must not be journaled")
 	}
 }

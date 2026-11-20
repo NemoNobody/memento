@@ -41,10 +41,10 @@ jobs:
           # The tag commit, not the default-branch head: a dispatched run starts
           # from a branch, the binaries must still name the tagged commit.
           COMMIT="$(git rev-parse --short HEAD)"
-          LDFLAGS="-s -w -X github.com/NemoNobody/memento/internal/version.Version=${VERSION} -X github.com/NemoNobody/memento/internal/version.Commit=${COMMIT}"
+          LDFLAGS="-s -w -X github.com/NemoNobody/velruna/internal/version.Version=${VERSION} -X github.com/NemoNobody/velruna/internal/version.Commit=${COMMIT}"
           for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
             os="${target%/*}"; arch="${target#*/}"
-            out="dist/memento-${os}-${arch}"
+            out="dist/velruna-${os}-${arch}"
             [ "$os" = windows ] && out="${out}.exe"
             CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
               go build -trimpath -ldflags "$LDFLAGS" -o "$out" .

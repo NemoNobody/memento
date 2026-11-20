@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/NemoNobody/memento/internal/config"
-	"github.com/NemoNobody/memento/internal/model"
+	"github.com/NemoNobody/velruna/internal/config"
+	"github.com/NemoNobody/velruna/internal/model"
 )
 
 func TestBuildSearchBody_NoFilters(t *testing.T) {
@@ -194,7 +194,7 @@ func TestNormalizePrefix(t *testing.T) {
 }
 
 func TestBuildKeysBody(t *testing.T) {
-	got := buildKeysBody("proj:", "state", "memento", "verified")
+	got := buildKeysBody("proj:", "state", "velruna", "verified")
 	q := got["query"].(map[string]interface{})
 	b := q["bool"].(map[string]interface{})
 	filters := b["filter"].([]map[string]interface{})
@@ -207,8 +207,8 @@ func TestBuildKeysBody(t *testing.T) {
 	if wc := filters[1]["wildcard"].(map[string]interface{}); wc["key"] != "*state*" {
 		t.Errorf("wildcard = %v, want *state*", wc["key"])
 	}
-	if term := filters[2]["term"].(map[string]interface{}); term["project"] != "memento" {
-		t.Errorf("project filter = %v, want memento", term["project"])
+	if term := filters[2]["term"].(map[string]interface{}); term["project"] != "velruna" {
+		t.Errorf("project filter = %v, want velruna", term["project"])
 	}
 	if term := filters[3]["term"].(map[string]interface{}); term["status"] != "verified" {
 		t.Errorf("status filter = %v, want verified", term["status"])
@@ -319,7 +319,7 @@ func TestAddTouchPreservesObservedAt(t *testing.T) {
 	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
 		switch {
 		case r.Method == "GET":
-			return 200, `{"_index":"memento","_id":"k","_version":2,"found":true,"_source":` + existing + `}`
+			return 200, `{"_index":"velruna","_id":"k","_version":2,"found":true,"_source":` + existing + `}`
 		case r.Method == "POST" && strings.Contains(r.Path, "_update"):
 			return 200, `{"result":"updated"}`
 		}
@@ -336,10 +336,10 @@ func TestAddTouchPreservesObservedAt(t *testing.T) {
 	if res.Changed {
 		t.Error("Changed = true, want false (same value)")
 	}
-	if len(fake.requestsFor("POST", "/memento/_doc")) != 0 {
+	if len(fake.requestsFor("POST", "/velruna/_doc")) != 0 {
 		t.Error("touch must not index a new document")
 	}
-	updates := fake.requestsFor("POST", "/memento/_update/k")
+	updates := fake.requestsFor("POST", "/velruna/_update/k")
 	if len(updates) != 1 {
 		t.Fatalf("touch updates = %d, want 1", len(updates))
 	}
@@ -357,7 +357,7 @@ func TestAddSameValueTouchMovesUpdatedBy(t *testing.T) {
 		func(r recordedRequest) (int, string) {
 			switch {
 			case r.Method == "GET":
-				return 200, `{"_index":"memento","_id":"k","_version":2,"found":true,"_source":` + existing + `}`
+				return 200, `{"_index":"velruna","_id":"k","_version":2,"found":true,"_source":` + existing + `}`
 			case strings.Contains(r.Path, "_update"):
 				return 200, `{"result":"updated"}`
 			}
@@ -367,7 +367,7 @@ func TestAddSameValueTouchMovesUpdatedBy(t *testing.T) {
 	if _, err := c.Add(context.Background(), model.NewFact("k", "same", "config", "proj", "", "")); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	updates := fake.requestsFor("POST", "/memento/_update/k")
+	updates := fake.requestsFor("POST", "/velruna/_update/k")
 	if len(updates) != 1 {
 		t.Fatalf("touch runs = %d, want 1", len(updates))
 	}
@@ -383,7 +383,7 @@ func TestAddNewValueWritesCurrentRef(t *testing.T) {
 	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
 		switch {
 		case r.Method == "GET":
-			return 200, `{"_index":"memento","_id":"k","_version":2,"found":true,"_source":` + fakeSrc + `}`
+			return 200, `{"_index":"velruna","_id":"k","_version":2,"found":true,"_source":` + fakeSrc + `}`
 		case strings.Contains(r.Path, "-history-"):
 			return 200, `{"result":"created","_id":"journal-entry-1"}`
 		case strings.Contains(r.Path, "_update"):
@@ -399,7 +399,7 @@ func TestAddNewValueWritesCurrentRef(t *testing.T) {
 	if !res.Changed {
 		t.Fatal("Changed = false, want true")
 	}
-	updates := fake.requestsFor("POST", "/memento/_update/k")
+	updates := fake.requestsFor("POST", "/velruna/_update/k")
 	if len(updates) != 1 {
 		t.Fatalf("correction script runs = %d, want 1", len(updates))
 	}
@@ -419,7 +419,7 @@ func TestAddSameValueNoSummaryKeepsExisting(t *testing.T) {
 	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
 		switch {
 		case r.Method == "GET":
-			return 200, `{"_index":"memento","_id":"k","_version":2,"found":true,"_source":` + existing + `}`
+			return 200, `{"_index":"velruna","_id":"k","_version":2,"found":true,"_source":` + existing + `}`
 		case strings.Contains(r.Path, "_update"):
 			return 200, `{"result":"updated"}`
 		}
@@ -429,7 +429,7 @@ func TestAddSameValueNoSummaryKeepsExisting(t *testing.T) {
 	if _, err := c.Add(context.Background(), model.NewFact("k", "same", "config", "proj", "", "")); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	updates := fake.requestsFor("POST", "/memento/_update/k")
+	updates := fake.requestsFor("POST", "/velruna/_update/k")
 	if len(updates) != 1 {
 		t.Fatalf("touch runs = %d, want 1", len(updates))
 	}
@@ -470,7 +470,7 @@ func TestListSortUpdated(t *testing.T) {
 	if _, _, err := c.List(context.Background(), "proj", "", "updated"); err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	queries := fake.requestsFor("POST", "/memento/_search")
+	queries := fake.requestsFor("POST", "/velruna/_search")
 	if len(queries) != 1 {
 		t.Fatalf("search requests = %d, want 1", len(queries))
 	}
@@ -481,7 +481,7 @@ func TestListSortUpdated(t *testing.T) {
 	if _, _, err := c.List(context.Background(), "proj", "", ""); err != nil {
 		t.Fatalf("List default: %v", err)
 	}
-	queries = fake.requestsFor("POST", "/memento/_search")
+	queries = fake.requestsFor("POST", "/velruna/_search")
 	if len(queries) != 2 {
 		t.Fatalf("search requests = %d, want 2", len(queries))
 	}
@@ -499,7 +499,7 @@ func TestObsoleteReRetireWithReasonRefused(t *testing.T) {
 	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
 		switch {
 		case r.Method == "GET":
-			return 200, `{"_index":"memento","_id":"k","found":true,"_source":` + obsoleteSrc + `}`
+			return 200, `{"_index":"velruna","_id":"k","found":true,"_source":` + obsoleteSrc + `}`
 		case r.Method == "POST" && strings.Contains(r.Path, "_update"):
 			if strings.Contains(r.Body, `"reason_append":"`) {
 				t.Errorf("a reason reached the script on an already obsolete fact: %.120s", r.Body)
@@ -515,7 +515,7 @@ func TestObsoleteReRetireWithReasonRefused(t *testing.T) {
 	if err := c.Obsolete(context.Background(), "k", "", nil); err != nil {
 		t.Fatalf("reason-less re-retire: %v", err)
 	}
-	if len(fake.requestsFor("POST", "/memento/_update/k")) != 1 {
+	if len(fake.requestsFor("POST", "/velruna/_update/k")) != 1 {
 		t.Error("reason-less re-retire should still run the touch script")
 	}
 }
@@ -528,7 +528,7 @@ func TestObsoleteReasonSingleLine(t *testing.T) {
 	c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
 		switch {
 		case r.Method == "GET":
-			return 200, `{"_index":"memento","_id":"k","found":true,"_source":{"key":"k","value":"v","category":"config","project":"proj","status":"verified"}}`
+			return 200, `{"_index":"velruna","_id":"k","found":true,"_source":{"key":"k","value":"v","category":"config","project":"proj","status":"verified"}}`
 		case strings.Contains(r.Path, "_update"):
 			body = r.Body
 			return 200, `{"result":"updated"}`
@@ -556,7 +556,7 @@ func TestAddSameValueOnObsoleteJournalsResurrect(t *testing.T) {
 		}
 		switch {
 		case r.Method == "GET":
-			return 200, `{"_index":"memento","_id":"k","found":true,"_source":` + obsoleteSrc + `}`
+			return 200, `{"_index":"velruna","_id":"k","found":true,"_source":` + obsoleteSrc + `}`
 		case r.Method == "POST" && strings.Contains(r.Path, "_update"):
 			return 200, `{"result":"updated"}`
 		}
@@ -573,11 +573,11 @@ func TestAddSameValueOnObsoleteJournalsResurrect(t *testing.T) {
 	if !res.Resurrected {
 		t.Error("Resurrected = false, want true: a same-value add over an obsolete fact re-declares it alive")
 	}
-	journals := fake.sawAnyPrefix("/memento-history-")
+	journals := fake.sawAnyPrefix("/velruna-history-")
 	if !journals {
 		t.Error("resurrection must write a journal entry")
 	}
-	updates := fake.requestsFor("POST", "/memento/_update/k")
+	updates := fake.requestsFor("POST", "/velruna/_update/k")
 	if len(updates) != 1 {
 		t.Fatalf("updates = %d, want 1", len(updates))
 	}
@@ -605,7 +605,7 @@ func TestAddCorrectionOnObsoleteReportsResurrected(t *testing.T) {
 		}
 		switch {
 		case r.Method == "GET":
-			return 200, `{"_index":"memento","_id":"k","found":true,"_source":` + obsoleteSrc + `}`
+			return 200, `{"_index":"velruna","_id":"k","found":true,"_source":` + obsoleteSrc + `}`
 		case r.Method == "POST" && strings.Contains(r.Path, "_update"):
 			return 200, `{"result":"updated"}`
 		}
@@ -625,7 +625,7 @@ func TestAddCorrectionOnObsoleteReportsResurrected(t *testing.T) {
 		}
 		switch {
 		case r.Method == "GET":
-			return 200, `{"_index":"memento","_id":"k","found":true,"_source":{"fact_id":"fid","key":"k","value":"v","category":"config","project":"proj","status":"verified","created_at":"2020-01-01T00:00:00Z","updated_at":"2020-01-01T00:00:00Z","observed_at":"2020-01-01T00:00:00Z"}}`
+			return 200, `{"_index":"velruna","_id":"k","found":true,"_source":{"fact_id":"fid","key":"k","value":"v","category":"config","project":"proj","status":"verified","created_at":"2020-01-01T00:00:00Z","updated_at":"2020-01-01T00:00:00Z","observed_at":"2020-01-01T00:00:00Z"}}`
 		case r.Method == "POST" && strings.Contains(r.Path, "_update"):
 			return 200, `{"result":"updated"}`
 		}
@@ -645,12 +645,12 @@ func TestAddCorrectionOnObsoleteReportsResurrected(t *testing.T) {
 // rows (a retirement does not rewrite the value), a row of the same field is
 // replaced, and the journal retire entry states the merged set.
 func TestObsoleteMergesReasonRedactions(t *testing.T) {
-	const src = `{"fact_id":"fid","key":"k","value":"id [memento-redacted:long-hex]","category":"config","project":"proj","status":"verified","redactions":[{"field":"value","pattern":"long-hex","chars":48}]}`
+	const src = `{"fact_id":"fid","key":"k","value":"id [velruna-redacted:long-hex]","category":"config","project":"proj","status":"verified","redactions":[{"field":"value","pattern":"long-hex","chars":48}]}`
 	var body string
 	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
 		switch {
 		case r.Method == "GET":
-			return 200, `{"_index":"memento","_id":"k","found":true,"_source":` + src + `}`
+			return 200, `{"_index":"velruna","_id":"k","found":true,"_source":` + src + `}`
 		case strings.Contains(r.Path, "_update"):
 			body = r.Body
 			return 200, `{"result":"updated"}`
@@ -658,7 +658,7 @@ func TestObsoleteMergesReasonRedactions(t *testing.T) {
 		return 200, `{}`
 	})
 	rows := []model.Redaction{{Field: "reason", Pattern: "long-hex", Chars: 40}}
-	if err := c.Obsolete(context.Background(), "k", "deleted [memento-redacted:long-hex]", rows); err != nil {
+	if err := c.Obsolete(context.Background(), "k", "deleted [velruna-redacted:long-hex]", rows); err != nil {
 		t.Fatalf("Obsolete: %v", err)
 	}
 	if !strings.Contains(body, `"field":"value","pattern":"long-hex","chars":48`) {
@@ -677,11 +677,11 @@ func TestObsoleteMergesReasonRedactions(t *testing.T) {
 // without a finding drops the stored notes row and keeps the value's — the note
 // no longer contains what the stale row claims.
 func TestTouchCleanNotesClearsStaleRow(t *testing.T) {
-	const existing = `{"fact_id":"fid","key":"k","value":"same","category":"config","project":"proj","status":"verified","notes":"old [memento-redacted:long-hex]","redactions":[{"field":"value","pattern":"long-hex","chars":48},{"field":"notes","pattern":"long-hex","chars":40}],"created_at":"2020-01-01T00:00:00Z","updated_at":"2020-01-01T00:00:00Z","observed_at":"2020-01-01T00:00:00Z"}`
+	const existing = `{"fact_id":"fid","key":"k","value":"same","category":"config","project":"proj","status":"verified","notes":"old [velruna-redacted:long-hex]","redactions":[{"field":"value","pattern":"long-hex","chars":48},{"field":"notes","pattern":"long-hex","chars":40}],"created_at":"2020-01-01T00:00:00Z","updated_at":"2020-01-01T00:00:00Z","observed_at":"2020-01-01T00:00:00Z"}`
 	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
 		switch {
 		case r.Method == "GET":
-			return 200, `{"_index":"memento","_id":"k","_version":2,"found":true,"_source":` + existing + `}`
+			return 200, `{"_index":"velruna","_id":"k","_version":2,"found":true,"_source":` + existing + `}`
 		case strings.Contains(r.Path, "_update"):
 			return 200, `{"result":"updated"}`
 		}
@@ -691,7 +691,7 @@ func TestTouchCleanNotesClearsStaleRow(t *testing.T) {
 	if _, err := c.Add(context.Background(), f); err != nil {
 		t.Fatalf("Add touch: %v", err)
 	}
-	updates := fake.requestsFor("POST", "/memento/_update/k")
+	updates := fake.requestsFor("POST", "/velruna/_update/k")
 	if len(updates) != 1 {
 		t.Fatalf("touch updates = %d, want 1", len(updates))
 	}
@@ -718,7 +718,7 @@ func TestNewClientExplainsKeyringOutage(t *testing.T) {
 	if !strings.Contains(err.Error(), "keyring is unavailable") {
 		t.Errorf("error %q does not name the keyring outage", err)
 	}
-	if strings.Contains(err.Error(), "store one with 'memento creds set'") {
+	if strings.Contains(err.Error(), "store one with 'velruna creds set'") {
 		t.Errorf("error %q advertises a store that cannot be written to", err)
 	}
 }

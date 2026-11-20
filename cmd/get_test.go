@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NemoNobody/memento/internal/model"
+	"github.com/NemoNobody/velruna/internal/model"
 )
 
 func testFact() *model.Fact {
@@ -58,7 +58,7 @@ func TestPrintFactHistoryShapes(t *testing.T) {
 
 	// Undecodable entries must not masquerade as a page cut: with 4 total,
 	// 2 shown and 2 corrupt, the page held everything decodable — the
-	// renderer must name the corruption, not send the user to `memento
+	// renderer must name the corruption, not send the user to `velruna
 	// journal` for entries that no command can decode.
 	buf.Reset()
 	if err := printFact(&buf, f, now, true, entries, 4, 2, nil); err != nil {

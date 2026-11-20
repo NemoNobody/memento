@@ -9,7 +9,7 @@ import (
 
 	xhtml "golang.org/x/net/html"
 
-	"github.com/NemoNobody/memento/internal/model"
+	"github.com/NemoNobody/velruna/internal/model"
 )
 
 // Extraction limits. A page is research input, not a target: the stored text is

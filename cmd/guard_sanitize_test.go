@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/NemoNobody/memento/internal/config"
-	"github.com/NemoNobody/memento/internal/secretguard"
+	"github.com/NemoNobody/velruna/internal/config"
+	"github.com/NemoNobody/velruna/internal/secretguard"
 )
 
 // The guard's write policy separates two classes: a high-confidence credential
@@ -28,7 +28,7 @@ func TestGuardSanitizeRedactsMediumConfidence(t *testing.T) {
 	if strings.Contains(value, mediumHex) {
 		t.Errorf("the flagged span survived: %q", value)
 	}
-	if !strings.Contains(value, "[memento-redacted:long-hex]") {
+	if !strings.Contains(value, "[velruna-redacted:long-hex]") {
 		t.Errorf("marker missing: %q", value)
 	}
 	if !strings.Contains(value, "deployment id ") {
@@ -142,7 +142,7 @@ func TestGuardSanitizeRefusesWhenNothingIsLeft(t *testing.T) {
 }
 
 // The assignment heuristic matches the key name too; replacing the whole match
-// would store "memento-redacted" and lose what the fact was about.
+// would store "velruna-redacted" and lose what the fact was about.
 func TestGuardSanitizeAssignmentKeepsKeyName(t *testing.T) {
 	value := "password = Sup3rS3cret!"
 	redactions, err := guardSanitize(config.GuardReject, false, textField("value", &value))
@@ -155,7 +155,7 @@ func TestGuardSanitizeAssignmentKeepsKeyName(t *testing.T) {
 	if strings.Contains(value, "Sup3rS3cret") {
 		t.Errorf("the value survived: %q", value)
 	}
-	if !strings.Contains(value, "[memento-redacted:credential-assignment]") {
+	if !strings.Contains(value, "[velruna-redacted:credential-assignment]") {
 		t.Errorf("marker missing: %q", value)
 	}
 	if len(redactions) != 1 || redactions[0].Chars != len("Sup3rS3cret!") {
@@ -185,10 +185,10 @@ func TestHasContent(t *testing.T) {
 		text string
 		want bool
 	}{
-		{"[memento-redacted:long-hex]", false},
-		{"  [memento-redacted:long-hex]  ", false},
-		{"[memento-redacted:long-hex] [memento-redacted:long-base64]", false},
-		{"id [memento-redacted:long-hex]", true},
+		{"[velruna-redacted:long-hex]", false},
+		{"  [velruna-redacted:long-hex]  ", false},
+		{"[velruna-redacted:long-hex] [velruna-redacted:long-base64]", false},
+		{"id [velruna-redacted:long-hex]", true},
 		{"plain text", true},
 	}
 	for _, tc := range cases {

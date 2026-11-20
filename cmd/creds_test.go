@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/NemoNobody/memento/internal/config"
-	"github.com/NemoNobody/memento/internal/keyring"
+	"github.com/NemoNobody/velruna/internal/config"
+	"github.com/NemoNobody/velruna/internal/keyring"
 )
 
 // fakeKeyringCmd replaces the OS keyring for cmd tests: stored entries are
@@ -47,11 +47,11 @@ func fakeKeyringCmd(t *testing.T) (stored map[string]string) {
 func credsTestEnv(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
-	conf := filepath.Join(dir, "memento.conf")
+	conf := filepath.Join(dir, "velruna.conf")
 	if err := os.WriteFile(conf, []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("MEMENTO_CONF", conf)
+	t.Setenv("VELRUNA_CONF", conf)
 	t.Setenv("OPENSEARCH_PASSWORD", "")
 }
 
@@ -91,7 +91,7 @@ func TestCredsSetPipedAndRm(t *testing.T) {
 	if got := out.String(); !strings.Contains(got, "account=os.test:9200") {
 		t.Errorf("set output: %q", got)
 	}
-	if stored["memento/os.test:9200"] != "sekret pw" {
+	if stored["velruna/os.test:9200"] != "sekret pw" {
 		t.Errorf("keyring after set: %v", stored)
 	}
 
@@ -102,7 +102,7 @@ func TestCredsSetPipedAndRm(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("creds rm: %v", err)
 	}
-	if _, ok := stored["memento/os.test:9200"]; ok {
+	if _, ok := stored["velruna/os.test:9200"]; ok {
 		t.Error("entry survived rm")
 	}
 	if !strings.Contains(out.String(), "removed") {
@@ -197,7 +197,7 @@ func TestRenderCredsStatus(t *testing.T) {
 	// keyring present, resolving.
 	cfg.PasswordSource = "keyring"
 	text := renderCredsStatus("os.test:9200", cfg, nil, "secret-service")
-	for _, want := range []string{"account: memento/os.test:9200", "source: keyring", "entry present"} {
+	for _, want := range []string{"account: velruna/os.test:9200", "source: keyring", "entry present"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("text lacks %q:\n%s", want, text)
 		}
@@ -251,7 +251,7 @@ func TestRenderCredsStatus(t *testing.T) {
 		t.Errorf("active backend not named:\n%s", text)
 	}
 
-	// A refused backend must not be paired with "memento creds set": neither the
+	// A refused backend must not be paired with "velruna creds set": neither the
 	// hint nor the plaintext-migration line may point at a store that cannot be
 	// written to until the backend is fixed. The plaintext branch only prints
 	// when the file actually carries a password, so both paths are exercised.
@@ -260,7 +260,7 @@ func TestRenderCredsStatus(t *testing.T) {
 	cfg.FileHasPlaintext = true
 	cfg.AllowPlaintext = false
 	text = renderCredsStatus("os.test:9200", cfg, fmt.Errorf("%w: no owner", keyring.ErrBackend), "")
-	if strings.Contains(text, "memento creds set") {
+	if strings.Contains(text, "velruna creds set") {
 		t.Errorf("refused backend still advertises 'creds set':\n%s", text)
 	}
 	if !strings.Contains(text, "fix the keyring backend") {
@@ -273,7 +273,7 @@ func TestRenderCredsStatus(t *testing.T) {
 func TestCredsGetPicksEnvAndKeyring(t *testing.T) {
 	credsTestEnv(t)
 	stored := fakeKeyringCmd(t)
-	stored["memento/os.test:9200"] = "wallet pw"
+	stored["velruna/os.test:9200"] = "wallet pw"
 
 	t.Setenv("OPENSEARCH_PASSWORD", "env pw")
 	cmd := CredsCmd()

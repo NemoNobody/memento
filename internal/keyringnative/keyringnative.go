@@ -14,7 +14,7 @@
 // "/org/freedesktop/secrets/aliases/default": the wallet the desktop
 // unlocks at login (PAM). No creation ceremony, no extra password,
 // encrypted at rest. When the alias is unavailable, the collection named
-// by MEMENTO_KEYRING_COLLECTION (default "kdewallet", the KDE wallet name;
+// by VELRUNA_KEYRING_COLLECTION (default "kdewallet", the KDE wallet name;
 // the login wallet on GNOME keyring is "Default keyring") is located by
 // Label; only if that is missing too, writes create it — on KDE that
 // asks for a dedicated wallet password, because PAM auto-opens exactly one
@@ -68,14 +68,14 @@ const (
 	defaultCollection = dbus.ObjectPath("/org/freedesktop/secrets/aliases/default")
 
 	// defaultCollectionName is the fallback collection's Label when the
-	// default alias is unavailable (MEMENTO_KEYRING_COLLECTION). On KDE the
+	// default alias is unavailable (VELRUNA_KEYRING_COLLECTION). On KDE the
 	// Secret Service collection label equals the wallet name; GNOME's login
 	// keyring is labelled "Default keyring".
 	defaultCollectionName = "kdewallet"
 
 	// appCollectionLabel prefixes item labels so entries are identifiable
 	// in wallet managers.
-	appCollectionLabel = "memento"
+	appCollectionLabel = "velruna"
 
 	// promptTimeout bounds the interactive part: unlocking a closed wallet
 	// needs a human at the desktop dialog; 120s is generous.
@@ -249,12 +249,12 @@ var collectionName = defaultCollectionName
 // on purpose — this is a per-desktop fact, not a per-project one, and the
 // provider must be configured before any config load.
 func init() {
-	SetCollectionName(os.Getenv("MEMENTO_KEYRING_COLLECTION"))
+	SetCollectionName(os.Getenv("VELRUNA_KEYRING_COLLECTION"))
 }
 
 // SetCollectionName points the fallback collection at an explicit label.
 // Empty keeps the default. Called once from init with
-// MEMENTO_KEYRING_COLLECTION (init-time only: concurrent MCP tool calls read
+// VELRUNA_KEYRING_COLLECTION (init-time only: concurrent MCP tool calls read
 // the package variable without a lock). On KDE this must match kwalletrc
 // "Default Wallet"; the login wallet itself is preferred whenever its alias
 // is alive.
@@ -530,7 +530,7 @@ func (c *client) createCollection(label string) (dbus.ObjectPath, error) {
 }
 
 // pickCollection resolves where secrets live: the default (login) wallet
-// first, then the collection named by MEMENTO_KEYRING_COLLECTION
+// first, then the collection named by VELRUNA_KEYRING_COLLECTION
 // (default "kdewallet": on KDE a wallet's collection Label is the wallet
 // name, so an explicit name finds the live login wallet even without a
 // registered alias). Reads never create anything — with no usable
@@ -691,10 +691,10 @@ func Set(service, user, value string) error {
 		// Both are worse than an honest instruction, so say what to do.
 		items, serr := c.searchItems(coll, attributes(service, user))
 		if serr != nil {
-			return fmt.Errorf("stored, but the provider did not identify the new entry and the entries could not be counted (%v): run `memento creds rm` and set again (a stranded duplicate may outrank the new secret)", serr)
+			return fmt.Errorf("stored, but the provider did not identify the new entry and the entries could not be counted (%v): run `velruna creds rm` and set again (a stranded duplicate may outrank the new secret)", serr)
 		}
 		if len(items) > 1 {
-			return fmt.Errorf("stored, but the provider did not identify the new entry and %d entries exist for this pair: run `memento creds rm` and set again (a later Get may otherwise read the old secret)", len(items))
+			return fmt.Errorf("stored, but the provider did not identify the new entry and %d entries exist for this pair: run `velruna creds rm` and set again (a later Get may otherwise read the old secret)", len(items))
 		}
 		return nil
 	}
@@ -716,7 +716,7 @@ func Set(service, user, value string) error {
 		}
 	}
 	if !keepFound {
-		return fmt.Errorf("stored, but the provider reported an entry outside the search results: run `memento creds rm` and set again (sweeping with an unknown keep-path could delete the stored secret)")
+		return fmt.Errorf("stored, but the provider reported an entry outside the search results: run `velruna creds rm` and set again (sweeping with an unknown keep-path could delete the stored secret)")
 	}
 	if len(items) > 1 {
 		if _, err := c.deleteItemsExcept(coll, attributes(service, user), item); err != nil {

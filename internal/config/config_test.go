@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/NemoNobody/memento/internal/keyring"
+	"github.com/NemoNobody/velruna/internal/keyring"
 )
 
 // TestMain makes the keyring dispatcher safe for every test in this package:
@@ -27,7 +27,7 @@ func TestMain(m *testing.M) {
 }
 
 // removeFile deletes path for test cleanup. A real removal failure fails the
-// test (it can leave a stray memento.conf next to the test binary and skew
+// test (it can leave a stray velruna.conf next to the test binary and skew
 // later tests); a file that is already gone is fine.
 func removeFile(t *testing.T, path string) {
 	t.Helper()
@@ -70,39 +70,39 @@ func fakeKeyring(t *testing.T, pw string, err error) {
 func clearEnv(t *testing.T) {
 	fakeKeyring(t, "", keyring.ErrNotFound)
 	for _, k := range []string{
-		"MEMENTO_CONF",
+		"VELRUNA_CONF",
 		"OPENSEARCH_URL",
 		"OPENSEARCH_USER",
 		"OPENSEARCH_PASSWORD",
-		"MEMENTO_INDEX",
-		"MEMENTO_HISTORY_LIMIT",
-		"MEMENTO_HISTORY_PERIOD",
-		"MEMENTO_SUMMARY_MIN_LEN",
-		"MEMENTO_SUMMARY_MAX_LEN",
-		"MEMENTO_AUTHOR",
-		"MEMENTO_MODEL",
-		"MEMENTO_HOST",
-		"MEMENTO_SESSION",
-		"MEMENTO_SECRET_GUARD",
-		"MEMENTO_ALLOW_PLAINTEXT",
-		"MEMENTO_DOCS_INDEX",
-		"MEMENTO_DOCS_TTL_DAYS",
-		"MEMENTO_FETCH_TIMEOUT",
-		"MEMENTO_FETCH_MAX_BYTES",
-		"MEMENTO_FETCH_BLOCK_CHARS",
-		"MEMENTO_FETCH_DOC_CHARS",
-		"MEMENTO_FETCH_ALLOW_PRIVATE",
-		"MEMENTO_FETCH_HOSTS",
+		"VELRUNA_INDEX",
+		"VELRUNA_HISTORY_LIMIT",
+		"VELRUNA_HISTORY_PERIOD",
+		"VELRUNA_SUMMARY_MIN_LEN",
+		"VELRUNA_SUMMARY_MAX_LEN",
+		"VELRUNA_AUTHOR",
+		"VELRUNA_MODEL",
+		"VELRUNA_HOST",
+		"VELRUNA_SESSION",
+		"VELRUNA_SECRET_GUARD",
+		"VELRUNA_ALLOW_PLAINTEXT",
+		"VELRUNA_DOCS_INDEX",
+		"VELRUNA_DOCS_TTL_DAYS",
+		"VELRUNA_FETCH_TIMEOUT",
+		"VELRUNA_FETCH_MAX_BYTES",
+		"VELRUNA_FETCH_BLOCK_CHARS",
+		"VELRUNA_FETCH_DOC_CHARS",
+		"VELRUNA_FETCH_ALLOW_PRIVATE",
+		"VELRUNA_FETCH_HOSTS",
 		"OPENSEARCH_INSECURE_SKIP_VERIFY",
-		"MEMENTO_FETCH_USER_AGENT",
-		"MEMENTO_FETCH_PROXY_URL",
-		"MEMENTO_FETCH_PROXY_FALLBACK",
-		"MEMENTO_FETCH_RESPECT_ROBOTS",
-		"MEMENTO_FETCH_RENDER",
-		"MEMENTO_FETCH_OBSCURA_PATH",
-		"MEMENTO_FETCH_OBSCURA_STEALTH",
-		"MEMENTO_LOCAL_REPO_ROOTS",
-		"MEMENTO_REPO_SCAN_DEPTH",
+		"VELRUNA_FETCH_USER_AGENT",
+		"VELRUNA_FETCH_PROXY_URL",
+		"VELRUNA_FETCH_PROXY_FALLBACK",
+		"VELRUNA_FETCH_RESPECT_ROBOTS",
+		"VELRUNA_FETCH_RENDER",
+		"VELRUNA_FETCH_OBSCURA_PATH",
+		"VELRUNA_FETCH_OBSCURA_STEALTH",
+		"VELRUNA_LOCAL_REPO_ROOTS",
+		"VELRUNA_REPO_SCAN_DEPTH",
 	} {
 		t.Setenv(k, "")
 	}
@@ -159,19 +159,19 @@ func TestLoadConfigRejectsURLUserInfo(t *testing.T) {
 	}
 }
 
-// FindConfigPathNoCWD must skip a ./memento.conf: `memento mcp` runs with
+// FindConfigPathNoCWD must skip a ./velruna.conf: `velruna mcp` runs with
 // the cwd of an arbitrary (possibly cloned, untrusted) project.
 func TestFindConfigPathNoCWD(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "memento.conf"), []byte("{}"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "velruna.conf"), []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	home := t.TempDir()
 	setHome(t, home)
-	t.Setenv("MEMENTO_CONF", "")
+	t.Setenv("VELRUNA_CONF", "")
 	t.Chdir(dir)
 
-	if got := FindConfigPath(); got != "memento.conf" {
+	if got := FindConfigPath(); got != "velruna.conf" {
 		t.Errorf("FindConfigPath() = %q, want the cwd entry", got)
 	}
 	if got := FindConfigPathNoCWD(); got != "" {
@@ -190,8 +190,8 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.InsecureSkipVerify {
 		t.Error("InsecureSkipVerify must be false by default (TLS is verified)")
 	}
-	if cfg.IndexName != "memento" {
-		t.Errorf("IndexName = %q, want memento", cfg.IndexName)
+	if cfg.IndexName != "velruna" {
+		t.Errorf("IndexName = %q, want velruna", cfg.IndexName)
 	}
 	if cfg.HistoryLimit != 20 {
 		t.Errorf("HistoryLimit = %d, want default 20", cfg.HistoryLimit)
@@ -222,8 +222,8 @@ func TestLoadConfig_NoFileNoEnv(t *testing.T) {
 	if cfg.OpenSearchURL != "https://127.0.0.1:9200" {
 		t.Errorf("OpenSearchURL = %q, want default (no file)", cfg.OpenSearchURL)
 	}
-	if cfg.IndexName != "memento" {
-		t.Errorf("IndexName = %q, want memento (no file)", cfg.IndexName)
+	if cfg.IndexName != "velruna" {
+		t.Errorf("IndexName = %q, want velruna (no file)", cfg.IndexName)
 	}
 	if cfg.HistoryLimit != 20 {
 		t.Errorf("HistoryLimit = %d, want default 20 (no file)", cfg.HistoryLimit)
@@ -235,14 +235,14 @@ func TestLoadConfig_File(t *testing.T) {
 	restore := chdir(t, dir)
 	defer restore()
 	clearEnv(t)
-	fc := filepath.Join(dir, "memento.conf")
+	fc := filepath.Join(dir, "velruna.conf")
 	if err := os.WriteFile(fc, []byte(`{
   "opensearch_url": "https://custom:9200",
   "opensearch_user": "user1",
   "opensearch_password": "pass1",
   "index_name": "myindex"
 }`), 0644); err != nil {
-		t.Fatalf("write memento.conf: %v", err)
+		t.Fatalf("write velruna.conf: %v", err)
 	}
 	cfg, err := LoadConfig()
 	if err != nil {
@@ -268,15 +268,15 @@ func TestLoadConfig_EnvOverride(t *testing.T) {
 	dir := t.TempDir()
 	restore := chdir(t, dir)
 	defer restore()
-	fc := filepath.Join(dir, "memento.conf")
+	fc := filepath.Join(dir, "velruna.conf")
 	if err := os.WriteFile(fc, []byte(`{
   "opensearch_url": "https://file:9200",
   "index_name": "fileindex"
 }`), 0644); err != nil {
-		t.Fatalf("write memento.conf: %v", err)
+		t.Fatalf("write velruna.conf: %v", err)
 	}
 	t.Setenv("OPENSEARCH_URL", "https://env:9200")
-	t.Setenv("MEMENTO_INDEX", "envindex")
+	t.Setenv("VELRUNA_INDEX", "envindex")
 	cfg, err := LoadConfig()
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
@@ -312,12 +312,12 @@ func TestLoadConfig_HistoryLimit(t *testing.T) {
 			restore := chdir(t, dir)
 			defer restore()
 			clearEnv(t)
-			fc := filepath.Join(dir, "memento.conf")
+			fc := filepath.Join(dir, "velruna.conf")
 			if err := os.WriteFile(fc, []byte(tc.file), 0644); err != nil {
-				t.Fatalf("write memento.conf: %v", err)
+				t.Fatalf("write velruna.conf: %v", err)
 			}
 			if tc.env != "" {
-				t.Setenv("MEMENTO_HISTORY_LIMIT", tc.env)
+				t.Setenv("VELRUNA_HISTORY_LIMIT", tc.env)
 			}
 			cfg, err := LoadConfig()
 			if err != nil {
@@ -335,9 +335,9 @@ func TestLoadConfig_HistoryLimitBadEnvIsAnError(t *testing.T) {
 	restore := chdir(t, dir)
 	defer restore()
 	clearEnv(t)
-	t.Setenv("MEMENTO_HISTORY_LIMIT", "not-a-number")
+	t.Setenv("VELRUNA_HISTORY_LIMIT", "not-a-number")
 	if _, err := LoadConfig(); err == nil {
-		t.Error("LoadConfig() = nil error for MEMENTO_HISTORY_LIMIT=not-a-number, want error")
+		t.Error("LoadConfig() = nil error for VELRUNA_HISTORY_LIMIT=not-a-number, want error")
 	}
 }
 
@@ -363,12 +363,12 @@ func TestLoadConfig_SecretGuard(t *testing.T) {
 			restore := chdir(t, dir)
 			defer restore()
 			clearEnv(t)
-			fc := filepath.Join(dir, "memento.conf")
+			fc := filepath.Join(dir, "velruna.conf")
 			if err := os.WriteFile(fc, []byte(tc.file), 0644); err != nil {
-				t.Fatalf("write memento.conf: %v", err)
+				t.Fatalf("write velruna.conf: %v", err)
 			}
 			if tc.env != "" {
-				t.Setenv("MEMENTO_SECRET_GUARD", tc.env)
+				t.Setenv("VELRUNA_SECRET_GUARD", tc.env)
 			}
 			cfg, err := LoadConfig()
 			if err != nil {
@@ -387,20 +387,20 @@ func TestLoadConfig_SecretGuardBadValuesAreErrors(t *testing.T) {
 	defer restore()
 	clearEnv(t)
 
-	fc := filepath.Join(dir, "memento.conf")
+	fc := filepath.Join(dir, "velruna.conf")
 	if err := os.WriteFile(fc, []byte(`{"secret_guard": "permissive"}`), 0644); err != nil {
-		t.Fatalf("write memento.conf: %v", err)
+		t.Fatalf("write velruna.conf: %v", err)
 	}
 	if _, err := LoadConfig(); err == nil {
 		t.Error("LoadConfig() = nil error for secret_guard=permissive, want error")
 	}
 
 	if err := os.WriteFile(fc, []byte(`{}`), 0644); err != nil {
-		t.Fatalf("write memento.conf: %v", err)
+		t.Fatalf("write velruna.conf: %v", err)
 	}
-	t.Setenv("MEMENTO_SECRET_GUARD", "yes-please")
+	t.Setenv("VELRUNA_SECRET_GUARD", "yes-please")
 	if _, err := LoadConfig(); err == nil {
-		t.Error("LoadConfig() = nil error for MEMENTO_SECRET_GUARD=yes-please, want error")
+		t.Error("LoadConfig() = nil error for VELRUNA_SECRET_GUARD=yes-please, want error")
 	}
 }
 
@@ -422,12 +422,12 @@ func TestLoadConfig_HistoryIndexPeriod(t *testing.T) {
 			restore := chdir(t, dir)
 			defer restore()
 			clearEnv(t)
-			fc := filepath.Join(dir, "memento.conf")
+			fc := filepath.Join(dir, "velruna.conf")
 			if err := os.WriteFile(fc, []byte(tc.file), 0644); err != nil {
-				t.Fatalf("write memento.conf: %v", err)
+				t.Fatalf("write velruna.conf: %v", err)
 			}
 			if tc.env != "" {
-				t.Setenv("MEMENTO_HISTORY_PERIOD", tc.env)
+				t.Setenv("VELRUNA_HISTORY_PERIOD", tc.env)
 			}
 			cfg, err := LoadConfig()
 			if err != nil {
@@ -446,20 +446,20 @@ func TestLoadConfig_HistoryIndexPeriodBadValuesAreErrors(t *testing.T) {
 	defer restore()
 	clearEnv(t)
 
-	fc := filepath.Join(dir, "memento.conf")
+	fc := filepath.Join(dir, "velruna.conf")
 	if err := os.WriteFile(fc, []byte(`{"history_index_period": "fortnight"}`), 0644); err != nil {
-		t.Fatalf("write memento.conf: %v", err)
+		t.Fatalf("write velruna.conf: %v", err)
 	}
 	if _, err := LoadConfig(); err == nil {
 		t.Error("LoadConfig() = nil error for history_index_period=fortnight, want error")
 	}
 
 	if err := os.WriteFile(fc, []byte(`{}`), 0644); err != nil {
-		t.Fatalf("write memento.conf: %v", err)
+		t.Fatalf("write velruna.conf: %v", err)
 	}
-	t.Setenv("MEMENTO_HISTORY_PERIOD", "biweekly")
+	t.Setenv("VELRUNA_HISTORY_PERIOD", "biweekly")
 	if _, err := LoadConfig(); err == nil {
-		t.Error("LoadConfig() = nil error for MEMENTO_HISTORY_PERIOD=biweekly, want error")
+		t.Error("LoadConfig() = nil error for VELRUNA_HISTORY_PERIOD=biweekly, want error")
 	}
 }
 
@@ -471,9 +471,9 @@ func TestLoadConfig_AuthorLabels(t *testing.T) {
 	restore := chdir(t, dir)
 	defer restore()
 	clearEnv(t)
-	fc := filepath.Join(dir, "memento.conf")
+	fc := filepath.Join(dir, "velruna.conf")
 	if err := os.WriteFile(fc, []byte(`{"author": " alice ", "model": "local-llm", "host": "devbox", "session": "s-42"}`), 0644); err != nil {
-		t.Fatalf("write memento.conf: %v", err)
+		t.Fatalf("write velruna.conf: %v", err)
 	}
 	cfg, err := LoadConfig()
 	if err != nil {
@@ -483,7 +483,7 @@ func TestLoadConfig_AuthorLabels(t *testing.T) {
 		t.Errorf("labels = %q/%q/%q/%q, want alice/local-llm/devbox/s-42", cfg.Author, cfg.Model, cfg.Host, cfg.Session)
 	}
 
-	t.Setenv("MEMENTO_AUTHOR", "bob")
+	t.Setenv("VELRUNA_AUTHOR", "bob")
 	cfg, err = LoadConfig()
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
@@ -498,41 +498,41 @@ func TestLoadConfig_AuthorLabelsBadAreErrors(t *testing.T) {
 	restore := chdir(t, dir)
 	defer restore()
 	clearEnv(t)
-	fc := filepath.Join(dir, "memento.conf")
+	fc := filepath.Join(dir, "velruna.conf")
 
 	long := strings.Repeat("x", 201)
 	if err := os.WriteFile(fc, []byte(`{"author": "`+long+`"}`), 0644); err != nil {
-		t.Fatalf("write memento.conf: %v", err)
+		t.Fatalf("write velruna.conf: %v", err)
 	}
 	if _, err := LoadConfig(); err == nil {
 		t.Error("LoadConfig() = nil error for a 201-rune author, want error")
 	}
 
 	if err := os.WriteFile(fc, []byte(`{}`), 0644); err != nil {
-		t.Fatalf("write memento.conf: %v", err)
+		t.Fatalf("write velruna.conf: %v", err)
 	}
-	t.Setenv("MEMENTO_MODEL", long)
+	t.Setenv("VELRUNA_MODEL", long)
 	if _, err := LoadConfig(); err == nil {
-		t.Error("LoadConfig() = nil error for a 201-rune MEMENTO_MODEL, want error")
+		t.Error("LoadConfig() = nil error for a 201-rune VELRUNA_MODEL, want error")
 	}
 
 	// A blank-after-trim label must be loud, not silently "absent": it
 	// would fall back to the OS user in the audit chain (file field).
 	if err := os.WriteFile(fc, []byte(`{"author": "   "}`), 0644); err != nil {
-		t.Fatalf("write memento.conf: %v", err)
+		t.Fatalf("write velruna.conf: %v", err)
 	}
 	if _, err := LoadConfig(); err == nil {
 		t.Error("LoadConfig() = nil error for a whitespace-only author, want error")
 	}
 
-	// Same bound on the env path: MEMENTO_AUTHOR=" " passes the non-empty
+	// Same bound on the env path: VELRUNA_AUTHOR=" " passes the non-empty
 	// env guard and must not overwrite the file author with a blank label.
 	if err := os.WriteFile(fc, []byte(`{"author": "alice"}`), 0644); err != nil {
-		t.Fatalf("write memento.conf: %v", err)
+		t.Fatalf("write velruna.conf: %v", err)
 	}
-	t.Setenv("MEMENTO_AUTHOR", "  ")
+	t.Setenv("VELRUNA_AUTHOR", "  ")
 	if _, err := LoadConfig(); err == nil {
-		t.Error("LoadConfig() = nil error for MEMENTO_AUTHOR of only spaces, want error")
+		t.Error("LoadConfig() = nil error for VELRUNA_AUTHOR of only spaces, want error")
 	}
 }
 
@@ -541,11 +541,11 @@ func TestLoadConfig_SummaryLimits(t *testing.T) {
 	restore := chdir(t, dir)
 	defer restore()
 	clearEnv(t)
-	fc := filepath.Join(dir, "memento.conf")
+	fc := filepath.Join(dir, "velruna.conf")
 
 	// Defaults exist: a fresh config has the table-of-contents contract.
 	if err := os.WriteFile(fc, []byte(`{}`), 0644); err != nil {
-		t.Fatalf("write memento.conf: %v", err)
+		t.Fatalf("write velruna.conf: %v", err)
 	}
 	cfg, err := LoadConfig()
 	if err != nil {
@@ -556,7 +556,7 @@ func TestLoadConfig_SummaryLimits(t *testing.T) {
 	}
 
 	if err := os.WriteFile(fc, []byte(`{"summary_min_len": 500, "summary_max_len": 100}`), 0644); err != nil {
-		t.Fatalf("write memento.conf: %v", err)
+		t.Fatalf("write velruna.conf: %v", err)
 	}
 	cfg, err = LoadConfig()
 	if err != nil {
@@ -566,7 +566,7 @@ func TestLoadConfig_SummaryLimits(t *testing.T) {
 		t.Errorf("summary limits = %d/%d, want 500/100", cfg.SummaryMinLen, cfg.SummaryMaxLen)
 	}
 
-	t.Setenv("MEMENTO_SUMMARY_MIN_LEN", "0")
+	t.Setenv("VELRUNA_SUMMARY_MIN_LEN", "0")
 	cfg, err = LoadConfig()
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
@@ -575,15 +575,15 @@ func TestLoadConfig_SummaryLimits(t *testing.T) {
 		t.Errorf("SummaryMinLen = %d, want 0 (env override: requirement off)", cfg.SummaryMinLen)
 	}
 
-	t.Setenv("MEMENTO_SUMMARY_MAX_LEN", "not-a-number")
+	t.Setenv("VELRUNA_SUMMARY_MAX_LEN", "not-a-number")
 	if _, err := LoadConfig(); err == nil {
-		t.Error("LoadConfig() = nil error for MEMENTO_SUMMARY_MAX_LEN=not-a-number, want error")
+		t.Error("LoadConfig() = nil error for VELRUNA_SUMMARY_MAX_LEN=not-a-number, want error")
 	}
 
 	if err := os.WriteFile(fc, []byte(`{"summary_min_len": -1}`), 0644); err != nil {
-		t.Fatalf("write memento.conf: %v", err)
+		t.Fatalf("write velruna.conf: %v", err)
 	}
-	t.Setenv("MEMENTO_SUMMARY_MAX_LEN", "")
+	t.Setenv("VELRUNA_SUMMARY_MAX_LEN", "")
 	if _, err := LoadConfig(); err == nil {
 		t.Error("LoadConfig() = nil error for summary_min_len=-1, want error")
 	}
@@ -591,17 +591,17 @@ func TestLoadConfig_SummaryLimits(t *testing.T) {
 	// The env path carries the same bound as the file path: a negative
 	// value silently disables the corresponding check (the checks are "> 0").
 	if err := os.WriteFile(fc, []byte(`{}`), 0644); err != nil {
-		t.Fatalf("write memento.conf: %v", err)
+		t.Fatalf("write velruna.conf: %v", err)
 	}
-	t.Setenv("MEMENTO_SUMMARY_MIN_LEN", "")
-	t.Setenv("MEMENTO_SUMMARY_MAX_LEN", "-5")
+	t.Setenv("VELRUNA_SUMMARY_MIN_LEN", "")
+	t.Setenv("VELRUNA_SUMMARY_MAX_LEN", "-5")
 	if _, err := LoadConfig(); err == nil {
-		t.Error("LoadConfig() = nil error for MEMENTO_SUMMARY_MAX_LEN=-5, want error")
+		t.Error("LoadConfig() = nil error for VELRUNA_SUMMARY_MAX_LEN=-5, want error")
 	}
-	t.Setenv("MEMENTO_SUMMARY_MAX_LEN", "")
-	t.Setenv("MEMENTO_SUMMARY_MIN_LEN", "-5")
+	t.Setenv("VELRUNA_SUMMARY_MAX_LEN", "")
+	t.Setenv("VELRUNA_SUMMARY_MIN_LEN", "-5")
 	if _, err := LoadConfig(); err == nil {
-		t.Error("LoadConfig() = nil error for MEMENTO_SUMMARY_MIN_LEN=-5, want error")
+		t.Error("LoadConfig() = nil error for VELRUNA_SUMMARY_MIN_LEN=-5, want error")
 	}
 }
 
@@ -610,11 +610,11 @@ func TestLoadConfig_FetchBlocks(t *testing.T) {
 	restore := chdir(t, dir)
 	defer restore()
 	clearEnv(t)
-	fc := filepath.Join(dir, "memento.conf")
+	fc := filepath.Join(dir, "velruna.conf")
 
 	// Defaults exist: 8000-rune blocks, whole docs up to 100k.
 	if err := os.WriteFile(fc, []byte(`{}`), 0644); err != nil {
-		t.Fatalf("write memento.conf: %v", err)
+		t.Fatalf("write velruna.conf: %v", err)
 	}
 	cfg, err := LoadConfig()
 	if err != nil {
@@ -626,7 +626,7 @@ func TestLoadConfig_FetchBlocks(t *testing.T) {
 
 	// File values apply.
 	if err := os.WriteFile(fc, []byte(`{"fetch_block_chars": 4000, "fetch_doc_chars": 50000}`), 0644); err != nil {
-		t.Fatalf("write memento.conf: %v", err)
+		t.Fatalf("write velruna.conf: %v", err)
 	}
 	cfg, err = LoadConfig()
 	if err != nil {
@@ -636,10 +636,10 @@ func TestLoadConfig_FetchBlocks(t *testing.T) {
 		t.Errorf("file fetch block/doc = %d/%d, want 4000/50000", cfg.FetchBlockChars, cfg.FetchDocChars)
 	}
 
-	// Env overrides both keys; MEMENTO_FETCH_DOC_CHARS=0 is the documented
+	// Env overrides both keys; VELRUNA_FETCH_DOC_CHARS=0 is the documented
 	// "store the whole document" value and must survive the override.
-	t.Setenv("MEMENTO_FETCH_BLOCK_CHARS", "6000")
-	t.Setenv("MEMENTO_FETCH_DOC_CHARS", "0")
+	t.Setenv("VELRUNA_FETCH_BLOCK_CHARS", "6000")
+	t.Setenv("VELRUNA_FETCH_DOC_CHARS", "0")
 	cfg, err = LoadConfig()
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
@@ -648,16 +648,16 @@ func TestLoadConfig_FetchBlocks(t *testing.T) {
 		t.Errorf("env fetch block/doc = %d/%d, want 6000/0", cfg.FetchBlockChars, cfg.FetchDocChars)
 	}
 
-	t.Setenv("MEMENTO_FETCH_DOC_CHARS", "not-a-number")
+	t.Setenv("VELRUNA_FETCH_DOC_CHARS", "not-a-number")
 	if _, err := LoadConfig(); err == nil {
-		t.Error("LoadConfig() = nil error for MEMENTO_FETCH_DOC_CHARS=not-a-number, want error")
+		t.Error("LoadConfig() = nil error for VELRUNA_FETCH_DOC_CHARS=not-a-number, want error")
 	}
-	t.Setenv("MEMENTO_FETCH_DOC_CHARS", "")
-	t.Setenv("MEMENTO_FETCH_BLOCK_CHARS", "not-a-number")
+	t.Setenv("VELRUNA_FETCH_DOC_CHARS", "")
+	t.Setenv("VELRUNA_FETCH_BLOCK_CHARS", "not-a-number")
 	if _, err := LoadConfig(); err == nil {
-		t.Error("LoadConfig() = nil error for MEMENTO_FETCH_BLOCK_CHARS=not-a-number, want error")
+		t.Error("LoadConfig() = nil error for VELRUNA_FETCH_BLOCK_CHARS=not-a-number, want error")
 	}
-	t.Setenv("MEMENTO_FETCH_BLOCK_CHARS", "")
+	t.Setenv("VELRUNA_FETCH_BLOCK_CHARS", "")
 
 	// Bounds. Block size is mandatory and clamped to 1000..64000 in both
 	// directions; doc chars accepts 0 but not negatives.
@@ -671,7 +671,7 @@ func TestLoadConfig_FetchBlocks(t *testing.T) {
 		{"fetch_doc_chars negative", `{"fetch_doc_chars": -1}`},
 	} {
 		if err := os.WriteFile(fc, []byte(tc.body), 0644); err != nil {
-			t.Fatalf("write memento.conf: %v", err)
+			t.Fatalf("write velruna.conf: %v", err)
 		}
 		if _, err := LoadConfig(); err == nil {
 			t.Errorf("LoadConfig() = nil error for %s, want error", tc.name)
@@ -681,13 +681,13 @@ func TestLoadConfig_FetchBlocks(t *testing.T) {
 	// The boundary messages name the key and the accepted range: an operator
 	// reads them from a startup log.
 	if err := os.WriteFile(fc, []byte(`{"fetch_block_chars": 999}`), 0644); err != nil {
-		t.Fatalf("write memento.conf: %v", err)
+		t.Fatalf("write velruna.conf: %v", err)
 	}
 	if _, err := LoadConfig(); err == nil || !strings.Contains(err.Error(), "fetch_block_chars must be between 1000 and 64000") {
 		t.Errorf("LoadConfig() error = %v, want the fetch_block_chars range message", err)
 	}
 	if err := os.WriteFile(fc, []byte(`{"fetch_doc_chars": -1}`), 0644); err != nil {
-		t.Fatalf("write memento.conf: %v", err)
+		t.Fatalf("write velruna.conf: %v", err)
 	}
 	if _, err := LoadConfig(); err == nil || !strings.Contains(err.Error(), "fetch_doc_chars must be 0 or greater") {
 		t.Errorf("LoadConfig() error = %v, want the fetch_doc_chars bound message", err)
@@ -705,7 +705,7 @@ func TestLoadConfig_FetchBlocks(t *testing.T) {
 		{"fetch_doc_chars zero", `{"fetch_doc_chars": 0}`, 8000, 0},
 	} {
 		if err := os.WriteFile(fc, []byte(tc.body), 0644); err != nil {
-			t.Fatalf("write memento.conf: %v", err)
+			t.Fatalf("write velruna.conf: %v", err)
 		}
 		cfg, err := LoadConfig()
 		if err != nil {
@@ -722,9 +722,9 @@ func TestLoadConfig_InsecureSkipVerifyExplicitFalse(t *testing.T) {
 	restore := chdir(t, dir)
 	defer restore()
 	clearEnv(t)
-	fc := filepath.Join(dir, "memento.conf")
+	fc := filepath.Join(dir, "velruna.conf")
 	if err := os.WriteFile(fc, []byte(`{"insecure_skip_verify": false}`), 0644); err != nil {
-		t.Fatalf("write memento.conf: %v", err)
+		t.Fatalf("write velruna.conf: %v", err)
 	}
 	cfg, err := LoadConfig()
 	if err != nil {
@@ -740,9 +740,9 @@ func TestLoadConfig_MalformedFileIsAnError(t *testing.T) {
 	restore := chdir(t, dir)
 	defer restore()
 	clearEnv(t)
-	fc := filepath.Join(dir, "memento.conf")
+	fc := filepath.Join(dir, "velruna.conf")
 	if err := os.WriteFile(fc, []byte(`{"opensearch_url": `), 0644); err != nil {
-		t.Fatalf("write memento.conf: %v", err)
+		t.Fatalf("write velruna.conf: %v", err)
 	}
 	if _, err := LoadConfig(); err == nil {
 		t.Error("LoadConfig() = nil error for malformed JSON, want error")
@@ -754,54 +754,54 @@ func TestLoadConfig_MissingExplicitPathIsAnError(t *testing.T) {
 	restore := chdir(t, dir)
 	defer restore()
 	clearEnv(t)
-	t.Setenv("MEMENTO_CONF", filepath.Join(dir, "does-not-exist.conf"))
+	t.Setenv("VELRUNA_CONF", filepath.Join(dir, "does-not-exist.conf"))
 	if _, err := LoadConfig(); err == nil {
-		t.Error("LoadConfig() = nil error for missing MEMENTO_CONF path, want error")
+		t.Error("LoadConfig() = nil error for missing VELRUNA_CONF path, want error")
 	}
 }
 
 func TestFindConfigPath(t *testing.T) {
-	// case 1: MEMENTO_CONF wins.
-	t.Setenv("MEMENTO_CONF", "/explicit/path/conf.json")
+	// case 1: VELRUNA_CONF wins.
+	t.Setenv("VELRUNA_CONF", "/explicit/path/conf.json")
 	if p := FindConfigPath(); p != "/explicit/path/conf.json" {
-		t.Errorf("MEMENTO_CONF path = %q, want explicit", p)
+		t.Errorf("VELRUNA_CONF path = %q, want explicit", p)
 	}
 
-	// case 2: cwd memento.conf wins.
+	// case 2: cwd velruna.conf wins.
 	dir := t.TempDir()
 	restore := chdir(t, dir)
 	defer restore()
 	clearEnv(t)
-	cwdFile := filepath.Join(dir, "memento.conf")
+	cwdFile := filepath.Join(dir, "velruna.conf")
 	if err := os.WriteFile(cwdFile, []byte(`{}`), 0644); err != nil {
-		t.Fatalf("write cwd memento.conf: %v", err)
+		t.Fatalf("write cwd velruna.conf: %v", err)
 	}
-	if p := FindConfigPath(); p != "memento.conf" {
-		t.Errorf("cwd path = %q, want memento.conf", p)
+	if p := FindConfigPath(); p != "velruna.conf" {
+		t.Errorf("cwd path = %q, want velruna.conf", p)
 	}
 
-	// case 3: executable-dir memento.conf wins (no cwd file).
+	// case 3: executable-dir velruna.conf wins (no cwd file).
 	removeFile(t, cwdFile)
 	execPath, err := os.Executable()
 	if err != nil {
 		t.Skipf("os.Executable: %v", err)
 	}
-	execConf := filepath.Join(filepath.Dir(execPath), "memento.conf")
+	execConf := filepath.Join(filepath.Dir(execPath), "velruna.conf")
 	if err := os.WriteFile(execConf, []byte(`{}`), 0644); err != nil {
-		t.Fatalf("write exec memento.conf: %v", err)
+		t.Fatalf("write exec velruna.conf: %v", err)
 	}
 	t.Cleanup(func() { removeFile(t, execConf) })
 	if p := FindConfigPath(); p != execConf {
 		t.Errorf("exec path = %q, want %s", p, execConf)
 	}
 
-	// case 4: home .memento.conf wins (no cwd or exec file).
+	// case 4: home .velruna.conf wins (no cwd or exec file).
 	removeFile(t, execConf)
 	homeDir := t.TempDir()
 	setHome(t, homeDir)
-	homeFile := filepath.Join(homeDir, ".memento.conf")
+	homeFile := filepath.Join(homeDir, ".velruna.conf")
 	if err := os.WriteFile(homeFile, []byte(`{}`), 0644); err != nil {
-		t.Fatalf("write home .memento.conf: %v", err)
+		t.Fatalf("write home .velruna.conf: %v", err)
 	}
 	t.Cleanup(func() { removeFile(t, homeFile) })
 	if p := FindConfigPath(); p != homeFile {

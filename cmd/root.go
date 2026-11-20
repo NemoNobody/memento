@@ -5,14 +5,14 @@ import (
 	"io"
 	"strconv"
 
-	"github.com/NemoNobody/memento/internal/client"
-	"github.com/NemoNobody/memento/internal/config"
-	"github.com/NemoNobody/memento/internal/version"
+	"github.com/NemoNobody/velruna/internal/client"
+	"github.com/NemoNobody/velruna/internal/config"
+	"github.com/NemoNobody/velruna/internal/version"
 
 	"github.com/spf13/cobra"
 )
 
-// noteSkipped reports hits the store returned but memento could not decode.
+// noteSkipped reports hits the store returned but velruna could not decode.
 // Silent drops train agents (and users) to trust an incomplete view; a
 // visible note makes index corruption actionable.
 func noteSkipped(w io.Writer, meta client.SearchMeta) error {
@@ -28,7 +28,7 @@ func noteSkipped(w io.Writer, meta client.SearchMeta) error {
 // independent command tree.
 func NewRootCmd() *cobra.Command {
 	root := &cobra.Command{
-		Use:     "memento",
+		Use:     "velruna",
 		Short:   "Verified-fact memory",
 		Version: version.Version,
 	}

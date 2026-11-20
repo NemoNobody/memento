@@ -18,7 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/NemoNobody/memento/internal/config"
+	"github.com/NemoNobody/velruna/internal/config"
 )
 
 // ghRef is a parsed GitHub content URL: one of
@@ -182,7 +182,7 @@ func GitHubLocal(cfg *config.Config, normalizedURL string) (string, bool) {
 	// Evaluate symlinks and re-check containment against the resolved root.
 	// Residual: the path is returned for the caller to open later, and a
 	// writable working tree can swap a component between check and open
-	// (openat2-style resolution is the only true fix). memento only prints
+	// (openat2-style resolution is the only true fix). velruna only prints
 	// the path, so the window only matters for consumers that read it.
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {

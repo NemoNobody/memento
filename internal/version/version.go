@@ -14,14 +14,14 @@ var Version = "dev"
 
 // Commit is the git commit a build was stamped from (short form). Source
 // builds keep it empty; release/dev builds stamp it with -ldflags -X. It
-// answers "which exact tree is running" for memento_status — version alone
+// answers "which exact tree is running" for velruna_status — version alone
 // cannot distinguish two dev builds.
 var Commit = ""
 
 // init fills in what a plain `go build` or `go install module@version` knows
 // about itself: the module version and the VCS revision the toolchain embedded
 // (buildvcs). Without it `go install ...@latest` reported "dev" with an empty
-// commit, which contradicts the version/commit fields memento_status promises.
+// commit, which contradicts the version/commit fields velruna_status promises.
 // Values stamped with -ldflags always win.
 func init() {
 	info, ok := debug.ReadBuildInfo()

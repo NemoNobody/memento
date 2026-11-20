@@ -12,10 +12,10 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/NemoNobody/memento/internal/client"
-	"github.com/NemoNobody/memento/internal/config"
-	"github.com/NemoNobody/memento/internal/model"
-	"github.com/NemoNobody/memento/internal/version"
+	"github.com/NemoNobody/velruna/internal/client"
+	"github.com/NemoNobody/velruna/internal/config"
+	"github.com/NemoNobody/velruna/internal/model"
+	"github.com/NemoNobody/velruna/internal/version"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
@@ -25,7 +25,7 @@ var mcpFlags struct {
 	conf string
 }
 
-// McpCmd returns the `memento mcp` command: an MCP server speaking over stdio.
+// McpCmd returns the `velruna mcp` command: an MCP server speaking over stdio.
 func McpCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "mcp",
@@ -36,20 +36,20 @@ The server exposes the facts store to MCP clients (VS Code, agents) as tools.
 It speaks JSON-RPC on stdin/stdout, so it is normally started by the client,
 not by hand. Diagnostics go to stderr.
 
-Config resolution: --conf flag, then MEMENTO_CONF, then next to the binary,
-then ~/.memento.conf. The memento.conf in the working directory is ignored on
+Config resolution: --conf flag, then VELRUNA_CONF, then next to the binary,
+then ~/.velruna.conf. The velruna.conf in the working directory is ignored on
 purpose: the editor starts this server from the cwd of an arbitrary project,
 and a cloned repository's config must not hijack the store endpoint.`,
 		Args: cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
 			if err := runMCPServer(mcpFlags.conf); err != nil {
-				_, _ = io.WriteString(os.Stderr, "memento mcp: "+err.Error()+"\n")
+				_, _ = io.WriteString(os.Stderr, "velruna mcp: "+err.Error()+"\n")
 				os.Exit(1)
 			}
 		},
 	}
 	cmd.Flags().StringVar(&mcpFlags.conf, "conf", "",
-		"config file to use (overrides MEMENTO_CONF and the default lookup)")
+		"config file to use (overrides VELRUNA_CONF and the default lookup)")
 	return cmd
 }
 
@@ -69,19 +69,19 @@ func runMCPServer(confPath string) error {
 	s := &mcpServer{confPath: confPath}
 
 	srv := mcp.NewServer(&mcp.Implementation{
-		Name:    "memento",
+		Name:    "velruna",
 		Version: version.Version,
 	}, &mcp.ServerOptions{
 		Instructions: "Verified facts about the user's projects (file locations, " +
 			"config and endpoint values, behavior). Consult facts before " +
 			"re-verifying something the user may have already confirmed, and store " +
 			"newly verified facts so they are not re-derived. Never store secrets " +
-			"(passwords, tokens) — the store is plaintext. Call memento_status first " +
+			"(passwords, tokens) — the store is plaintext. Call velruna_status first " +
 			"if you are unsure whether the store is available.",
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "memento_status",
+		Name: "velruna_status",
 		Description: "Check whether the facts store (OpenSearch) is reachable and " +
 			"report the effective configuration, plus storage state: cluster and " +
 			"index health, disk usage of the busiest data node, and whether the index " +
@@ -91,21 +91,21 @@ func runMCPServer(confPath string) error {
 	}, s.status)
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "memento_search",
+		Name: "velruna_search",
 		Description: "Search stored facts by text. Looks in fact values, notes and summaries " +
-			"only — it does NOT match keys, so use memento_get for an exact key " +
-			"(memento_keys navigates keys by pattern). By default returns only " +
+			"only — it does NOT match keys, so use velruna_get for an exact key " +
+			"(velruna_keys navigates keys by pattern). By default returns only " +
 			"trusted ('verified') facts; obsolete facts are superseded and must not " +
 			"be treated as current. History ships only on full rows " +
-			"(include_history=true with compact=false); memento_journal is the " +
+			"(include_history=true with compact=false); velruna_journal is the " +
 			"history tool. " +
-			"compact is TRUE by default (rows scan cheap; memento_get reads the value); compact=false restores full values. " +
+			"compact is TRUE by default (rows scan cheap; velruna_get reads the value); compact=false restores full values. " +
 			"Answers carry age_days/age_hours/stale: a stale fact " +
 			"must be re-verified against the source before being trusted.",
 	}, s.search)
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "memento_get",
+		Name: "velruna_get",
 		Description: "Get facts by exact key: key=... for one fact (found=false when " +
 			"there is no such fact — that is not an error), keys=[...] for a batch of " +
 			"up to 10 (items[] with per-key found). History is omitted unless " +
@@ -114,7 +114,7 @@ func runMCPServer(confPath string) error {
 	}, s.get)
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "memento_add",
+		Name: "velruna_add",
 		Description: "Store a verified fact: file locations, config and endpoint " +
 			"values, behavior. Re-use the same key to correct a fact — the " +
 			"accepted value is appended to the history journal and the fact " +
@@ -127,77 +127,77 @@ func runMCPServer(confPath string) error {
 			"than summary_min_len " +
 			"require a summary (kept under summary_max_len): it is the " +
 			"store's table of contents. For cheap partial updates (dated note, " +
-			"status flip) use memento_patch — no value resend. Never store " +
+			"status flip) use velruna_patch — no value resend. Never store " +
 			"secrets (passwords, tokens, keys): the store is plaintext and the " +
 			"secret_guard refuses credential shapes and redacts heuristic hits " +
 			"(the answer lists redactions) on writes.",
 	}, s.add)
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "memento_add_batch",
+		Name: "velruna_add_batch",
 		Description: "Store 1..10 facts in one call (the session-end ritual: " +
 			"open-items, git-state, ... in a single round-trip). Per-item guard " +
 			"and confirm_secret (one approved false positive never whitewashes " +
 			"the rest); duplicate keys are rejected; partial success is legal — " +
 			"the per-item answer says created/changed/error for each. Same " +
-			"semantics as memento_add.",
+			"semantics as velruna_add.",
 	}, s.addBatch)
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "memento_patch",
+		Name: "velruna_patch",
 		Description: "Partial update of an EXISTING fact (never creates — use " +
-			"memento_add): change value/summary/source, replace notes, append a " +
+			"velruna_add): change value/summary/source, replace notes, append a " +
 			"dated note line (notes_append — the cheap qualifier update, atomic " +
 			"server-side), flip status (verified|obsolete; a transition is " +
 			"journaled, obsolete→verified sets observed_at=now; reason goes with " +
 			"obsolete). Omitted fields are untouched. Journal semantics match " +
-			"memento_add: value changes and status transitions append entries, " +
+			"velruna_add: value changes and status transitions append entries, " +
 			"notes/summary/source moves are touches. On a value change the old " +
 			"summary is CLEARED unless you pass a new one (a stale table of " +
 			"contents is a lie).",
 	}, s.patch)
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "memento_patch_batch",
+		Name: "velruna_patch_batch",
 		Description: "Patch 1..10 existing facts in one call (the session-end " +
 			"ritual when the facts already exist: dated notes, status flips, " +
 			"git-state corrections in a single round-trip). Per-item guard and " +
 			"confirm_secret (one approved false positive never whitewashes the " +
 			"rest); duplicate keys are rejected; partial success is legal — the " +
 			"per-item answer says changed/status/error for each. Same semantics as " +
-			"memento_patch.",
+			"velruna_patch.",
 	}, s.patchBatch)
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "memento_list",
+		Name: "velruna_list",
 		Description: "List the facts stored for a project. Defaults to trusted " +
 			"('verified') facts only. prefix keeps only keys starting with it " +
 			"(trailing * allowed; keys conventionally start with the project " +
 			"name, e.g. prefix '<project>:state:'). COMPACT by default: key/summary/" +
 			"category/status/notes-head/age rows (a project listing is the most " +
 			"expensive agent call otherwise — full values cost ~5x); compact=false " +
-			"restores full rows, memento_get reads any single fact. SORT by default " +
+			"restores full rows, velruna_get reads any single fact. SORT by default " +
 			"updated (newest activity first: 'what moved since last session'; note " +
 			"a same-value touch moves updated_at without changing age/stale); " +
 			"sort=key for stable navigation. History ships only on full rows " +
-			"(include_history: true with compact: false); memento_journal is the " +
+			"(include_history: true with compact: false); velruna_journal is the " +
 			"history tool. A zero-hit answer carries a hint naming the next " +
 			"right move.",
 	}, s.list)
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "memento_keys",
+		Name: "velruna_keys",
 		Description: "Find facts by key across all projects: prefix (key start, " +
 			"e.g. 'proj:foo:loc:') and/or match (key substring; * and ? wildcards). " +
 			"At least one is required; results are sorted by key. The key-level " +
-			"navigation tool — use it to scope before memento_list/get; project is " +
+			"navigation tool — use it to scope before velruna_list/get; project is " +
 			"an optional extra filter. Rows are compact (key/summary/age: " +
 			"navigation is scanned, not read). Defaults to trusted ('verified') " +
 			"facts only.",
 	}, s.keys)
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "memento_prune",
+		Name: "velruna_prune",
 		Description: "Drop old history entries under a key, keeping the newest " +
 			"'keep' (the current value is never touched). DESTRUCTIVE: dropped " +
 			"observations are gone for good. Without confirm=true nothing is " +
@@ -206,28 +206,28 @@ func runMCPServer(confPath string) error {
 	}, s.prune)
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "memento_obsolete",
+		Name: "velruna_obsolete",
 		Description: "Mark a fact obsolete because its subject is gone (file " +
-			"deleted, endpoint removed). Use memento_add when the value " +
-			"changed, memento_patch to flip status — the transition is journaled " +
+			"deleted, endpoint removed). Use velruna_add when the value " +
+			"changed, velruna_patch to flip status — the transition is journaled " +
 			"either way. The value is kept for reference; the reason is appended " +
 			"to notes.",
 	}, s.obsolete)
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "memento_journal",
+		Name: "velruna_journal",
 		Description: "Read the journal for a key: the append-only history of " +
 			"accepted values (newest first, bounded by limit; changes = writes-1). " +
 			"op=write is an accepted value; op=rediscovery is a re-confirmation of " +
-			"the same value (memento_patch reverify); op=retire marks a " +
+			"the same value (velruna_patch reverify); op=retire marks a " +
 			"verified→obsolete transition. Counts after an " +
 			"admin deleted old journal indices are lower bounds. Use " +
-			"memento_history_info first for the cheap overview, the full " +
+			"velruna_history_info first for the cheap overview, the full " +
 			"journal only when the history matters.",
 	}, s.journal)
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "memento_history_info",
+		Name: "velruna_history_info",
 		Description: "Compact per-key history overview: writes, rediscoveries, " +
 			"first/last timestamp, current_ref — without the entry bodies. " +
 			"Answers 'did this fact change, how often, when was the last time' " +
@@ -237,7 +237,7 @@ func runMCPServer(confPath string) error {
 	}, s.historyInfo)
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "memento_fetch_doc",
+		Name: "velruna_fetch_doc",
 		Description: "Fetch a web page, store its snapshot in the docs index as " +
 			"blocks (headings/sections), and return the outline (hash, title, " +
 			"sections). max_chars caps the stored text in runes (0 = the whole " +
@@ -250,7 +250,7 @@ func runMCPServer(confPath string) error {
 			"stored split (a revalidating 304 included), while a truncated snapshot " +
 			"re-extracted for a larger max_chars is re-blocked at the requested " +
 			"size when that budget stores more text. Section text is read with " +
-			"memento_get_doc; the raw page is never returned (context economy). " +
+			"velruna_get_doc; the raw page is never returned (context economy). " +
 			"Requests send no cookies and no credentials; a host outside " +
 			"fetch_allow_hosts is rejected before the request. GitHub URLs that " +
 			"match a local clone resolve to a local path (local=true) with no " +
@@ -259,7 +259,7 @@ func runMCPServer(confPath string) error {
 	}, s.fetchDoc)
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "memento_get_doc",
+		Name: "velruna_get_doc",
 		Description: "Read a stored document snapshot by hash: the outline by " +
 			"default, section=N for one block or a run of them (blocks=N, default " +
 			"1, max 10), full=true for every block. One answer is capped at " +
@@ -270,16 +270,16 @@ func runMCPServer(confPath string) error {
 			"snapshot keeps its own split unless more text was requested. Prefer one section: full bloats the " +
 			"context. Never touches the " +
 			"network: stale=true means the snapshot is past its TTL — refresh it " +
-			"with memento_fetch_doc before quoting.",
+			"with velruna_fetch_doc before quoting.",
 	}, s.getDoc)
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "memento_search_docs",
+		Name: "velruna_search_docs",
 		Description: "BM25 search over stored page snapshots (section text only; " +
 			"the raw html is write-only and never searched). Returns hash+url+title+" +
 			"project per doc, with the MATCHED section (order, heading, a snippet " +
-			"centered on the match): memento_get_doc(hash, section=order) reads that " +
-			"section in full. Complements memento_search, which searches verified " +
+			"centered on the match): velruna_get_doc(hash, section=order) reads that " +
+			"section in full. Complements velruna_search, which searches verified " +
 			"facts, not pages.",
 	}, s.searchDocs)
 
@@ -291,12 +291,12 @@ func runMCPServer(confPath string) error {
 	return err
 }
 
-// statusInput is empty: memento_status takes no arguments.
+// statusInput is empty: velruna_status takes no arguments.
 type statusInput struct{}
 
 // status reports connectivity and effective configuration. It is deliberately
 // error-free: it returns ok=false instead of failing, so an agent can relay the
-// problem to the user in words. The payload is shared with `memento status`,
+// problem to the user in words. The payload is shared with `velruna status`,
 // but resolved through the MCP NoCWD chain: the report must describe the
 // config the store tools actually use, never a cwd file the tools ignore.
 func (s *mcpServer) status(ctx context.Context, req *mcp.CallToolRequest, _ statusInput) (*mcp.CallToolResult, statusReport, error) {
@@ -338,7 +338,7 @@ func newConfirmerViews(in []model.Confirmer) []confirmerView {
 // (RFC3339 timestamps, no internal fields) rather than the internal model.
 // In compact mode most fields carry omitempty so the JSON drops them: the
 // compact view is a table of contents (key, summary, state, age), the full
-// value is one memento_get away.
+// value is one velruna_get away.
 type factView struct {
 	Key          string            `json:"key" jsonschema:"stable fact key, e.g. proj:foo:loc:bar.py"`
 	Value        string            `json:"value,omitempty" jsonschema:"the fact itself (compact mode: only a 100-rune head when the fact has no summary)"`
@@ -351,7 +351,7 @@ type factView struct {
 	AuthorSource string            `json:"author_source,omitempty" jsonschema:"security | config | os | none — which chain link named the author"`
 	UpdatedBy    string            `json:"updated_by,omitempty" jsonschema:"self-reported label of the last writer; the birth author fields are write-once"`
 	Notes        string            `json:"notes,omitempty" jsonschema:"qualifiers: what was checked, how far, caveats (compact mode: first 100 runes)"`
-	Keywords     []string          `json:"keywords,omitempty" jsonschema:"normalized tags (lowercase single tokens); the keyword filter of memento_search matches these exactly"`
+	Keywords     []string          `json:"keywords,omitempty" jsonschema:"normalized tags (lowercase single tokens); the keyword filter of velruna_search matches these exactly"`
 	Redactions   []model.Redaction `json:"redactions,omitempty" jsonschema:"spans the write-time secret guard replaced before storing (field, pattern, chars — never the text): the stored value is SHORTER than the one written, so a reader must not take it for the complete claim"`
 	ObservedAt   string            `json:"observed_at" jsonschema:"RFC3339 when the current value was observed"`
 	TTLDays      int               `json:"ttl_days,omitempty" jsonschema:"per-fact staleness override in days, when the writer chose one (otherwise the category default: config/endpoint 14, location/behavior 30, recipe 180, rule 90, context_map never)"`
@@ -375,7 +375,7 @@ func rfc3339OrEmpty(t time.Time) string {
 
 // truncRunes keeps the first n runes of s, marking a real cut with an
 // ellipsis. Compact views trade text for context: a reader that needs the
-// rest calls memento_get.
+// rest calls velruna_get.
 func truncRunes(s string, n int) string {
 	r := []rune(s)
 	if len(r) <= n {
@@ -396,7 +396,7 @@ func truncRunes(s string, n int) string {
 // tokens of a compact one, and list/search over a whole project is the most
 // expensive call in a session. A fact without a summary keeps a 100-rune
 // head of its value so it is not an empty row. History is a full-row-only
-// option: compact rows are navigation; memento_journal reads the history.
+// option: compact rows are navigation; velruna_journal reads the history.
 func newFactView(f model.Fact, includeHistory, compact bool) factView {
 	v := factView{
 		Key:          f.Key,
@@ -452,7 +452,7 @@ func newFactViews(facts []model.Fact, includeHistory, compact bool) []factView {
 	return views
 }
 
-// factsOutput is the list-shaped result shared by memento_search and memento_list.
+// factsOutput is the list-shaped result shared by velruna_search and velruna_list.
 type factsOutput struct {
 	Count int        `json:"count" jsonschema:"number of facts returned"`
 	Facts []factView `json:"facts" jsonschema:"matching facts (order: search = relevance; list = sort parameter, updated by default; keys = by key)"`
@@ -470,7 +470,7 @@ type factsOutput struct {
 
 // loadConfig resolves the config for a tool call: the explicit --conf wins;
 // without one the working directory is ignored (the editor opens MCP with
-// the cwd of an arbitrary, possibly untrusted, project — its memento.conf
+// the cwd of an arbitrary, possibly untrusted, project — its velruna.conf
 // must not hijack the endpoint).
 func (s *mcpServer) loadConfig() (*config.Config, error) {
 	if s.confPath != "" {
@@ -502,7 +502,7 @@ func (s *mcpServer) clientFromConfig(ctx context.Context, cfg *config.Config) (*
 }
 
 // newClientWithConfig is newClient plus the effective config, for tools that
-// need config values beyond the connection (memento_prune's default keep).
+// need config values beyond the connection (velruna_prune's default keep).
 func (s *mcpServer) newClientWithConfig(ctx context.Context) (*client.Client, *config.Config, error) {
 	cfg, err := s.loadConfig()
 	if err != nil {
@@ -519,12 +519,12 @@ func (s *mcpServer) newClientWithConfig(ctx context.Context) (*client.Client, *c
 // result, so an agent reports it instead of treating "nothing" as the answer.
 func storeError(op string, err error) error {
 	return fmt.Errorf("%s failed: %w. If the facts store is unreachable, call "+
-		"memento_status and tell the user; do not retry in a loop", op, err)
+		"velruna_status and tell the user; do not retry in a loop", op, err)
 }
 
 // writeFailure classifies a failed write at the MCP edge. A local contract
 // rejection (summary bounds, re-retiring) never reached the store: wrapping
-// it in availability advice would send the agent chasing memento_status
+// it in availability advice would send the agent chasing velruna_status
 // while the request itself is what needs fixing. A CAS conflict is neither:
 // the client's message already orders "re-read and retry", and store
 // advice ("do not retry") would contradict it in the other direction.
@@ -562,17 +562,17 @@ type searchInput struct {
 	Status         string `json:"status,omitempty" jsonschema:"limit results to this status: verified (default), obsolete, or any"`
 	Limit          int    `json:"limit,omitempty" jsonschema:"max hits to return (default 10, cap 50): the context budget for search results"`
 	IncludeHistory bool   `json:"include_history,omitempty" jsonschema:"include the full history chain (default: current value only); ships only on full rows (compact=false)"`
-	// Compact defaults to true (the memento_list rule): a search hit is
+	// Compact defaults to true (the velruna_list rule): a search hit is
 	// navigation — the summary is the table of contents, the full value is
-	// one memento_get away. compact=false restores full rows.
-	Compact *bool `json:"compact,omitempty" jsonschema:"compact rows (no value/authorship; notes truncated): DEFAULT true — memento_get reads the value; compact=false restores full rows (~5x the tokens)"`
+	// one velruna_get away. compact=false restores full rows.
+	Compact *bool `json:"compact,omitempty" jsonschema:"compact rows (no value/authorship; notes truncated): DEFAULT true — velruna_get reads the value; compact=false restores full rows (~5x the tokens)"`
 }
 
 func (s *mcpServer) search(ctx context.Context, req *mcp.CallToolRequest, in searchInput) (*mcp.CallToolResult, factsOutput, error) {
 	// Shape before store contact (the search_docs contract): an empty query
 	// answers a silent zero — navigation is what list/keys are for.
 	if strings.TrimSpace(in.Query) == "" {
-		return nil, factsOutput{}, errors.New("memento_search: query is required")
+		return nil, factsOutput{}, errors.New("velruna_search: query is required")
 	}
 	limit := in.Limit
 	if limit <= 0 {
@@ -590,7 +590,7 @@ func (s *mcpServer) search(ctx context.Context, req *mcp.CallToolRequest, in sea
 	// An unknown category filter answers a silent zero forever (the term is
 	// exact on the stored canonical): refuse the typo at the edge instead.
 	if in.Category != "" && !model.ValidCategory(in.Category) {
-		return nil, factsOutput{}, fmt.Errorf("memento_search: unknown category %q (filters match the stored canonical: location | config | endpoint | behavior | context_map | recipe | rule)", in.Category)
+		return nil, factsOutput{}, fmt.Errorf("velruna_search: unknown category %q (filters match the stored canonical: location | config | endpoint | behavior | context_map | recipe | rule)", in.Category)
 	}
 	status, serr := resolveStatus(in.Status)
 	if serr != nil {
@@ -602,10 +602,10 @@ func (s *mcpServer) search(ctx context.Context, req *mcp.CallToolRequest, in sea
 	if in.Keyword != "" {
 		kw, kerr := model.NormalizeKeywords([]string{in.Keyword})
 		if kerr != nil {
-			return nil, factsOutput{}, fmt.Errorf("memento_search: %v", kerr)
+			return nil, factsOutput{}, fmt.Errorf("velruna_search: %v", kerr)
 		}
 		if len(kw) == 0 {
-			return nil, factsOutput{}, errors.New("memento_search: keyword must not be blank")
+			return nil, factsOutput{}, errors.New("velruna_search: keyword must not be blank")
 		}
 		keyword = kw[0]
 	}
@@ -617,11 +617,11 @@ func (s *mcpServer) search(ctx context.Context, req *mcp.CallToolRequest, in sea
 	// must not pay for a client build and an index ensure.
 	c, err := s.newClient(ctx)
 	if err != nil {
-		return nil, factsOutput{}, storeError("memento_search", err)
+		return nil, factsOutput{}, storeError("velruna_search", err)
 	}
 	facts, meta, err := c.Search(ctx, in.Query, in.Project, in.Category, status, keyword, limit)
 	if err != nil {
-		return nil, factsOutput{}, storeError("memento_search", err)
+		return nil, factsOutput{}, storeError("velruna_search", err)
 	}
 	out := factsOutput{
 		Count:     len(facts),
@@ -632,10 +632,10 @@ func (s *mcpServer) search(ctx context.Context, req *mcp.CallToolRequest, in sea
 	if out.Count == 0 {
 		// A bare 0 invites URL-style guessing and tool churn; name the next
 		// right move instead.
-		out.Hint = "0 hits: this search reads values/notes/summaries, not keys — for key lookup use memento_keys (prefix/match); for a project overview memento_list; try shorter terms"
+		out.Hint = "0 hits: this search reads values/notes/summaries, not keys — for key lookup use velruna_keys (prefix/match); for a project overview velruna_list; try shorter terms"
 	} else if compact {
 		// Compact is the default now: say where the full value lives.
-		out.Hint = "compact rows: memento_get(key) reads the full value; compact=false restores full rows"
+		out.Hint = "compact rows: velruna_get(key) reads the full value; compact=false restores full rows"
 	}
 	return nil, out, nil
 }
@@ -681,19 +681,19 @@ func (s *mcpServer) get(ctx context.Context, req *mcp.CallToolRequest, in getInp
 	// touching the store.
 	hasKey := in.Key != ""
 	if hasKey == (len(in.Keys) > 0) {
-		return nil, getOutput{}, fmt.Errorf("memento_get: provide exactly one of key or keys (up to %d)", maxGetKeys)
+		return nil, getOutput{}, fmt.Errorf("velruna_get: provide exactly one of key or keys (up to %d)", maxGetKeys)
 	}
 	if len(in.Keys) > maxGetKeys {
-		return nil, getOutput{}, fmt.Errorf("memento_get: keys is capped at %d (context economy)", maxGetKeys)
+		return nil, getOutput{}, fmt.Errorf("velruna_get: keys is capped at %d (context economy)", maxGetKeys)
 	}
 	for i, k := range in.Keys {
 		if k == "" {
-			return nil, getOutput{}, fmt.Errorf("memento_get: empty key in keys at index %d", i)
+			return nil, getOutput{}, fmt.Errorf("velruna_get: empty key in keys at index %d", i)
 		}
 	}
 	c, err := s.newClient(ctx)
 	if err != nil {
-		return nil, getOutput{}, storeError("memento_get", err)
+		return nil, getOutput{}, storeError("velruna_get", err)
 	}
 	if len(in.Keys) > 0 {
 		items := make([]itemGet, 0, len(in.Keys))
@@ -704,7 +704,7 @@ func (s *mcpServer) get(ctx context.Context, req *mcp.CallToolRequest, in getInp
 				continue
 			}
 			if err != nil {
-				return nil, getOutput{}, storeError("memento_get", err)
+				return nil, getOutput{}, storeError("velruna_get", err)
 			}
 			v := newFactView(*f, in.IncludeHistory, false)
 			items = append(items, itemGet{Key: k, Found: true, Fact: &v})
@@ -717,7 +717,7 @@ func (s *mcpServer) get(ctx context.Context, req *mcp.CallToolRequest, in getInp
 		return nil, getOutput{Found: boolPtr(false)}, nil
 	}
 	if err != nil {
-		return nil, getOutput{}, storeError("memento_get", err)
+		return nil, getOutput{}, storeError("velruna_get", err)
 	}
 	v := newFactView(*f, in.IncludeHistory, false)
 	return nil, getOutput{Found: boolPtr(true), Fact: &v}, nil
@@ -771,7 +771,7 @@ type addOutput struct {
 func (s *mcpServer) add(ctx context.Context, req *mcp.CallToolRequest, in addInput) (*mcp.CallToolResult, addOutput, error) {
 	cfg, cerr := s.loadConfig()
 	if cerr != nil {
-		return nil, addOutput{}, storeError("memento_add", cerr)
+		return nil, addOutput{}, storeError("velruna_add", cerr)
 	}
 	out, err := s.addOne(ctx, cfg, nil, nil, in)
 	if err != nil {
@@ -782,9 +782,9 @@ func (s *mcpServer) add(ctx context.Context, req *mcp.CallToolRequest, in addInp
 
 // addOne is the add contract for one item: validate → guard → write. The
 // config arrives loaded (the guard and the client share it; a locked wallet
-// is not prompted twice), so memento_add_batch runs the identical pipeline
+// is not prompted twice), so velruna_add_batch runs the identical pipeline
 // per item without re-reading config per call.
-// addOne is the shared write path of memento_add and memento_add_batch.
+// addOne is the shared write path of velruna_add and velruna_add_batch.
 // c is the shared client (a batch reuses one connection and one EnsureIndex);
 // nil means "create one for this single call". cErr is a client-creation
 // failure the batch already paid for: the item runs validation and guard and
@@ -797,13 +797,13 @@ func (s *mcpServer) addOne(ctx context.Context, cfg *config.Config, c *client.Cl
 	// cryptic store error, and an unknown category never ages (silent rot).
 	in.Key = strings.TrimSpace(in.Key)
 	if in.Key == "" {
-		return addOutput{}, errors.New("memento_add: key is required")
+		return addOutput{}, errors.New("velruna_add: key is required")
 	}
 	if strings.TrimSpace(in.Value) == "" {
-		return addOutput{}, errors.New("memento_add: value is required")
+		return addOutput{}, errors.New("velruna_add: value is required")
 	}
 	if !model.ValidCategory(strings.ToLower(in.Category)) {
-		return addOutput{}, fmt.Errorf("memento_add: unknown category %q (want location | config | endpoint | behavior | context_map | recipe | rule)", in.Category)
+		return addOutput{}, fmt.Errorf("velruna_add: unknown category %q (want location | config | endpoint | behavior | context_map | recipe | rule)", in.Category)
 	}
 	// Canonicalize for storage: the TTL table and the search category filter
 	// are case-sensitive, so a mixed-case write would silently never age and
@@ -844,7 +844,7 @@ func (s *mcpServer) addOne(ctx context.Context, cfg *config.Config, c *client.Cl
 		var cerr error
 		c, cerr = s.clientFromConfig(ctx, cfg)
 		if cerr != nil {
-			return addOutput{}, storeError("memento_add", cerr)
+			return addOutput{}, storeError("velruna_add", cerr)
 		}
 	}
 	f := model.NewFact(in.Key, in.Value, in.Category, in.Project, in.Source, in.Notes)
@@ -855,22 +855,22 @@ func (s *mcpServer) addOne(ctx context.Context, cfg *config.Config, c *client.Cl
 	// tool call, and client.Add re-normalizes for the CLI path.
 	kw, kwErr := model.NormalizeKeywords(in.Keywords)
 	if kwErr != nil {
-		return addOutput{}, fmt.Errorf("memento_add: %v", kwErr)
+		return addOutput{}, fmt.Errorf("velruna_add: %v", kwErr)
 	}
 	f.Keywords = kw
 	res, err := c.Add(ctx, f)
 	if err != nil {
 		// Partial success (the fact doc landed, the journal/link follow-up
-		// failed): Add reports what landed in res. The single memento_add edge
+		// failed): Add reports what landed in res. The single velruna_add edge
 		// cannot surface the flags — go-sdk discards the typed output when the
 		// handler returns an error, so the honest state travels in the error
-		// text — but memento_add_batch copies these flags into its per-item
+		// text — but velruna_add_batch copies these flags into its per-item
 		// output next to item.Error, where they are visible. Do not "simplify"
 		// this away: the batch answer would silently zero what did store.
 		if res.Created || res.Changed {
-			return addOutput{Key: in.Key, Created: res.Created, Changed: res.Changed, Status: f.Status, Redactions: redactions}, writeFailure("memento_add", err)
+			return addOutput{Key: in.Key, Created: res.Created, Changed: res.Changed, Status: f.Status, Redactions: redactions}, writeFailure("velruna_add", err)
 		}
-		return addOutput{}, writeFailure("memento_add", err)
+		return addOutput{}, writeFailure("velruna_add", err)
 	}
 	out := addOutput{Key: in.Key, Created: res.Created, Changed: res.Changed,
 		Status: f.Status, PreviousSummary: res.PreviousSummary, Redactions: redactions}
@@ -905,22 +905,22 @@ type addBatchOutput struct {
 
 type addBatchItem struct {
 	Key     string `json:"key" jsonschema:"the item's key"`
-	Created bool   `json:"created" jsonschema:"see memento_add"`
-	Changed bool   `json:"changed" jsonschema:"see memento_add"`
+	Created bool   `json:"created" jsonschema:"see velruna_add"`
+	Changed bool   `json:"changed" jsonschema:"see velruna_add"`
 	Status  string `json:"status,omitempty" jsonschema:"status of the stored fact"`
 	// Error carries the item's rejection (guard hit, validation, store
 	// failure). Partial success is legal: OpenSearch writes are per-doc, and
 	// a batch transaction would be a fiction.
 	Error string `json:"error,omitempty" jsonschema:"this item's failure (guard/validation/store); other items were processed regardless"`
-	// Redactions is memento_add's audit per item: the stored value lost a
+	// Redactions is velruna_add's audit per item: the stored value lost a
 	// flagged span. The batch answer must carry it — the per-item outcome is
 	// the only place a caller can see that a write landed shortened.
-	Redactions []model.Redaction `json:"redactions,omitempty" jsonschema:"spans the secret guard replaced before storing (see memento_add)"`
+	Redactions []model.Redaction `json:"redactions,omitempty" jsonschema:"spans the secret guard replaced before storing (see velruna_add)"`
 }
 
 func (s *mcpServer) addBatch(ctx context.Context, req *mcp.CallToolRequest, in addBatchInput) (*mcp.CallToolResult, addBatchOutput, error) {
 	if len(in.Items) == 0 || len(in.Items) > maxAddBatchItems {
-		return nil, addBatchOutput{}, fmt.Errorf("memento_add_batch: items must be 1..%d", maxAddBatchItems)
+		return nil, addBatchOutput{}, fmt.Errorf("velruna_add_batch: items must be 1..%d", maxAddBatchItems)
 	}
 	// Duplicate keys in one batch are ambiguous by construction: the second
 	// item silently corrects the first (order-dependent created/changed and
@@ -930,19 +930,19 @@ func (s *mcpServer) addBatch(ctx context.Context, req *mcp.CallToolRequest, in a
 	for _, it := range in.Items {
 		k := strings.TrimSpace(it.Key)
 		if seen[k] {
-			return nil, addBatchOutput{}, fmt.Errorf("memento_add_batch: duplicate key %q in one batch", k)
+			return nil, addBatchOutput{}, fmt.Errorf("velruna_add_batch: duplicate key %q in one batch", k)
 		}
 		seen[k] = true
 	}
 	cfg, cerr := s.loadConfig()
 	if cerr != nil {
-		return nil, addBatchOutput{}, storeError("memento_add_batch", cerr)
+		return nil, addBatchOutput{}, storeError("velruna_add_batch", cerr)
 	}
 	// One client for the batch: a shared connection and a single EnsureIndex
 	// (the per-item version made the "one round-trip" tool ten round-trips).
 	c, cErr := s.clientFromConfig(ctx, cfg)
 	if cErr != nil {
-		cErr = storeError("memento_add_batch", cErr)
+		cErr = storeError("velruna_add_batch", cErr)
 	}
 	out := addBatchOutput{Items: make([]addBatchItem, 0, len(in.Items))}
 	for i, it := range in.Items {
@@ -952,8 +952,8 @@ func (s *mcpServer) addBatch(ctx context.Context, req *mcp.CallToolRequest, in a
 		item := addBatchItem{Key: strings.TrimSpace(it.Key), Created: res.Created, Changed: res.Changed, Status: res.Status, Redactions: res.Redactions}
 		if err != nil {
 			// Label the item, not the single-add tool: an agent reading a
-			// batch answer must not conclude memento_add itself broke.
-			item.Error = "memento_add_batch item " + strconv.Itoa(i) + ": " + strings.TrimPrefix(err.Error(), "memento_add: ")
+			// batch answer must not conclude velruna_add itself broke.
+			item.Error = "velruna_add_batch item " + strconv.Itoa(i) + ": " + strings.TrimPrefix(err.Error(), "velruna_add: ")
 		}
 		// The counters read what LANDED, not only what completed cleanly: a
 		// partial success stored the fact (item.Error names the lagged
@@ -977,7 +977,7 @@ func (s *mcpServer) addBatch(ctx context.Context, req *mcp.CallToolRequest, in a
 }
 
 type patchInput struct {
-	Key         string   `json:"key" jsonschema:"exact fact key of an EXISTING fact (patch never creates: use memento_add)"`
+	Key         string   `json:"key" jsonschema:"exact fact key of an EXISTING fact (patch never creates: use velruna_add)"`
 	Value       string   `json:"value,omitempty" jsonschema:"new value: journaled, observed_at moves; the summary resets with it (pass a new summary for a long value)"`
 	Summary     string   `json:"summary,omitempty" jsonschema:"new table of contents (with a value change: omitting it CLEARS the old summary — an old summary for a new value is a lie)"`
 	Notes       string   `json:"notes,omitempty" jsonschema:"replaces notes (non-empty = provided, add's convention)"`
@@ -999,22 +999,22 @@ type patchOutput struct {
 	Status     string `json:"status" jsonschema:"status of the fact after the patch"`
 	Reverified bool   `json:"reverified,omitempty" jsonschema:"true when the patch re-confirmed the value in place (observed_at moved, op=rediscovery journaled, value unchanged)"`
 	Note       string `json:"note,omitempty" jsonschema:"set on a qualifier-only touch: observed_at and age untouched, the journal not appended"`
-	// Redactions: see memento_add — the stored value lost a flagged span.
-	Redactions []model.Redaction `json:"redactions,omitempty" jsonschema:"spans the secret guard replaced before storing (see memento_add)"`
+	// Redactions: see velruna_add — the stored value lost a flagged span.
+	Redactions []model.Redaction `json:"redactions,omitempty" jsonschema:"spans the secret guard replaced before storing (see velruna_add)"`
 }
 
 func (s *mcpServer) patch(ctx context.Context, req *mcp.CallToolRequest, in patchInput) (*mcp.CallToolResult, patchOutput, error) {
 	// Shape first: a malformed patch is the caller's problem, answered before
 	// config, guard and any store contact (the list/search/keys contract).
 	if strings.TrimSpace(in.Key) == "" {
-		return nil, patchOutput{}, errors.New("memento_patch: key is required")
+		return nil, patchOutput{}, errors.New("velruna_patch: key is required")
 	}
 	if err := client.ValidatePatchFields(patchFields(in)); err != nil {
 		return nil, patchOutput{}, err
 	}
 	cfg, cerr := s.loadConfig()
 	if cerr != nil {
-		return nil, patchOutput{}, storeError("memento_patch", cerr)
+		return nil, patchOutput{}, storeError("velruna_patch", cerr)
 	}
 	out, err := s.patchOne(ctx, cfg, nil, nil, in)
 	if err != nil {
@@ -1040,7 +1040,7 @@ func patchFields(in patchInput) client.PatchFields {
 	}
 }
 
-// patchOne is the shared write path of memento_patch and memento_patch_batch
+// patchOne is the shared write path of velruna_patch and velruna_patch_batch
 // (the addOne contract): validate → guard → write. c is the shared client
 // (a batch reuses one connection); nil means "create one". cErr is a
 // client-creation failure the batch already paid for: the item still runs
@@ -1048,7 +1048,7 @@ func patchFields(in patchInput) client.PatchFields {
 func (s *mcpServer) patchOne(ctx context.Context, cfg *config.Config, c *client.Client, cErr error, in patchInput) (patchOutput, error) {
 	in.Key = strings.TrimSpace(in.Key)
 	if in.Key == "" {
-		return patchOutput{}, errors.New("memento_patch: key is required")
+		return patchOutput{}, errors.New("velruna_patch: key is required")
 	}
 	// Shape first, on the text as written: a malformed patch is the caller's
 	// problem and must be answered before the guard rewrites anything.
@@ -1081,22 +1081,22 @@ func (s *mcpServer) patchOne(ctx context.Context, cfg *config.Config, c *client.
 		var cerr error
 		c, cerr = s.clientFromConfig(ctx, cfg)
 		if cerr != nil {
-			return patchOutput{}, storeError("memento_patch", cerr)
+			return patchOutput{}, storeError("velruna_patch", cerr)
 		}
 	}
 	res, err := c.Patch(ctx, in.Key, fields)
 	if errors.Is(err, client.ErrNotFound) {
-		return patchOutput{}, fmt.Errorf("memento_patch: no fact with key %q: nothing to patch (memento_add creates)", in.Key)
+		return patchOutput{}, fmt.Errorf("velruna_patch: no fact with key %q: nothing to patch (velruna_add creates)", in.Key)
 	}
 	if err != nil {
 		// Partial success (the patch landed, the journal follow-up lagged):
-		// Patch reports what landed in res. memento_patch_batch copies the
+		// Patch reports what landed in res. velruna_patch_batch copies the
 		// flags into its per-item output; do not drop them (see addOne's note —
 		// the single edge cannot show them, the batch edge must).
 		if res.Changed || res.Status != "" {
-			return patchOutput{Key: in.Key, Changed: res.Changed, Status: res.Status, Reverified: res.Reverified}, writeFailure("memento_patch", err)
+			return patchOutput{Key: in.Key, Changed: res.Changed, Status: res.Status, Reverified: res.Reverified}, writeFailure("velruna_patch", err)
 		}
-		return patchOutput{}, writeFailure("memento_patch", err)
+		return patchOutput{}, writeFailure("velruna_patch", err)
 	}
 	out := patchOutput{Key: in.Key, Changed: res.Changed, Status: res.Status, Reverified: res.Reverified, Redactions: redactions}
 	if !res.Changed {
@@ -1123,16 +1123,16 @@ type patchBatchOutput struct {
 
 type patchBatchItem struct {
 	Key        string            `json:"key" jsonschema:"the item's key"`
-	Changed    bool              `json:"changed" jsonschema:"see memento_patch"`
-	Reverified bool              `json:"reverified,omitempty" jsonschema:"see memento_patch"`
+	Changed    bool              `json:"changed" jsonschema:"see velruna_patch"`
+	Reverified bool              `json:"reverified,omitempty" jsonschema:"see velruna_patch"`
 	Status     string            `json:"status,omitempty" jsonschema:"status of the fact after the patch"`
 	Error      string            `json:"error,omitempty" jsonschema:"this item's failure (guard/validation/store); other items were processed regardless"`
-	Redactions []model.Redaction `json:"redactions,omitempty" jsonschema:"spans the secret guard replaced before storing (see memento_add)"`
+	Redactions []model.Redaction `json:"redactions,omitempty" jsonschema:"spans the secret guard replaced before storing (see velruna_add)"`
 }
 
 func (s *mcpServer) patchBatch(ctx context.Context, req *mcp.CallToolRequest, in patchBatchInput) (*mcp.CallToolResult, patchBatchOutput, error) {
 	if len(in.Items) == 0 || len(in.Items) > maxAddBatchItems {
-		return nil, patchBatchOutput{}, fmt.Errorf("memento_patch_batch: items must be 1..%d", maxAddBatchItems)
+		return nil, patchBatchOutput{}, fmt.Errorf("velruna_patch_batch: items must be 1..%d", maxAddBatchItems)
 	}
 	// Duplicate keys are ambiguous in a patch batch too: the second item
 	// patches the first item's fresh state (order-dependent journaled
@@ -1141,26 +1141,26 @@ func (s *mcpServer) patchBatch(ctx context.Context, req *mcp.CallToolRequest, in
 	for _, it := range in.Items {
 		k := strings.TrimSpace(it.Key)
 		if seen[k] {
-			return nil, patchBatchOutput{}, fmt.Errorf("memento_patch_batch: duplicate key %q in one batch", k)
+			return nil, patchBatchOutput{}, fmt.Errorf("velruna_patch_batch: duplicate key %q in one batch", k)
 		}
 		seen[k] = true
 	}
 	cfg, cerr := s.loadConfig()
 	if cerr != nil {
-		return nil, patchBatchOutput{}, storeError("memento_patch_batch", cerr)
+		return nil, patchBatchOutput{}, storeError("velruna_patch_batch", cerr)
 	}
 	c, cErr := s.clientFromConfig(ctx, cfg)
 	if cErr != nil {
-		cErr = storeError("memento_patch_batch", cErr)
+		cErr = storeError("velruna_patch_batch", cErr)
 	}
 	out := patchBatchOutput{Items: make([]patchBatchItem, 0, len(in.Items))}
 	for i, it := range in.Items {
 		res, err := s.patchOne(ctx, cfg, c, cErr, it)
 		item := patchBatchItem{Key: strings.TrimSpace(it.Key), Changed: res.Changed, Status: res.Status, Reverified: res.Reverified, Redactions: res.Redactions}
 		if err != nil {
-			// Batch label, same as memento_add_batch: the item failed, not
+			// Batch label, same as velruna_add_batch: the item failed, not
 			// the single-patch tool.
-			item.Error = "memento_patch_batch item " + strconv.Itoa(i) + ": " + strings.TrimPrefix(err.Error(), "memento_patch: ")
+			item.Error = "velruna_patch_batch item " + strconv.Itoa(i) + ": " + strings.TrimPrefix(err.Error(), "velruna_patch: ")
 		}
 		// Counters read what landed (the add_batch rule): a partial success
 		// did change the fact; the error names its lagged follow-up.
@@ -1179,17 +1179,17 @@ func (s *mcpServer) patchBatch(ctx context.Context, req *mcp.CallToolRequest, in
 }
 
 type listInput struct {
-	Project        string `json:"project" jsonschema:"project name to list facts for (required, never blank; memento_keys navigates across projects)"`
+	Project        string `json:"project" jsonschema:"project name to list facts for (required, never blank; velruna_keys navigates across projects)"`
 	Prefix         string `json:"prefix,omitempty" jsonschema:"keep only keys starting with this prefix (trailing * allowed), e.g. '<project>:state:'"`
 	Status         string `json:"status,omitempty" jsonschema:"limit results to this status: verified (default), obsolete, or any"`
 	IncludeHistory bool   `json:"include_history,omitempty" jsonschema:"include the full history chain (default: current value only)"`
 	// Compact defaults to true: list is a table of contents, and full values
 	// for a whole project are the single most expensive agent call
 	// (observed ~15k tokens for 32 facts). compact=false restores the full
-	// view; a listed fact's full text is one memento_get away.
+	// view; a listed fact's full text is one velruna_get away.
 	Compact *bool `json:"compact,omitempty" jsonschema:"compact rows: key/summary/category/status/source/notes-head/age (DEFAULT true); false = full values, ~5x the tokens"`
 	// Sort defaults to updated: the dominant list use-case is session start
-	// ("what moved since last time"); memento_keys covers key-order navigation.
+	// ("what moved since last time"); velruna_keys covers key-order navigation.
 	Sort string `json:"sort,omitempty" jsonschema:"'updated' (default: newest activity first; a touch moves updated_at, not age/stale) or 'key' (stable navigation order)"`
 }
 
@@ -1200,7 +1200,7 @@ func (s *mcpServer) list(ctx context.Context, req *mcp.CallToolRequest, in listI
 	// — a silent zero dressed up as "no data" (the keys/search edges refuse
 	// malformed shapes the same way).
 	if in.Project == "" {
-		return nil, factsOutput{}, errors.New("memento_list: project is required (memento_keys navigates across projects)")
+		return nil, factsOutput{}, errors.New("velruna_list: project is required (velruna_keys navigates across projects)")
 	}
 	// The prefix normalizes before any store contact (the keys contract):
 	// a bad prefix is the caller's problem, and its shape error must not come
@@ -1209,7 +1209,7 @@ func (s *mcpServer) list(ctx context.Context, req *mcp.CallToolRequest, in listI
 	// sees exactly what was checked.
 	normPrefix, pErr := client.NormalizePrefix(in.Prefix)
 	if pErr != nil {
-		return nil, factsOutput{}, fmt.Errorf("memento_list: %w", pErr)
+		return nil, factsOutput{}, fmt.Errorf("velruna_list: %w", pErr)
 	}
 	in.Prefix = normPrefix
 	compact := true
@@ -1221,7 +1221,7 @@ func (s *mcpServer) list(ctx context.Context, req *mcp.CallToolRequest, in listI
 		sort = "updated"
 	}
 	if sort != "updated" && sort != "key" {
-		return nil, factsOutput{}, fmt.Errorf("memento_list: sort must be updated|key, got %q", in.Sort)
+		return nil, factsOutput{}, fmt.Errorf("velruna_list: sort must be updated|key, got %q", in.Sort)
 	}
 	// Shape before store contact (the keys/search edges validate the same
 	// way): an invalid status must not pay for a full navigation query
@@ -1233,11 +1233,11 @@ func (s *mcpServer) list(ctx context.Context, req *mcp.CallToolRequest, in listI
 	}
 	c, err := s.newClient(ctx)
 	if err != nil {
-		return nil, factsOutput{}, storeError("memento_list", err)
+		return nil, factsOutput{}, storeError("velruna_list", err)
 	}
 	facts, meta, err := c.List(ctx, in.Project, in.Prefix, sort)
 	if err != nil {
-		return nil, factsOutput{}, storeError("memento_list", err)
+		return nil, factsOutput{}, storeError("velruna_list", err)
 	}
 	// The truncation signal is the cluster-side total: the status filter
 	// below shrinks the page, and truncation must survive the filtering.
@@ -1257,7 +1257,7 @@ func (s *mcpServer) list(ctx context.Context, req *mcp.CallToolRequest, in listI
 		// Same contract as search: a bare 0 invites guessing; name the next
 		// right move. The status filter runs client-side, so an all-obsolete
 		// project legitimately lands here at the verified default.
-		out.Hint = "0 facts: the default hides obsolete facts — try status:'any'; drop or widen the prefix; memento_keys navigates keys across projects; a brand-new project is a legitimate 0"
+		out.Hint = "0 facts: the default hides obsolete facts — try status:'any'; drop or widen the prefix; velruna_keys navigates keys across projects; a brand-new project is a legitimate 0"
 	}
 	return nil, out, nil
 }
@@ -1285,10 +1285,10 @@ func (s *mcpServer) keys(ctx context.Context, req *mcp.CallToolRequest, in keysI
 	// availability advice ("do not retry"), contradicting the contract.
 	normPrefix, pErr := client.NormalizePrefix(in.Prefix)
 	if pErr != nil {
-		return nil, factsOutput{}, fmt.Errorf("memento_keys: %w", pErr)
+		return nil, factsOutput{}, fmt.Errorf("velruna_keys: %w", pErr)
 	}
 	if normPrefix == "" && in.Match == "" {
-		return nil, factsOutput{}, fmt.Errorf("memento_keys: provide a key prefix and/or a match pattern")
+		return nil, factsOutput{}, fmt.Errorf("velruna_keys: provide a key prefix and/or a match pattern")
 	}
 	status, serr := resolveStatus(in.Status)
 	if serr != nil {
@@ -1296,16 +1296,16 @@ func (s *mcpServer) keys(ctx context.Context, req *mcp.CallToolRequest, in keysI
 	}
 	c, err := s.newClient(ctx)
 	if err != nil {
-		return nil, factsOutput{}, storeError("memento_keys", err)
+		return nil, factsOutput{}, storeError("velruna_keys", err)
 	}
 	facts, meta, err := c.Keys(ctx, normPrefix, in.Match, in.Project, status)
 	if err != nil {
-		return nil, factsOutput{}, storeError("memento_keys", err)
+		return nil, factsOutput{}, storeError("velruna_keys", err)
 	}
 	// Keys is key-level navigation: the rows are scanned, not read — the
 	// compact view is always the right shape here (no parameter: the full
-	// value of a key-matched fact is a memento_get away, the history is a
-	// memento_journal away; an include_history knob would be a no-op in
+	// value of a key-matched fact is a velruna_get away, the history is a
+	// velruna_journal away; an include_history knob would be a no-op in
 	// compact rows, so the schema does not offer it).
 	return nil, factsOutput{Count: len(facts), Truncated: meta.Total > client.NavSizeCap, Skipped: meta.Skipped, Facts: newFactViews(facts, false, true)}, nil
 }
@@ -1321,8 +1321,8 @@ type obsoleteInput struct {
 type obsoleteOutput struct {
 	Key    string `json:"key" jsonschema:"the key that was marked obsolete"`
 	Status string `json:"status" jsonschema:"the new status"`
-	// Redactions: see memento_add — the stored reason text lost a flagged span.
-	Redactions []model.Redaction `json:"redactions,omitempty" jsonschema:"spans the secret guard replaced before storing (see memento_add)"`
+	// Redactions: see velruna_add — the stored reason text lost a flagged span.
+	Redactions []model.Redaction `json:"redactions,omitempty" jsonschema:"spans the secret guard replaced before storing (see velruna_add)"`
 }
 
 func (s *mcpServer) obsolete(ctx context.Context, req *mcp.CallToolRequest, in obsoleteInput) (*mcp.CallToolResult, obsoleteOutput, error) {
@@ -1331,11 +1331,11 @@ func (s *mcpServer) obsolete(ctx context.Context, req *mcp.CallToolRequest, in o
 	// Loaded once and reused: a locked wallet is not prompted twice per write.
 	in.Key = strings.TrimSpace(in.Key)
 	if in.Key == "" {
-		return nil, obsoleteOutput{}, errors.New("memento_obsolete: key is required")
+		return nil, obsoleteOutput{}, errors.New("velruna_obsolete: key is required")
 	}
 	cfg, cerr := s.loadConfig()
 	if cerr != nil {
-		return nil, obsoleteOutput{}, storeError("memento_obsolete", cerr)
+		return nil, obsoleteOutput{}, storeError("velruna_obsolete", cerr)
 	}
 	// The CLI edge scans key+reason; the MCP edge must not be the narrower
 	// gate (a credential-shaped key reaches the shared index via MCP only).
@@ -1349,14 +1349,14 @@ func (s *mcpServer) obsolete(ctx context.Context, req *mcp.CallToolRequest, in o
 	}
 	c, err := s.clientFromConfig(ctx, cfg)
 	if err != nil {
-		return nil, obsoleteOutput{}, storeError("memento_obsolete", err)
+		return nil, obsoleteOutput{}, storeError("velruna_obsolete", err)
 	}
 	err = c.Obsolete(ctx, in.Key, in.Reason, redactions)
 	if errors.Is(err, client.ErrNotFound) {
 		return nil, obsoleteOutput{}, fmt.Errorf("no fact with key %q: nothing to mark obsolete", in.Key)
 	}
 	if err != nil {
-		return nil, obsoleteOutput{}, writeFailure("memento_obsolete", err)
+		return nil, obsoleteOutput{}, writeFailure("velruna_obsolete", err)
 	}
 	return nil, obsoleteOutput{Key: in.Key, Status: "obsolete", Redactions: redactions}, nil
 }
@@ -1382,11 +1382,11 @@ type pruneOutput struct {
 func (s *mcpServer) prune(ctx context.Context, req *mcp.CallToolRequest, in pruneInput) (*mcp.CallToolResult, pruneOutput, error) {
 	in.Key = strings.TrimSpace(in.Key)
 	if in.Key == "" {
-		return nil, pruneOutput{}, errors.New("memento_prune: key is required")
+		return nil, pruneOutput{}, errors.New("velruna_prune: key is required")
 	}
 	cfg, cerr := s.loadConfig()
 	if cerr != nil {
-		return nil, pruneOutput{}, storeError("memento_prune", cerr)
+		return nil, pruneOutput{}, storeError("velruna_prune", cerr)
 	}
 	// keep resolves from local config BEFORE any store contact: the refusal
 	// needs no store, and it must not pay for an index ensure.
@@ -1394,7 +1394,7 @@ func (s *mcpServer) prune(ctx context.Context, req *mcp.CallToolRequest, in prun
 	if keep < 0 {
 		// A negative keep used to collapse silently into the configured
 		// default: the operator asked to prune and got a different plan.
-		return nil, pruneOutput{}, fmt.Errorf("memento_prune: keep must not be negative (got %d); pass keep=0 for the configured history_limit", in.Keep)
+		return nil, pruneOutput{}, fmt.Errorf("velruna_prune: keep must not be negative (got %d); pass keep=0 for the configured history_limit", in.Keep)
 	}
 	if keep <= 0 {
 		keep = cfg.HistoryLimit
@@ -1402,24 +1402,24 @@ func (s *mcpServer) prune(ctx context.Context, req *mcp.CallToolRequest, in prun
 	if keep <= 0 {
 		// history_limit: 0 means "keep everything": silently collapsing it
 		// to 1 would destroy every history entry. Demand an explicit keep.
-		return nil, pruneOutput{}, fmt.Errorf("memento_prune: history_limit is 0 (keep everything) and no keep value was given: pass an explicit keep (e.g. keep: 5)")
+		return nil, pruneOutput{}, fmt.Errorf("velruna_prune: history_limit is 0 (keep everything) and no keep value was given: pass an explicit keep (e.g. keep: 5)")
 	}
 	c, err := s.clientFromConfig(ctx, cfg)
 	if err != nil {
-		return nil, pruneOutput{}, storeError("memento_prune", err)
+		return nil, pruneOutput{}, storeError("velruna_prune", err)
 	}
 	f, err := c.Get(ctx, in.Key)
 	if errors.Is(err, client.ErrNotFound) {
 		return nil, pruneOutput{}, fmt.Errorf("no fact with key %q: nothing to prune", in.Key)
 	}
 	if err != nil {
-		return nil, pruneOutput{}, storeError("memento_prune", err)
+		return nil, pruneOutput{}, storeError("velruna_prune", err)
 	}
 	total := len(f.History)
 	// Journal-first: once a key has journal entries, the journal IS the
 	// history and the legacy in-doc array is only counted pre-migration.
 	if jt, jErr := c.JournalCount(ctx, in.Key); jErr != nil {
-		return nil, pruneOutput{}, storeError("memento_prune", jErr)
+		return nil, pruneOutput{}, storeError("velruna_prune", jErr)
 	} else if jt > 0 {
 		total = jt
 	}
@@ -1443,7 +1443,7 @@ func (s *mcpServer) prune(ctx context.Context, req *mcp.CallToolRequest, in prun
 	}
 	removed, err := c.Prune(ctx, in.Key, keep)
 	if err != nil {
-		return nil, pruneOutput{}, storeError("memento_prune", err)
+		return nil, pruneOutput{}, storeError("velruna_prune", err)
 	}
 	return nil, pruneOutput{Key: in.Key, HistoryTotal: total, Keep: keep, Removed: removed, Pruned: true}, nil
 }
@@ -1467,7 +1467,7 @@ type journalEntryView struct {
 	Notes        string            `json:"notes,omitempty" jsonschema:"notes shipped with the write"`
 	Source       string            `json:"source,omitempty" jsonschema:"source shipped with the write"`
 	Keywords     []string          `json:"keywords,omitempty" jsonschema:"tag set as of this accepted value (a tag-only change is a touch, so the previous set stays in the last entry that carried it)"`
-	Redactions   []model.Redaction `json:"redactions,omitempty" jsonschema:"spans the write-time secret guard replaced in this version (see memento_add)"`
+	Redactions   []model.Redaction `json:"redactions,omitempty" jsonschema:"spans the write-time secret guard replaced in this version (see velruna_add)"`
 	CreatedAt    time.Time         `json:"created_at" jsonschema:"writer-side observation time (UTC)"`
 	Author       string            `json:"author,omitempty" jsonschema:"who appended this entry (self-reported label)"`
 	AuthorSource string            `json:"author_source,omitempty" jsonschema:"security | config | os | none for this writer"`
@@ -1502,11 +1502,11 @@ type journalOutput struct {
 func (s *mcpServer) journal(ctx context.Context, req *mcp.CallToolRequest, in journalInput) (*mcp.CallToolResult, journalOutput, error) {
 	in.Key = strings.TrimSpace(in.Key)
 	if in.Key == "" {
-		return nil, journalOutput{}, errors.New("memento_journal: key is required")
+		return nil, journalOutput{}, errors.New("velruna_journal: key is required")
 	}
 	c, err := s.newClient(ctx)
 	if err != nil {
-		return nil, journalOutput{}, storeError("memento_journal", err)
+		return nil, journalOutput{}, storeError("velruna_journal", err)
 	}
 	limit := in.Limit
 	if limit <= 0 {
@@ -1521,13 +1521,13 @@ func (s *mcpServer) journal(ctx context.Context, req *mcp.CallToolRequest, in jo
 		return nil, journalOutput{}, uerr
 	}
 	if !since.IsZero() && !until.IsZero() && since.After(until) {
-		return nil, journalOutput{}, errors.New("memento_journal: since is after until")
+		return nil, journalOutput{}, errors.New("velruna_journal: since is after until")
 	}
 	entries, meta, err := c.JournalEntries(ctx, client.JournalQuery{
 		Key: in.Key, Limit: limit, Since: since, Until: until,
 	})
 	if err != nil {
-		return nil, journalOutput{}, storeError("memento_journal", err)
+		return nil, journalOutput{}, storeError("velruna_journal", err)
 	}
 	if entries == nil {
 		entries = []model.JournalEntry{}
@@ -1552,15 +1552,15 @@ type historyInfoOutput struct {
 func (s *mcpServer) historyInfo(ctx context.Context, req *mcp.CallToolRequest, in historyInfoInput) (*mcp.CallToolResult, historyInfoOutput, error) {
 	in.Key = strings.TrimSpace(in.Key)
 	if in.Key == "" {
-		return nil, historyInfoOutput{}, errors.New("memento_history_info: key is required")
+		return nil, historyInfoOutput{}, errors.New("velruna_history_info: key is required")
 	}
 	c, err := s.newClient(ctx)
 	if err != nil {
-		return nil, historyInfoOutput{}, storeError("memento_history_info", err)
+		return nil, historyInfoOutput{}, storeError("velruna_history_info", err)
 	}
 	info, err := c.HistoryInfo(ctx, in.Key)
 	if err != nil {
-		return nil, historyInfoOutput{}, storeError("memento_history_info", err)
+		return nil, historyInfoOutput{}, storeError("velruna_history_info", err)
 	}
 	return nil, historyInfoOutput{
 		Key: info.Key, Writes: info.Writes, Rediscoveries: info.Rediscoveries,
@@ -1583,13 +1583,13 @@ type fetchDocInput struct {
 	BlockChars *int `json:"block_chars,omitempty" jsonschema:"target block size in runes (1000..64000); default: fetch_block_chars"`
 
 	// ConfirmSecret bypasses a guard hit at secret_guard=ask, the same
-	// contract as memento_add: page text is untrusted and can quote
+	// contract as velruna_add: page text is untrusted and can quote
 	// credential-like strings.
 	ConfirmSecret bool `json:"confirm_secret,omitempty" jsonschema:"confirm a guard hit is a false positive (secret_guard=ask only); set only after the user approved the exact finding"`
 }
 
 type docSectionOutline struct {
-	Order   int    `json:"order" jsonschema:"section number for memento_get_doc"`
+	Order   int    `json:"order" jsonschema:"section number for velruna_get_doc"`
 	Heading string `json:"heading"`
 	Chars   int    `json:"chars" jsonschema:"text length in runes"`
 }
@@ -1603,13 +1603,13 @@ func newDocOutline(d *model.Doc) []docSectionOutline {
 }
 
 type fetchDocOutput struct {
-	Hash      string `json:"hash,omitempty" jsonschema:"document id for memento_get_doc"`
+	Hash      string `json:"hash,omitempty" jsonschema:"document id for velruna_get_doc"`
 	URL       string `json:"url,omitempty"`
 	Title     string `json:"title,omitempty"`
 	Project   string `json:"project,omitempty"`
 	FetchedAt string `json:"fetched_at,omitempty"`
 	ExpiresAt string `json:"expires_at,omitempty"`
-	Stale     bool   `json:"stale,omitempty" jsonschema:"past TTL: re-fetch with memento_fetch_doc before quoting"`
+	Stale     bool   `json:"stale,omitempty" jsonschema:"past TTL: re-fetch with velruna_fetch_doc before quoting"`
 	Cached    bool   `json:"cached,omitempty" jsonschema:"true when the stored snapshot was returned (no new content was downloaded)"`
 	// Revalidated names the 304 path: the origin confirmed the stored copy
 	// with HTTP validators, so the content is unchanged and only fetched_at /
@@ -1618,7 +1618,7 @@ type fetchDocOutput struct {
 	Revalidated bool                `json:"revalidated,omitempty" jsonschema:"true when the origin answered 304 Not Modified and the stored snapshot was kept (timestamps moved; a larger max_chars may have re-extracted more text from the saved html)"`
 	Truncated   bool                `json:"truncated,omitempty" jsonschema:"extraction hit a limit: the stored text is a prefix"`
 	Via         string              `json:"via,omitempty" jsonschema:"route that served the fetch when not direct: proxy | obscura (audit; obscura means the content was browser-rendered)"`
-	Sections    []docSectionOutline `json:"sections,omitempty" jsonschema:"outline: pull a section with memento_get_doc(hash, section)"`
+	Sections    []docSectionOutline `json:"sections,omitempty" jsonschema:"outline: pull a section with velruna_get_doc(hash, section)"`
 
 	// Chars is the stored text and CharsTotal the text extracted before the
 	// budget: N of M tells the agent how much of the page it has. The outline
@@ -1696,7 +1696,7 @@ func (s *mcpServer) fetchDoc(ctx context.Context, req *mcp.CallToolRequest, in f
 	}
 	c, err := client.NewClient(cfg) // FetchDoc ensures the docs index itself
 	if err != nil {
-		return nil, fetchDocOutput{}, storeError("memento_fetch_doc", err)
+		return nil, fetchDocOutput{}, storeError("velruna_fetch_doc", err)
 	}
 	doc, cached, revalidated, err := c.FetchDocWithin(ctx, rawURL, in.Project, in.Refresh, limits,
 		func(d *model.Doc) ([]model.Redaction, error) {
@@ -1757,7 +1757,7 @@ func (s *mcpServer) fetchDoc(ctx context.Context, req *mcp.CallToolRequest, in f
 }
 
 type getDocInput struct {
-	Hash string `json:"hash" jsonschema:"document id from memento_fetch_doc/memento_search_docs"`
+	Hash string `json:"hash" jsonschema:"document id from velruna_fetch_doc/velruna_search_docs"`
 
 	// Section is a pointer: 0 is a valid section number, and its absence
 	// must mean "outline only".
@@ -1773,11 +1773,11 @@ type getDocOutput struct {
 	Hash      string `json:"hash,omitempty"`
 	URL       string `json:"url,omitempty"`
 	Title     string `json:"title,omitempty"`
-	Stale     bool   `json:"stale,omitempty" jsonschema:"past TTL: refresh with memento_fetch_doc before quoting"`
+	Stale     bool   `json:"stale,omitempty" jsonschema:"past TTL: refresh with velruna_fetch_doc before quoting"`
 	Truncated bool   `json:"truncated,omitempty" jsonschema:"extraction hit a limit: the stored text is a prefix"`
 	// GuardMediumIgnored surfaces the doc-route leniency recorded at fetch
 	// time: the leniency must be visible on every read path, not only the
-	// outline printed by memento_fetch_doc.
+	// outline printed by velruna_fetch_doc.
 	GuardMediumIgnored int                 `json:"guard_medium_ignored,omitempty" jsonschema:"medium-confidence shapes left in documentation content on purpose (documentation route only); high-confidence secrets are always redacted"`
 	Sections           []docSectionOutline `json:"sections,omitempty" jsonschema:"outline: heading + length per section"`
 
@@ -1809,26 +1809,26 @@ func mergeHint(existing, extra string) string {
 func (s *mcpServer) getDoc(ctx context.Context, req *mcp.CallToolRequest, in getDocInput) (*mcp.CallToolResult, getDocOutput, error) {
 	in.Hash = strings.TrimSpace(in.Hash)
 	if in.Hash == "" {
-		return nil, getDocOutput{}, errors.New("memento_get_doc: hash is required")
+		return nil, getDocOutput{}, errors.New("velruna_get_doc: hash is required")
 	}
 	// Validate before the read: readDocBlocks skips orders below start, so a
 	// negative section would silently return block 0.
 	if in.Section != nil && *in.Section < 0 {
-		return nil, getDocOutput{}, fmt.Errorf("memento_get_doc: section must be 0 or greater, got %d", *in.Section)
+		return nil, getDocOutput{}, fmt.Errorf("velruna_get_doc: section must be 0 or greater, got %d", *in.Section)
 	}
 	if in.Blocks != nil && (*in.Blocks < 1 || *in.Blocks > maxReadBlocks) {
-		return nil, getDocOutput{}, fmt.Errorf("memento_get_doc: blocks must be between 1 and %d, got %d", maxReadBlocks, *in.Blocks)
+		return nil, getDocOutput{}, fmt.Errorf("velruna_get_doc: blocks must be between 1 and %d, got %d", maxReadBlocks, *in.Blocks)
 	}
 	c, err := s.newClient(ctx)
 	if err != nil {
-		return nil, getDocOutput{}, storeError("memento_get_doc", err)
+		return nil, getDocOutput{}, storeError("velruna_get_doc", err)
 	}
 	doc, err := c.GetDocByHash(ctx, in.Hash)
 	if errors.Is(err, client.ErrNoDoc) {
 		return nil, getDocOutput{Found: false}, nil
 	}
 	if err != nil {
-		return nil, getDocOutput{}, storeError("memento_get_doc", err)
+		return nil, getDocOutput{}, storeError("velruna_get_doc", err)
 	}
 	// The outline is capped like the fetch answer; the hint carries the range
 	// of the blocks it left out and is merged with the read hints below.
@@ -1865,7 +1865,7 @@ func (s *mcpServer) getDoc(ctx context.Context, req *mcp.CallToolRequest, in get
 		}
 		text, included, next := readDocBlocks(doc, *in.Section, want, docReadBudget)
 		if included == 0 {
-			return nil, getDocOutput{}, fmt.Errorf("memento_get_doc: doc %s has no section %d (the outline lists %d sections)",
+			return nil, getDocOutput{}, fmt.Errorf("velruna_get_doc: doc %s has no section %d (the outline lists %d sections)",
 				doc.URLHash, *in.Section, len(doc.Sections))
 		}
 		out.SectionText = text
@@ -1888,17 +1888,17 @@ type searchDocsInput struct {
 // docSectionHit is the section that matched the query: get_doc(section=order)
 // returns the full text around the match.
 type docSectionHit struct {
-	Order   int    `json:"order" jsonschema:"section number: memento_get_doc(hash, section=order) reads the full section"`
+	Order   int    `json:"order" jsonschema:"section number: velruna_get_doc(hash, section=order) reads the full section"`
 	Heading string `json:"heading,omitempty" jsonschema:"section heading (table of contents)"`
 	Snippet string `json:"snippet" jsonschema:"match-centered text (±160 runes), whitespace-collapsed"`
 }
 
 type docHitView struct {
-	Hash    string `json:"hash" jsonschema:"document id for memento_get_doc"`
+	Hash    string `json:"hash" jsonschema:"document id for velruna_get_doc"`
 	URL     string `json:"url"`
 	Title   string `json:"title"`
 	Project string `json:"project,omitempty" jsonschema:"project tag of the stored document"`
-	Stale   bool   `json:"stale" jsonschema:"past TTL: refresh with memento_fetch_doc before quoting"`
+	Stale   bool   `json:"stale" jsonschema:"past TTL: refresh with velruna_fetch_doc before quoting"`
 	// Section is the matched section (all-terms scan in Go); Snippet is the
 	// doc-level fallback (first section) when no section is identified.
 	Section *docSectionHit `json:"section,omitempty" jsonschema:"the section that matched the query"`
@@ -1914,7 +1914,7 @@ type docsHitsOutput struct {
 
 func (s *mcpServer) searchDocs(ctx context.Context, req *mcp.CallToolRequest, in searchDocsInput) (*mcp.CallToolResult, docsHitsOutput, error) {
 	if strings.TrimSpace(in.Query) == "" {
-		return nil, docsHitsOutput{}, errors.New("memento_search_docs: query is required")
+		return nil, docsHitsOutput{}, errors.New("velruna_search_docs: query is required")
 	}
 	in.Project = strings.TrimSpace(in.Project)
 	limit := in.Limit
@@ -1926,11 +1926,11 @@ func (s *mcpServer) searchDocs(ctx context.Context, req *mcp.CallToolRequest, in
 	}
 	c, err := s.newClient(ctx)
 	if err != nil {
-		return nil, docsHitsOutput{}, storeError("memento_search_docs", err)
+		return nil, docsHitsOutput{}, storeError("velruna_search_docs", err)
 	}
 	docs, meta, err := c.SearchDocs(ctx, in.Query, in.Project, limit)
 	if err != nil {
-		return nil, docsHitsOutput{}, storeError("memento_search_docs", err)
+		return nil, docsHitsOutput{}, storeError("velruna_search_docs", err)
 	}
 	now := time.Now().UTC()
 	terms := queryTerms(in.Query)

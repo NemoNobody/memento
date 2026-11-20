@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NemoNobody/memento/internal/config"
+	"github.com/NemoNobody/velruna/internal/config"
 )
 
 // The render tests drive a /bin/sh stub that plays the obscura CLI: argv is

@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NemoNobody/memento/internal/config"
-	"github.com/NemoNobody/memento/internal/model"
+	"github.com/NemoNobody/velruna/internal/config"
+	"github.com/NemoNobody/velruna/internal/model"
 	"github.com/opensearch-project/opensearch-go/v4/opensearchapi"
 )
 
@@ -20,19 +20,19 @@ import (
 func replicasBase(stamped string, healthDataNodes int) func(recordedRequest) (int, string) {
 	return func(r recordedRequest) (int, string) {
 		switch {
-		case r.Method == http.MethodHead && r.Path == "/memento":
+		case r.Method == http.MethodHead && r.Path == "/velruna":
 			return http.StatusOK, ""
 		case r.Method == http.MethodGet && r.Path == "/_cluster/health":
 			if healthDataNodes < 0 {
 				return http.StatusInternalServerError, `{"status":500,"error":{"type":"cluster_exception"}}`
 			}
 			return http.StatusOK, `{"status":"green","number_of_data_nodes":` + strconv.Itoa(healthDataNodes) + `}`
-		case r.Method == http.MethodGet && r.Path == "/memento/_settings":
-			return http.StatusOK, `{"memento":{"settings":{"index.number_of_replicas":` + stamped + `}}}`
-		case r.Method == http.MethodGet && r.Path == "/memento-docs/_settings":
+		case r.Method == http.MethodGet && r.Path == "/velruna/_settings":
+			return http.StatusOK, `{"velruna":{"settings":{"index.number_of_replicas":` + stamped + `}}}`
+		case r.Method == http.MethodGet && r.Path == "/velruna-docs/_settings":
 			return http.StatusNotFound, `{"status":404,"error":{"type":"index_not_found_exception"}}`
-		case r.Method == http.MethodGet && r.Path == "/memento-history-*/_settings":
-			return http.StatusOK, `{"memento-history-2026.10":{"settings":{"index.number_of_replicas":"0"}},"memento-history-2026.11":{"settings":{"index.number_of_replicas":"1"}}}`
+		case r.Method == http.MethodGet && r.Path == "/velruna-history-*/_settings":
+			return http.StatusOK, `{"velruna-history-2026.10":{"settings":{"index.number_of_replicas":"0"}},"velruna-history-2026.11":{"settings":{"index.number_of_replicas":"1"}}}`
 		case r.Method == http.MethodPut && strings.HasSuffix(r.Path, "/_settings"):
 			return http.StatusOK, `{"acknowledged":true}`
 		}
@@ -45,12 +45,12 @@ func TestReconcileRaisesReplicasOnGrownCluster(t *testing.T) {
 	// its single-node birth: exactly one corrective PUT with 1.
 	c, fake := newFakeClientCfg(t, func(cfg *config.Config) {
 		cfg.IndexReplicas = -1
-		cfg.DocsIndexName = "memento-docs"
+		cfg.DocsIndexName = "velruna-docs"
 	}, replicasBase(`"0"`, 2))
 	if err := c.EnsureIndex(context.Background()); err != nil {
 		t.Fatalf("EnsureIndex: %v", err)
 	}
-	puts := fake.requestsFor(http.MethodPut, "/memento/_settings")
+	puts := fake.requestsFor(http.MethodPut, "/velruna/_settings")
 	if len(puts) != 1 {
 		t.Fatalf("settings puts = %d, want 1", len(puts))
 	}
@@ -58,15 +58,15 @@ func TestReconcileRaisesReplicasOnGrownCluster(t *testing.T) {
 		t.Errorf("put body = %s, want replicas 1", puts[0].Body)
 	}
 	// The docs index is missing (404): nothing to reconcile, no write.
-	if got := fake.requestsFor(http.MethodPut, "/memento-docs/_settings"); len(got) != 0 {
+	if got := fake.requestsFor(http.MethodPut, "/velruna-docs/_settings"); len(got) != 0 {
 		t.Errorf("missing docs index must not be written to, got %d puts", len(got))
 	}
 	// History period indices: only the drifted period is corrected, the
 	// already-correct one is left alone.
-	if got := fake.requestsFor(http.MethodPut, "/memento-history-2026.10/_settings"); len(got) != 1 {
+	if got := fake.requestsFor(http.MethodPut, "/velruna-history-2026.10/_settings"); len(got) != 1 {
 		t.Errorf("history 2026.10 puts = %d, want 1", len(got))
 	}
-	if got := fake.requestsFor(http.MethodPut, "/memento-history-2026.11/_settings"); len(got) != 0 {
+	if got := fake.requestsFor(http.MethodPut, "/velruna-history-2026.11/_settings"); len(got) != 0 {
 		t.Errorf("history 2026.11 puts = %d, want 0 (already at desired)", len(got))
 	}
 }
@@ -80,10 +80,10 @@ func TestReconcileSkippedWhenProbeFails(t *testing.T) {
 	if err := c.EnsureIndex(context.Background()); err != nil {
 		t.Fatalf("EnsureIndex: %v", err)
 	}
-	if puts := fake.requestsFor(http.MethodPut, "/memento/_settings"); len(puts) != 0 {
+	if puts := fake.requestsFor(http.MethodPut, "/velruna/_settings"); len(puts) != 0 {
 		t.Errorf("puts = %d, want 0 on unknown topology", len(puts))
 	}
-	if puts := fake.requestsFor(http.MethodPut, "/memento-history-2026.10/_settings"); len(puts) != 0 {
+	if puts := fake.requestsFor(http.MethodPut, "/velruna-history-2026.10/_settings"); len(puts) != 0 {
 		t.Errorf("history puts = %d, want 0 on unknown topology", len(puts))
 	}
 }
@@ -97,7 +97,7 @@ func TestReconcileAppliesExplicitCount(t *testing.T) {
 	if err := c.EnsureIndex(context.Background()); err != nil {
 		t.Fatalf("EnsureIndex: %v", err)
 	}
-	puts := fake.requestsFor(http.MethodPut, "/memento/_settings")
+	puts := fake.requestsFor(http.MethodPut, "/velruna/_settings")
 	if len(puts) != 1 || !strings.Contains(puts[0].Body, `"index.number_of_replicas":2`) {
 		t.Fatalf("puts = %+v, want one put with replicas 2", puts)
 	}
@@ -112,7 +112,7 @@ func TestReconcileNoWriteOnMatch(t *testing.T) {
 	if err := c.EnsureIndex(context.Background()); err != nil {
 		t.Fatalf("EnsureIndex: %v", err)
 	}
-	if puts := fake.requestsFor(http.MethodPut, "/memento/_settings"); len(puts) != 0 {
+	if puts := fake.requestsFor(http.MethodPut, "/velruna/_settings"); len(puts) != 0 {
 		t.Errorf("puts = %d, want 0 on match", len(puts))
 	}
 }
@@ -126,17 +126,17 @@ func TestJournalTemplateDriftReinstalled(t *testing.T) {
 	}, func(r recordedRequest) (int, string) {
 		switch {
 		case r.Method == http.MethodGet && strings.HasPrefix(r.Path, "/_ingest/pipeline/"):
-			return http.StatusOK, `{"memento-journal-ts":{"processors":[]}}`
-		case r.Method == http.MethodGet && r.Path == "/_index_template/memento-journal":
-			return http.StatusOK, `{"index_templates":[{"name":"memento-journal","index_template":{"template":{"settings":{"index":{"number_of_replicas":"0","default_pipeline":"memento-journal-ts"}}}}}]}`
+			return http.StatusOK, `{"velruna-journal-ts":{"processors":[]}}`
+		case r.Method == http.MethodGet && r.Path == "/_index_template/velruna-journal":
+			return http.StatusOK, `{"index_templates":[{"name":"velruna-journal","index_template":{"template":{"settings":{"index":{"number_of_replicas":"0","default_pipeline":"velruna-journal-ts"}}}}}]}`
 		case r.Method == http.MethodGet && r.Path == "/_cluster/health":
 			return http.StatusOK, `{"status":"green","number_of_data_nodes":3}`
-		case r.Method == http.MethodPut && r.Path == "/_index_template/memento-journal":
+		case r.Method == http.MethodPut && r.Path == "/_index_template/velruna-journal":
 			tplPut = r.Body
 			return http.StatusOK, `{"acknowledged":true}`
 		case r.Method == http.MethodPut && strings.HasSuffix(r.Path, "/_settings"):
 			return http.StatusOK, `{"acknowledged":true}`
-		case r.Method == http.MethodPost && r.Path == "/memento-history-2026.11/_doc":
+		case r.Method == http.MethodPost && r.Path == "/velruna-history-2026.11/_doc":
 			return http.StatusOK, `{"_id":"e1","result":"created"}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected: ` + r.Method + " " + r.Path + `"}`
@@ -158,17 +158,17 @@ func TestJournalTemplateNoReinstallOnMatch(t *testing.T) {
 	}, func(r recordedRequest) (int, string) {
 		switch {
 		case r.Method == http.MethodGet && strings.HasPrefix(r.Path, "/_ingest/pipeline/"):
-			return http.StatusOK, `{"memento-journal-ts":{"processors":[]}}`
-		case r.Method == http.MethodGet && r.Path == "/_index_template/memento-journal":
-			return http.StatusOK, `{"index_templates":[{"name":"memento-journal","index_template":{"template":{"settings":{"index":{"number_of_replicas":1}}}}}]}`
+			return http.StatusOK, `{"velruna-journal-ts":{"processors":[]}}`
+		case r.Method == http.MethodGet && r.Path == "/_index_template/velruna-journal":
+			return http.StatusOK, `{"index_templates":[{"name":"velruna-journal","index_template":{"template":{"settings":{"index":{"number_of_replicas":1}}}}}]}`
 		case r.Method == http.MethodGet && r.Path == "/_cluster/health":
 			return http.StatusOK, `{"status":"green","number_of_data_nodes":3}`
-		case r.Method == http.MethodPut && r.Path == "/_index_template/memento-journal":
+		case r.Method == http.MethodPut && r.Path == "/_index_template/velruna-journal":
 			tplPuts++
 			return http.StatusOK, `{"acknowledged":true}`
 		case r.Method == http.MethodPut && strings.HasSuffix(r.Path, "/_settings"):
 			return http.StatusOK, `{"acknowledged":true}`
-		case r.Method == http.MethodPost && r.Path == "/memento-history-2026.11/_doc":
+		case r.Method == http.MethodPost && r.Path == "/velruna-history-2026.11/_doc":
 			return http.StatusOK, `{"_id":"e1","result":"created"}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected: ` + r.Method + " " + r.Path + `"}`
@@ -186,11 +186,11 @@ func TestTemplateStampedReplicas_Forms(t *testing.T) {
 	// GET /_index_template returns NESTED settings in production (the old flat
 	// test body was the bug); the flat key stays as a fallback.
 	cases := map[string]int{
-		`{"index_templates":[{"name":"memento-journal","index_template":{"template":{"settings":{"index":{"number_of_replicas":"0","default_pipeline":"p"}}}}}]}`: 0,
-		`{"index_templates":[{"name":"memento-journal","index_template":{"template":{"settings":{"index":{"number_of_replicas":1}}}}}]}`:                          1,
-		`{"index_templates":[{"name":"memento-journal","index_template":{"template":{"settings":{"index.number_of_replicas":"2"}}}}]}`:                            2,
-		`{"index_templates":[{"name":"memento-journal","index_template":{"template":{"settings":{"index":{"number_of_shards":"1"}}}}}]}`:                          -1,
-		`{"index_templates":[{"name":"memento-journal","index_template":{"template":{"settings":null}}}]}`:                                                        -1,
+		`{"index_templates":[{"name":"velruna-journal","index_template":{"template":{"settings":{"index":{"number_of_replicas":"0","default_pipeline":"p"}}}}}]}`: 0,
+		`{"index_templates":[{"name":"velruna-journal","index_template":{"template":{"settings":{"index":{"number_of_replicas":1}}}}}]}`:                          1,
+		`{"index_templates":[{"name":"velruna-journal","index_template":{"template":{"settings":{"index.number_of_replicas":"2"}}}}]}`:                            2,
+		`{"index_templates":[{"name":"velruna-journal","index_template":{"template":{"settings":{"index":{"number_of_shards":"1"}}}}}]}`:                          -1,
+		`{"index_templates":[{"name":"velruna-journal","index_template":{"template":{"settings":null}}}]}`:                                                        -1,
 		`{"index_templates":[]}`: -1,
 	}
 	for body, want := range cases {
@@ -216,7 +216,7 @@ func TestReconcileZeroDataNodesUnknown(t *testing.T) {
 	if err := c.EnsureIndex(context.Background()); err != nil {
 		t.Fatalf("EnsureIndex: %v", err)
 	}
-	if puts := fake.requestsFor(http.MethodPut, "/memento/_settings"); len(puts) != 0 {
+	if puts := fake.requestsFor(http.MethodPut, "/velruna/_settings"); len(puts) != 0 {
 		t.Errorf("puts = %d, want 0 on a zero-node topology", len(puts))
 	}
 }
@@ -228,7 +228,7 @@ func TestReconcileHistoryWildcardMissing(t *testing.T) {
 	c, fake := newFakeClientCfg(t, func(cfg *config.Config) {
 		cfg.IndexReplicas = -1
 	}, func(r recordedRequest) (int, string) {
-		if r.Method == http.MethodGet && r.Path == "/memento-history-*/_settings" {
+		if r.Method == http.MethodGet && r.Path == "/velruna-history-*/_settings" {
 			return http.StatusNotFound, `{"status":404,"error":{"type":"index_not_found_exception"}}`
 		}
 		return base(r)
@@ -236,7 +236,7 @@ func TestReconcileHistoryWildcardMissing(t *testing.T) {
 	if err := c.EnsureIndex(context.Background()); err != nil {
 		t.Fatalf("EnsureIndex: %v", err)
 	}
-	if puts := fake.requestsFor(http.MethodPut, "/memento/_settings"); len(puts) != 0 {
+	if puts := fake.requestsFor(http.MethodPut, "/velruna/_settings"); len(puts) != 0 {
 		t.Errorf("facts puts = %d, want 0 on match", len(puts))
 	}
 }

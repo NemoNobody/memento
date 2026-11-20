@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/NemoNobody/memento/internal/keyringnative"
-	"github.com/NemoNobody/memento/internal/kwalletnative"
+	"github.com/NemoNobody/velruna/internal/keyringnative"
+	"github.com/NemoNobody/velruna/internal/kwalletnative"
 )
 
 // stubs replaces both backends for the duration of a test. A backend that is

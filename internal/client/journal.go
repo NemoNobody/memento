@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NemoNobody/memento/internal/model"
+	"github.com/NemoNobody/velruna/internal/model"
 
 	"github.com/opensearch-project/opensearch-go/v4"
 	"github.com/opensearch-project/opensearch-go/v4/opensearchapi"
@@ -25,7 +25,7 @@ import (
 // fact, not an assumption about write order.
 //
 // Journal indices are date-partitioned: <prefix>-history-<period-date>
-// (memento-history-2026.11 by default). The period is config because index
+// (velruna-history-2026.11 by default). The period is config because index
 // proliferation is cluster load, and the same knob is the admin's pruning
 // granularity: delete a whole old index, history for every key ages out.
 

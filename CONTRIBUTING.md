@@ -1,6 +1,6 @@
-# Contributing to memento
+# Contributing to velruna
 
-Thanks for your interest! memento is a small, focused tool: an MCP server for
+Thanks for your interest! velruna is a small, focused tool: an MCP server for
 verified agent memory on top of OpenSearch. Changes that keep that focus are
 the most welcome.
 
@@ -18,20 +18,20 @@ the most welcome.
 ## Development
 
 ```
-go build -o memento .     # build
+go build -o velruna .     # build
 make ci                   # vet + go test ./... + golangci-lint (the CI gate)
 make dev-opensearch       # throwaway single-node OpenSearch (docker/podman)
 ```
 
 Point a throwaway config at the dev node, e.g.
-`/tmp/memento-dev.conf` (the dev stack runs with the security plugin off, so
+`/tmp/velruna-dev.conf` (the dev stack runs with the security plugin off, so
 the credentials are ignored — `dev`/`dev` matches the README):
 
 ```
 {"opensearch_url":"http://127.0.0.1:9200","opensearch_user":"dev","opensearch_password":"dev","allow_plaintext":true}
 ```
 
-Then `MEMENTO_CONF=/tmp/memento-dev.conf ./memento status`. The dev stack has
+Then `VELRUNA_CONF=/tmp/velruna-dev.conf ./velruna status`. The dev stack has
 security off and binds to loopback only — never expose it.
 
 Useful suites:

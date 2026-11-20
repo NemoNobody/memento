@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NemoNobody/memento/internal/config"
+	"github.com/NemoNobody/velruna/internal/config"
 )
 
 // mappingCase drives one mapping-reconcile scenario: the facts index exists,
@@ -20,9 +20,9 @@ func mappingCase(t *testing.T, failFirst int) (*Client, *fakeOpenSearch, *int) {
 		cfg.IndexReplicas = 0
 	}, func(r recordedRequest) (int, string) {
 		switch {
-		case r.Method == http.MethodHead && r.Path == "/memento":
+		case r.Method == http.MethodHead && r.Path == "/velruna":
 			return http.StatusOK, ""
-		case r.Method == http.MethodPut && r.Path == "/memento/_mapping":
+		case r.Method == http.MethodPut && r.Path == "/velruna/_mapping":
 			puts++
 			if puts <= failFirst {
 				return http.StatusInternalServerError, `{"status":500,"error":"boom"}`
@@ -45,7 +45,7 @@ func TestReconcileMappingOncePerProcess(t *testing.T) {
 			t.Fatalf("EnsureIndex #%d: %v", i, err)
 		}
 	}
-	puts := fake.requestsFor(http.MethodPut, "/memento/_mapping")
+	puts := fake.requestsFor(http.MethodPut, "/velruna/_mapping")
 	if len(puts) != 1 {
 		t.Fatalf("mapping puts = %d, want 1 (cached after success)", len(puts))
 	}
@@ -68,7 +68,7 @@ func TestReconcileMappingRetriesAfterFailure(t *testing.T) {
 	if err := c.EnsureIndex(context.Background()); err != nil {
 		t.Fatalf("EnsureIndex after success: %v", err)
 	}
-	puts := fake.requestsFor(http.MethodPut, "/memento/_mapping")
+	puts := fake.requestsFor(http.MethodPut, "/velruna/_mapping")
 	if len(puts) != 2 {
 		t.Fatalf("mapping puts = %d, want 2 (one failure, one retry, then cached)", len(puts))
 	}
@@ -89,7 +89,7 @@ func TestMappingReconcileIsProcessWide(t *testing.T) {
 	if err := c2.EnsureIndex(context.Background()); err != nil {
 		t.Fatalf("second EnsureIndex: %v", err)
 	}
-	if puts := fake.requestsFor(http.MethodPut, "/memento/_mapping"); len(puts) != 1 {
+	if puts := fake.requestsFor(http.MethodPut, "/velruna/_mapping"); len(puts) != 1 {
 		t.Fatalf("mapping puts = %d, want 1 (the claim is per store, not per client)", len(puts))
 	}
 }
@@ -109,7 +109,7 @@ func TestMappingReconcileFailureIsReleasedForTheNextClient(t *testing.T) {
 	if err := c2.EnsureIndex(context.Background()); err != nil {
 		t.Fatalf("second EnsureIndex: %v", err)
 	}
-	if puts := fake.requestsFor(http.MethodPut, "/memento/_mapping"); len(puts) != 2 {
+	if puts := fake.requestsFor(http.MethodPut, "/velruna/_mapping"); len(puts) != 2 {
 		t.Fatalf("mapping puts = %d, want 2 (the failed pass must not claim the store)", len(puts))
 	}
 }
@@ -123,9 +123,9 @@ func TestReconcileMapping403IsExternallyManaged(t *testing.T) {
 		cfg.IndexReplicas = 0
 	}, func(r recordedRequest) (int, string) {
 		switch {
-		case r.Method == http.MethodHead && r.Path == "/memento":
+		case r.Method == http.MethodHead && r.Path == "/velruna":
 			return http.StatusOK, ""
-		case r.Method == http.MethodPut && r.Path == "/memento/_mapping":
+		case r.Method == http.MethodPut && r.Path == "/velruna/_mapping":
 			puts++
 			return http.StatusForbidden, `{"status":403,"error":"no permission"}`
 		}
@@ -141,7 +141,7 @@ func TestReconcileMapping403IsExternallyManaged(t *testing.T) {
 	if err := c2.EnsureIndex(context.Background()); err != nil {
 		t.Fatalf("second EnsureIndex: %v", err)
 	}
-	if got := len(fake.requestsFor(http.MethodPut, "/memento/_mapping")); got != 1 {
+	if got := len(fake.requestsFor(http.MethodPut, "/velruna/_mapping")); got != 1 {
 		t.Fatalf("mapping puts = %d, want 1 (403 closes the gate: externally managed)", got)
 	}
 	if puts != 1 {
@@ -159,9 +159,9 @@ func TestMappingReconcileWaitsForTheFirstPass(t *testing.T) {
 		cfg.IndexReplicas = 0
 	}, func(r recordedRequest) (int, string) {
 		switch {
-		case r.Method == http.MethodHead && r.Path == "/memento":
+		case r.Method == http.MethodHead && r.Path == "/velruna":
 			return http.StatusOK, ""
-		case r.Method == http.MethodPut && r.Path == "/memento/_mapping":
+		case r.Method == http.MethodPut && r.Path == "/velruna/_mapping":
 			select {
 			case started <- struct{}{}:
 			default:

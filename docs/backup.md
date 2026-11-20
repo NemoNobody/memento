@@ -1,16 +1,16 @@
 # Backup & restore
 
-`memento` keeps everything in OpenSearch, so the backup plan is the standard
+`velruna` keeps everything in OpenSearch, so the backup plan is the standard
 OpenSearch snapshot API — no bespoke export tooling.
 
 What matters:
 
-- the facts index (`index_name`, default `memento`) — **irreplaceable**: this is
+- the facts index (`index_name`, default `velruna`) — **irreplaceable**: this is
   the accumulated memory;
 - the journal indices (`<index_name>-history-*` — dated, one per period) —
   **irreplaceable** too: they are the history of every accepted value; a
   snapshot that skips them keeps the facts and loses the chain;
-- the docs index (`docs_index_name`, default `memento-docs`) — a cache: a lost
+- the docs index (`docs_index_name`, default `velruna-docs`) — a cache: a lost
   snapshot only costs re-fetches, include it if convenient;
 - snapshots carry **plaintext facts** exactly like the store: the same rule
   applies — no secrets in facts, protect the backup location like the data
@@ -38,7 +38,7 @@ Register the repository (it survives restarts; one-time):
 
 ```bash
 curl -k -u "admin:$OPENSEARCH_PASSWORD" -X PUT \
-  "https://127.0.0.1:9200/_snapshot/memento-fs" \
+  "https://127.0.0.1:9200/_snapshot/velruna-fs" \
   -H 'Content-Type: application/json' \
   -d '{"type":"fs","settings":{"location":"/var/lib/opensearch/backup","compress":true}}'
 ```
@@ -47,16 +47,16 @@ curl -k -u "admin:$OPENSEARCH_PASSWORD" -X PUT \
 
 ```bash
 curl -k -u "admin:$OPENSEARCH_PASSWORD" -X PUT \
-  "https://127.0.0.1:9200/_snapshot/memento-fs/backup-$(date +%Y%m%d)?wait_for_completion=true" \
+  "https://127.0.0.1:9200/_snapshot/velruna-fs/backup-$(date +%Y%m%d)?wait_for_completion=true" \
   -H 'Content-Type: application/json' \
-  -d '{"indices":"memento,memento-history-*,memento-docs","ignore_unavailable":true,"include_global_state":false}'
+  -d '{"indices":"velruna,velruna-history-*,velruna-docs","ignore_unavailable":true,"include_global_state":false}'
 ```
 
 Check it:
 
 ```bash
 curl -k -u "admin:$OPENSEARCH_PASSWORD" \
-  "https://127.0.0.1:9200/_snapshot/memento-fs/backup-$(date +%Y%m%d)/_status?pretty"
+  "https://127.0.0.1:9200/_snapshot/velruna-fs/backup-$(date +%Y%m%d)/_status?pretty"
 ```
 
 Schedule the `curl` with cron/systemd-timer; prune old snapshots by deleting
@@ -64,7 +64,7 @@ their names (the API removes repository files safely):
 
 ```bash
 curl -k -u "admin:$OPENSEARCH_PASSWORD" -X DELETE \
-  "https://127.0.0.1:9200/_snapshot/memento-fs/backup-YYYYMMDD"
+  "https://127.0.0.1:9200/_snapshot/velruna-fs/backup-YYYYMMDD"
 ```
 
 ## 3. Restore — and verify it
@@ -77,15 +77,15 @@ restore itself:
 
 ```bash
 curl -k -u "admin:$OPENSEARCH_PASSWORD" -X POST \
-  "https://127.0.0.1:9200/_snapshot/memento-fs/backup-YYYYMMDD/_restore" \
+  "https://127.0.0.1:9200/_snapshot/velruna-fs/backup-YYYYMMDD/_restore" \
   -H 'Content-Type: application/json' \
-  -d '{"indices":"memento,memento-history-*","include_global_state":false,
-       "rename_pattern":"memento","rename_replacement":"memento-restore-test",
+  -d '{"indices":"velruna,velruna-history-*","include_global_state":false,
+       "rename_pattern":"velruna","rename_replacement":"velruna-restore-test",
        "index_settings":{"index.number_of_replicas":0}}'
 ```
 
-(`rename_pattern` is a prefix regex: `memento-history-2026.11` restores as
-`memento-restore-test-history-2026.11`; `ignore_unavailable` on the snapshot
+(`rename_pattern` is a prefix regex: `velruna-history-2026.11` restores as
+`velruna-restore-test-history-2026.11`; `ignore_unavailable` on the snapshot
 covers stores that never wrote a journal entry.)
 
 (OpenSearch `_restore` has no `wait_for_status` parameter — Elasticsearch
@@ -94,15 +94,15 @@ recipes using it fail with 400 here.)
 Verify, then clean up:
 
 ```bash
-memento status                              # the real index is untouched
-curl -k -u "admin:$OPENSEARCH_PASSWORD" "https://127.0.0.1:9200/memento-restore-test/_count?pretty"
-# compare _count with the live index, sample a known key with memento get, then:
+velruna status                              # the real index is untouched
+curl -k -u "admin:$OPENSEARCH_PASSWORD" "https://127.0.0.1:9200/velruna-restore-test/_count?pretty"
+# compare _count with the live index, sample a known key with velruna get, then:
 curl -k -u "admin:$OPENSEARCH_PASSWORD" -X DELETE \
-  "https://127.0.0.1:9200/memento-restore-test"
+  "https://127.0.0.1:9200/velruna-restore-test"
 ```
 
 A full recovery (store lost): create the index name as it was (the mapping is
-restored from the snapshot), stop `memento mcp`, restore without the rename,
+restored from the snapshot), stop `velruna mcp`, restore without the rename,
 restart the MCP server.
 
 ## 4. Off-box backup

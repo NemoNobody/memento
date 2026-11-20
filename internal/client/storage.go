@@ -33,7 +33,7 @@ const indexStatCap = 50
 // cluster shape, so it reports what it sees and leaves interpretation to callers.
 type StorageState struct {
 	ClusterHealth string `json:"cluster_health" jsonschema:"cluster health: green | yellow | red"`
-	IndexHealth   string `json:"index_health" jsonschema:"health of the memento index: green | yellow | red; empty when the index does not exist yet"`
+	IndexHealth   string `json:"index_health" jsonschema:"health of the velruna index: green | yellow | red; empty when the index does not exist yet"`
 
 	// IndexAbsent means the facts index does not exist yet. It is a normal
 	// state on a fresh install: the index is created on the first write.
@@ -49,10 +49,10 @@ type StorageState struct {
 	WorstNode            string  `json:"worst_node,omitempty" jsonschema:"data node with the highest disk usage"`
 	WorstNodeUsedPercent float64 `json:"worst_node_used_percent,omitempty" jsonschema:"disk usage of that node, in percent"`
 
-	// Indices lists the memento indices (facts, docs, journal periods) with
+	// Indices lists the velruna indices (facts, docs, journal periods) with
 	// their size and shard layout: the "is the store growing, and how" signal.
 	// Sorted by name; capped so a store with many history periods stays cheap.
-	Indices          []IndexStat `json:"indices,omitempty" jsonschema:"memento indices with documents, size and shard layout (sorted by name)"`
+	Indices          []IndexStat `json:"indices,omitempty" jsonschema:"velruna indices with documents, size and shard layout (sorted by name)"`
 	IndicesTruncated bool        `json:"indices_truncated,omitempty" jsonschema:"true when more indices exist than the reported page"`
 
 	// Replica drift for the facts index: the configured replica count versus

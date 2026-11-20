@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/NemoNobody/memento/internal/config"
-	"github.com/NemoNobody/memento/internal/model"
+	"github.com/NemoNobody/velruna/internal/config"
+	"github.com/NemoNobody/velruna/internal/model"
 )
 
 // patchRespond serves the routes Patch touches: doc read, journal routes
@@ -21,11 +21,11 @@ func patchRespond(source string, updateBody *string) func(recordedRequest) (int,
 			return code, body
 		}
 		switch {
-		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
-			return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":` + source + `}`
-		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+		case r.Method == http.MethodGet && r.Path == "/velruna/_doc/k":
+			return http.StatusOK, `{"_index":"velruna","_id":"k","found":true,"_source":` + source + `}`
+		case r.Method == http.MethodPost && r.Path == "/velruna/_update/k":
 			*updateBody = r.Body
-			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+			return http.StatusOK, `{"_index":"velruna","_id":"k","result":"updated"}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Method + " " + r.Path + `"}`
 	}
@@ -80,7 +80,7 @@ func TestPatchNotesAppendIsTouch(t *testing.T) {
 	if v, ok := params["notes"]; !ok || v != nil {
 		t.Errorf("notes must be null (the script appends), got %v", v)
 	}
-	if fake.sawAnyPrefix("/memento-history-") {
+	if fake.sawAnyPrefix("/velruna-history-") {
 		t.Error("a notes-only patch must not write the journal")
 	}
 }
@@ -138,7 +138,7 @@ func TestPatchValueChangeCarriesRedactions(t *testing.T) {
 	c, fake := newFakeClient(t, patchRespond(source, &body))
 
 	reds := []model.Redaction{{Field: "value", Pattern: "long-hex", Chars: 48}}
-	if _, err := c.Patch(context.Background(), "k", PatchFields{Value: "id [memento-redacted:long-hex]", Redactions: reds}); err != nil {
+	if _, err := c.Patch(context.Background(), "k", PatchFields{Value: "id [velruna-redacted:long-hex]", Redactions: reds}); err != nil {
 		t.Fatalf("Patch: %v", err)
 	}
 	params := patchParams(t, body)
@@ -188,7 +188,7 @@ func TestPatchLongValueRequiresNewSummary(t *testing.T) {
 	if body != "" {
 		t.Error("a refused patch must not write the document")
 	}
-	if fake.sawAnyPrefix("/memento-history-") {
+	if fake.sawAnyPrefix("/velruna-history-") {
 		t.Error("a refused patch must not touch the journal")
 	}
 }
@@ -209,7 +209,7 @@ func TestPatchResurrectSetsObservedAt(t *testing.T) {
 	if !res.Changed || res.Status != "verified" {
 		t.Errorf("res = %+v, want Changed=true Status=verified", res)
 	}
-	if fake.sawAnyPrefix("/memento-history-") == false {
+	if fake.sawAnyPrefix("/velruna-history-") == false {
 		t.Error("the status transition must be journaled")
 	}
 	params := patchParams(t, body)
@@ -223,7 +223,7 @@ func TestPatchResurrectSetsObservedAt(t *testing.T) {
 
 // TestPatchObsoleteWithReasonJournals: reason folds into notes ATOMICALLY
 // (reason_append inside the script), the journal entry carries it, and the
-// transition is journaled (audit symmetry with memento_obsolete).
+// transition is journaled (audit symmetry with velruna_obsolete).
 func TestPatchObsoleteWithReasonJournals(t *testing.T) {
 	var body string
 	c, fake := newFakeClient(t, patchRespond(
@@ -247,7 +247,7 @@ func TestPatchObsoleteWithReasonJournals(t *testing.T) {
 		t.Errorf("notes must stay null on retire-with-reason (the script appends), got %v", params["notes"])
 	}
 	// The journal entry carries the reason: "why did this die" must be
-	// answerable from the log (audit symmetry with memento_obsolete).
+	// answerable from the log (audit symmetry with velruna_obsolete).
 	appends := journalAppends(fake)
 	if len(appends) != 1 {
 		t.Fatalf("journal appends = %d, want 1", len(appends))
@@ -274,9 +274,9 @@ func TestPatchRefusedUpdateLeavesNoJournalEntry(t *testing.T) {
 			return code, body
 		}
 		switch {
-		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
-			return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{"key":"k","value":"v","category":"config","project":"p","status":"verified"}}`
-		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+		case r.Method == http.MethodGet && r.Path == "/velruna/_doc/k":
+			return http.StatusOK, `{"_index":"velruna","_id":"k","found":true,"_source":{"key":"k","value":"v","category":"config","project":"p","status":"verified"}}`
+		case r.Method == http.MethodPost && r.Path == "/velruna/_update/k":
 			return http.StatusBadRequest, `{"status":400,"error":{"type":"illegal_argument_exception","reason":"failed to execute script"}}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Method + " " + r.Path + `"}`
@@ -392,7 +392,7 @@ func TestPatchRetireOnObsoleteFactIsRejected(t *testing.T) {
 	} else if !errors.Is(err, ErrContract) {
 		t.Errorf("a pre-transport rejection must be classified ErrContract: %v", err)
 	}
-	if len(fake.requestsFor(http.MethodPost, "/memento/_update/k")) != 0 {
+	if len(fake.requestsFor(http.MethodPost, "/velruna/_update/k")) != 0 {
 		t.Error("the rejected patch must not touch the doc")
 	}
 }
@@ -530,7 +530,7 @@ func TestPatchValueChangeResetsConfirmers(t *testing.T) {
 func TestPatchCleanNoteClearsStaleRow(t *testing.T) {
 	var body string
 	c, _ := newFakeClient(t, patchRespond(
-		`{"key":"k","value":"v","category":"config","project":"p","status":"verified","notes":"old [memento-redacted:long-hex]","redactions":[{"field":"value","pattern":"long-hex","chars":48},{"field":"notes","pattern":"long-hex","chars":40},{"field":"notes_append","pattern":"long-hex","chars":41},{"field":"reason","pattern":"long-hex","chars":42}]}`,
+		`{"key":"k","value":"v","category":"config","project":"p","status":"verified","notes":"old [velruna-redacted:long-hex]","redactions":[{"field":"value","pattern":"long-hex","chars":48},{"field":"notes","pattern":"long-hex","chars":40},{"field":"notes_append","pattern":"long-hex","chars":41},{"field":"reason","pattern":"long-hex","chars":42}]}`,
 		&body))
 	if _, err := c.Patch(context.Background(), "k", PatchFields{Notes: "checked by hand"}); err != nil {
 		t.Fatalf("Patch: %v", err)
@@ -553,7 +553,7 @@ func TestPatchNotesAppendKeepsEarlierRows(t *testing.T) {
 		`{"key":"k","value":"v","category":"config","project":"p","status":"verified","notes":"old","redactions":[{"field":"notes_append","pattern":"long-hex","chars":40}]}`,
 		&body))
 	rows := []model.Redaction{{Field: "notes_append", Pattern: "long-base64", Chars: 41}}
-	if _, err := c.Patch(context.Background(), "k", PatchFields{NotesAppend: "line [memento-redacted:long-base64]", Redactions: rows}); err != nil {
+	if _, err := c.Patch(context.Background(), "k", PatchFields{NotesAppend: "line [velruna-redacted:long-base64]", Redactions: rows}); err != nil {
 		t.Fatalf("Patch: %v", err)
 	}
 	params := patchParams(t, body)

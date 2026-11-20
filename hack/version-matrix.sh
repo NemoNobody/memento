@@ -8,20 +8,20 @@
 # Needs docker/podman access (e.g. `sg docker -c ...` where the user is not in the group).
 # Port 9299 by default so a host running OpenSearch on 9200 is not clashed.
 # A dedicated project name (-p) keeps this matrix off the dev stack's
-# project/volume: the compose file pins `name: memento-os`, and an unqualified
-# `down -v` here would WIPE the developer's real memento-os data volume.
+# project/volume: the compose file pins `name: velruna-os`, and an unqualified
+# `down -v` here would WIPE the developer's real velruna-os data volume.
 #
 # Usage: hack/version-matrix.sh ["2.19.7 3.0.0 ..."]   (default list below)
 set -uo pipefail
 cd "$(dirname "$0")/.."
 VERSIONS=${*:-"2.19.7 3.0.0 3.3.2 3.8.0 3.9.0"}
 PORT=${MATRIX_PORT:-9299}
-BIN=${MEMENTO_BIN:-$(pwd)/memento}
-COMPOSE="docker compose -p memento-matrix -f docker/opensearch.yml --profile single"
+BIN=${VELRUNA_BIN:-$(pwd)/velruna}
+COMPOSE="docker compose -p velruna-matrix -f docker/opensearch.yml --profile single"
 
-[ -x "$BIN" ] || { echo "binary missing: go build -o memento . (or set MEMENTO_BIN)"; exit 1; }
+[ -x "$BIN" ] || { echo "binary missing: go build -o velruna . (or set VELRUNA_BIN)"; exit 1; }
 
-CONF=$(mktemp /tmp/memento-matrix.XXXXXX.conf)
+CONF=$(mktemp /tmp/velruna-matrix.XXXXXX.conf)
 trap 'rm -f "$CONF"' EXIT
 cat >"$CONF" <<EOF
 {"opensearch_url":"http://127.0.0.1:$PORT","opensearch_user":"admin","opensearch_password":"devtest","allow_plaintext":true}
@@ -32,7 +32,7 @@ results=()
 for v in $VERSIONS; do
   echo "=================== $v ==================="
   $COMPOSE down -v >/dev/null 2>&1
-  if ! OPENSEARCH_IMAGE=opensearchproject/opensearch:$v MEMENTO_OS_PORT=$PORT $COMPOSE up -d; then
+  if ! OPENSEARCH_IMAGE=opensearchproject/opensearch:$v VELRUNA_OS_PORT=$PORT $COMPOSE up -d; then
     results+=("$v UP-FAIL"); $COMPOSE down -v >/dev/null 2>&1; continue
   fi
   ready=""
@@ -48,7 +48,7 @@ for v in $VERSIONS; do
     # The wrong image answered (a stale container, a bad tag): never score a
     # PASS against a version we did not actually bring up.
     results+=("$v WRONG-VER(got:${actual:-none})")
-  elif MEMENTO_CONF="$CONF" MEMENTO_BIN="$BIN" hack/cli-smoke.sh; then
+  elif VELRUNA_CONF="$CONF" VELRUNA_BIN="$BIN" hack/cli-smoke.sh; then
     results+=("$v PASS")
   else
     results+=("$v SMOKE-FAIL")

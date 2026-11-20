@@ -1,4 +1,4 @@
-module github.com/NemoNobody/memento
+module github.com/NemoNobody/velruna
 
 go 1.26.0
 

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/NemoNobody/memento/internal/config"
+	"github.com/NemoNobody/velruna/internal/config"
 	"github.com/opensearch-project/opensearch-go/v4"
 	"github.com/opensearch-project/opensearch-go/v4/opensearchapi"
 )
@@ -76,7 +76,7 @@ func TestReadOnlyFromSettings(t *testing.T) {
 
 	for name, settings := range cases {
 		data := opensearchapi.IndicesGetRespData{
-			"memento": {Settings: json.RawMessage(settings)},
+			"velruna": {Settings: json.RawMessage(settings)},
 		}
 		resp := &opensearchapi.IndicesGetResp{IndicesGetRespData: &data}
 		if got := readOnlyFromSettings(resp); got != want[name] {
@@ -93,7 +93,7 @@ func TestReadOnlyFromSettings_NilAndGarbage(t *testing.T) {
 	if readOnlyFromSettings(&resp) {
 		t.Error("empty response must not report read-only")
 	}
-	data := opensearchapi.IndicesGetRespData{"memento": {Settings: json.RawMessage(`not json`)}}
+	data := opensearchapi.IndicesGetRespData{"velruna": {Settings: json.RawMessage(`not json`)}}
 	resp.IndicesGetRespData = &data
 	if readOnlyFromSettings(&resp) {
 		t.Error("unparseable settings must not report read-only")
@@ -161,18 +161,18 @@ func TestWrapWriteError_PlainErrorUnchanged(t *testing.T) {
 
 // The health probe used to call _cluster/health/<index> directly. When the index
 // does not exist, that request blocks server-side until its own timeout (~30 s),
-// which hung `memento status` on a fresh install. These tests pin the contract:
+// which hung `velruna status` on a fresh install. These tests pin the contract:
 // existence is probed first, and a missing index is reported, not queried.
 func TestStorageState_IndexAbsent(t *testing.T) {
 	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
 		switch {
 		case r.Method == http.MethodGet && r.Path == "/_cluster/health":
 			return http.StatusOK, `{"cluster_name":"test","status":"yellow","number_of_data_nodes":1,"unassigned_shards":1}`
-		case r.Method == http.MethodHead && r.Path == "/memento":
+		case r.Method == http.MethodHead && r.Path == "/velruna":
 			return http.StatusNotFound, ""
 		case r.Method == http.MethodGet && r.Path == "/_nodes/stats/fs":
 			return http.StatusOK, `{"cluster_name":"test","nodes":{"n1":{"name":"node-a","roles":["data"],"fs":{"total":{"total_in_bytes":100,"available_in_bytes":30}}}}}`
-		case r.Method == http.MethodGet && r.Path == "/_cat/indices/memento*":
+		case r.Method == http.MethodGet && r.Path == "/_cat/indices/velruna*":
 			return http.StatusOK, `[]`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected request: ` + r.Method + ` ` + r.Path + `"}`
@@ -197,10 +197,10 @@ func TestStorageState_IndexAbsent(t *testing.T) {
 	}
 	// The expensive queries must not have been issued at all.
 	for _, r := range fake.requests {
-		if strings.HasPrefix(r.Path, "/_cluster/health/memento") {
+		if strings.HasPrefix(r.Path, "/_cluster/health/velruna") {
 			t.Errorf("scoped index health was queried for an absent index: %s %s", r.Method, r.Path)
 		}
-		if r.Method == http.MethodGet && r.Path == "/memento" {
+		if r.Method == http.MethodGet && r.Path == "/velruna" {
 			t.Errorf("index settings were queried for an absent index: %s %s", r.Method, r.Path)
 		}
 	}
@@ -211,16 +211,16 @@ func TestStorageState_IndexPresent(t *testing.T) {
 		switch {
 		case r.Method == http.MethodGet && r.Path == "/_cluster/health":
 			return http.StatusOK, `{"cluster_name":"test","status":"green","number_of_data_nodes":1,"unassigned_shards":0}`
-		case r.Method == http.MethodHead && r.Path == "/memento":
+		case r.Method == http.MethodHead && r.Path == "/velruna":
 			return http.StatusOK, ""
-		case r.Method == http.MethodGet && r.Path == "/_cluster/health/memento":
+		case r.Method == http.MethodGet && r.Path == "/_cluster/health/velruna":
 			return http.StatusOK, `{"cluster_name":"test","status":"yellow","number_of_data_nodes":1,"unassigned_shards":1}`
 		case r.Method == http.MethodGet && r.Path == "/_nodes/stats/fs":
 			return http.StatusOK, `{"cluster_name":"test","nodes":{}}`
-		case r.Method == http.MethodGet && r.Path == "/memento":
-			return http.StatusOK, `{"memento":{"settings":{"index":{"number_of_shards":"1"}}}}`
-		case r.Method == http.MethodGet && r.Path == "/_cat/indices/memento*":
-			return http.StatusOK, `[{"health":"green","status":"open","index":"memento","pri":"1","rep":"0","docs.count":"7","store.size":"2048"},{"health":"green","status":"open","index":"memento-docs","pri":"1","rep":"0","docs.count":"2","store.size":"4096"}]`
+		case r.Method == http.MethodGet && r.Path == "/velruna":
+			return http.StatusOK, `{"velruna":{"settings":{"index":{"number_of_shards":"1"}}}}`
+		case r.Method == http.MethodGet && r.Path == "/_cat/indices/velruna*":
+			return http.StatusOK, `[{"health":"green","status":"open","index":"velruna","pri":"1","rep":"0","docs.count":"7","store.size":"2048"},{"health":"green","status":"open","index":"velruna-docs","pri":"1","rep":"0","docs.count":"2","store.size":"4096"}]`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected request: ` + r.Method + ` ` + r.Path + `"}`
 	})
@@ -241,7 +241,7 @@ func TestStorageState_IndexPresent(t *testing.T) {
 	if len(st.Indices) != 2 {
 		t.Fatalf("Indices = %d, want 2", len(st.Indices))
 	}
-	if st.Indices[0].Index != "memento" || st.Indices[1].Index != "memento-docs" {
+	if st.Indices[0].Index != "velruna" || st.Indices[1].Index != "velruna-docs" {
 		t.Errorf("indices order = %s,%s; want sorted", st.Indices[0].Index, st.Indices[1].Index)
 	}
 	if st.Indices[0].SizeBytes != 2048 || st.Indices[0].Documents != 7 {
@@ -266,16 +266,16 @@ func TestStorageState_ReplicaDrift(t *testing.T) {
 		switch {
 		case r.Method == http.MethodGet && r.Path == "/_cluster/health":
 			return http.StatusOK, `{"cluster_name":"test","status":"yellow","number_of_data_nodes":2,"unassigned_shards":1}`
-		case r.Method == http.MethodHead && r.Path == "/memento":
+		case r.Method == http.MethodHead && r.Path == "/velruna":
 			return http.StatusOK, ""
-		case r.Method == http.MethodGet && r.Path == "/_cluster/health/memento":
+		case r.Method == http.MethodGet && r.Path == "/_cluster/health/velruna":
 			return http.StatusOK, `{"cluster_name":"test","status":"yellow","number_of_data_nodes":2,"unassigned_shards":1}`
 		case r.Method == http.MethodGet && r.Path == "/_nodes/stats/fs":
 			return http.StatusOK, `{"cluster_name":"test","nodes":{}}`
-		case r.Method == http.MethodGet && r.Path == "/memento":
-			return http.StatusOK, `{"memento":{"settings":{"index":{"number_of_shards":"1"}}}}`
-		case r.Method == http.MethodGet && r.Path == "/_cat/indices/memento*":
-			return http.StatusOK, `[{"health":"yellow","status":"open","index":"memento","pri":"1","rep":"0","docs.count":"3","store.size":"10"}]`
+		case r.Method == http.MethodGet && r.Path == "/velruna":
+			return http.StatusOK, `{"velruna":{"settings":{"index":{"number_of_shards":"1"}}}}`
+		case r.Method == http.MethodGet && r.Path == "/_cat/indices/velruna*":
+			return http.StatusOK, `[{"health":"yellow","status":"open","index":"velruna","pri":"1","rep":"0","docs.count":"3","store.size":"10"}]`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected request: ` + r.Method + ` ` + r.Path + `"}`
 	})
@@ -297,11 +297,11 @@ func TestStorageState_ExistsProbeFails(t *testing.T) {
 		switch {
 		case r.Method == http.MethodGet && r.Path == "/_cluster/health":
 			return http.StatusOK, `{"cluster_name":"test","status":"green","number_of_data_nodes":1,"unassigned_shards":0}`
-		case r.Method == http.MethodHead && r.Path == "/memento":
+		case r.Method == http.MethodHead && r.Path == "/velruna":
 			return http.StatusUnauthorized, `{"status":401,"error":"unauthorized"}`
 		case r.Method == http.MethodGet && r.Path == "/_nodes/stats/fs":
 			return http.StatusOK, `{"cluster_name":"test","nodes":{}}`
-		case r.Method == http.MethodGet && r.Path == "/_cat/indices/memento*":
+		case r.Method == http.MethodGet && r.Path == "/_cat/indices/velruna*":
 			return http.StatusOK, `[]`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected request: ` + r.Method + ` ` + r.Path + `"}`
@@ -318,7 +318,7 @@ func TestStorageState_ExistsProbeFails(t *testing.T) {
 		t.Errorf("Unavailable = %q, want a mention of the failed existence probe", st.Unavailable)
 	}
 	for _, r := range fake.requests {
-		if strings.HasPrefix(r.Path, "/_cluster/health/memento") {
+		if strings.HasPrefix(r.Path, "/_cluster/health/velruna") {
 			t.Errorf("scoped index health was queried after a failed existence probe: %s %s", r.Method, r.Path)
 		}
 	}

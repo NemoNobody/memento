@@ -9,8 +9,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/NemoNobody/memento/internal/config"
-	"github.com/NemoNobody/memento/internal/keyring"
+	"github.com/NemoNobody/velruna/internal/config"
+	"github.com/NemoNobody/velruna/internal/keyring"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -20,8 +20,8 @@ var credsFlags struct {
 	url string
 }
 
-// CredsCmd returns `memento creds`: the OpenSearch credential lives in the OS
-// keyring (service=memento, account=host[:port]); these commands manage it
+// CredsCmd returns `velruna creds`: the OpenSearch credential lives in the OS
+// keyring (service=velruna, account=host[:port]); these commands manage it
 // without ever letting the secret pass through argv (arguments end up in
 // shell history) or printing it back.
 func CredsCmd() *cobra.Command {
@@ -29,7 +29,7 @@ func CredsCmd() *cobra.Command {
 		Use:   "creds",
 		Short: "Manage the OpenSearch password in the OS keyring",
 		Long: `The credential resolves in this order: OPENSEARCH_PASSWORD env, the OS
-keyring (service "memento", account host[:port]), then the plaintext config
+keyring (service "velruna", account host[:port]), then the plaintext config
 file — only when allow_plaintext is on. These commands write and inspect the
 keyring entry; status never prints the value. The exception is 'creds get',
 which prints the resolved password to stdout for scripted use (curl recipes,
@@ -138,7 +138,7 @@ it to a file or a log; consume it in a pipe or a shell assignment.`,
 				pw, err := keyring.Get(config.KeyringService, host)
 				if err != nil {
 					if errors.Is(err, keyring.ErrNotFound) {
-						fatalErr(fmt.Errorf("no keyring entry for service=%s account=%s: store one with 'memento creds set --url %s'", config.KeyringService, host, target))
+						fatalErr(fmt.Errorf("no keyring entry for service=%s account=%s: store one with 'velruna creds set --url %s'", config.KeyringService, host, target))
 					}
 					fatalErr(err)
 				}
@@ -156,7 +156,7 @@ it to a file or a log; consume it in a pipe or a shell assignment.`,
 			}
 			if cfg.OpenSearchPassword == "" {
 				// fatalErr writes to stderr: stdout must carry only the secret.
-				fatalErr(errors.New("no password resolves: store one with 'memento creds set' or export OPENSEARCH_PASSWORD (see 'memento creds status')"))
+				fatalErr(errors.New("no password resolves: store one with 'velruna creds set' or export OPENSEARCH_PASSWORD (see 'velruna creds status')"))
 			}
 			if _, err := io.WriteString(out, cfg.OpenSearchPassword+"\n"); err != nil {
 				fatalErr(err)
@@ -224,7 +224,7 @@ func renderCredsStatus(host string, cfg *config.Config, keyringErr error, backen
 	case keyringErr == nil:
 		b.WriteString("entry present (value not shown)\n")
 	case errors.Is(keyringErr, keyring.ErrNotFound):
-		b.WriteString("no entry — store one: memento creds set\n")
+		b.WriteString("no entry — store one: velruna creds set\n")
 	default:
 		b.WriteString("unavailable: ")
 		b.WriteString(keyringErr.Error())
@@ -246,16 +246,16 @@ func renderCredsStatus(host string, cfg *config.Config, keyringErr error, backen
 		case errors.Is(keyringErr, keyring.ErrBackend):
 			b.WriteString("present, REFUSED (allow_plaintext off): fix the keyring backend above, or export OPENSEARCH_PASSWORD\n")
 		default:
-			b.WriteString("present, REFUSED (allow_plaintext off): migrate with 'memento creds set', then remove opensearch_password from the file\n")
+			b.WriteString("present, REFUSED (allow_plaintext off): migrate with 'velruna creds set', then remove opensearch_password from the file\n")
 		}
 		if cfg.PasswordSource == "none" {
 			// A refused backend already prints its own fix above; the generic
-			// "memento creds set" advice would point at a store that cannot be
+			// "velruna creds set" advice would point at a store that cannot be
 			// written to.
 			if errors.Is(keyringErr, keyring.ErrBackend) {
 				b.WriteString("hint: fix the keyring backend listed above, or export OPENSEARCH_PASSWORD\n")
 			} else {
-				b.WriteString("hint: store with 'memento creds set' (keyring) or export OPENSEARCH_PASSWORD (containers, headless)\n")
+				b.WriteString("hint: store with 'velruna creds set' (keyring) or export OPENSEARCH_PASSWORD (containers, headless)\n")
 			}
 		}
 	}

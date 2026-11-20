@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NemoNobody/memento/internal/client"
-	"github.com/NemoNobody/memento/internal/model"
+	"github.com/NemoNobody/velruna/internal/client"
+	"github.com/NemoNobody/velruna/internal/model"
 	"github.com/spf13/cobra"
 )
 
@@ -21,7 +21,7 @@ func ListCmd() *cobra.Command {
 		Long: `List the facts of one project, sorted by key (stable navigation
 order), every status — obsolete rows included: the CLI list is the human's
 session-start view, and a retired fact's context belongs there (the MCP
-memento_list defaults to verified-only).
+velruna_list defaults to verified-only).
 
 The MCP tool also defaults to updated_at desc — "what moved since the last
 session" — with sort: "key" for this CLI's order; the asymmetry is
@@ -75,7 +75,7 @@ deliberate per audience, do not expect one to match the other by default.`,
 	}
 	cmd.Flags().StringVar(&listFlags.prefix, "prefix", "",
 		"keep only keys starting with this prefix (trailing * allowed), e.g. \"<project>:state:\"")
-	// The status/sort asymmetry with memento_list (verified-only,
+	// The status/sort asymmetry with velruna_list (verified-only,
 	// updated-desc default) is a deliberate per-audience choice, stated in
 	// the Long above — not drift.
 	return cmd

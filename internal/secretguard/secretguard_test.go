@@ -218,7 +218,7 @@ func TestRedactReportsOnlyApplied(t *testing.T) {
 	}
 	prevEnd := 0
 	for _, f := range applied {
-		marker := "[memento-redacted:" + f.Pattern + "]"
+		marker := "[velruna-redacted:" + f.Pattern + "]"
 		if !strings.Contains(out, marker) {
 			t.Errorf("reported %q but no marker for it in %q", f.Pattern, out)
 		}

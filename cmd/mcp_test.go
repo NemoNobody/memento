@@ -16,17 +16,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NemoNobody/memento/internal/keyring"
-	"github.com/NemoNobody/memento/internal/model"
+	"github.com/NemoNobody/velruna/internal/keyring"
+	"github.com/NemoNobody/velruna/internal/model"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // serverEnvVar makes the test binary act as the MCP server child process.
-const serverEnvVar = "MEMENTO_TEST_MCP_SERVER"
+const serverEnvVar = "VELRUNA_TEST_MCP_SERVER"
 
 // TestMain makes the cmd suite hermetic against the machine's keyring:
-// after a real `memento creds set` the dev entry (127.0.0.1:9200) exists in
+// after a real `velruna creds set` the dev entry (127.0.0.1:9200) exists in
 // the user's wallet, and a Go test binary asking for it triggers a desktop
 // access prompt that hangs the suite. The dispatcher default is a fake; the
 // creds tests install their own fakes via fakeKeyringCmd. In-process code
@@ -71,7 +71,7 @@ func connectTestServer(t *testing.T, extraEnv ...string) *mcp.ClientSession {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
 
-	client := mcp.NewClient(&mcp.Implementation{Name: "memento-test", Version: "0"}, nil)
+	client := mcp.NewClient(&mcp.Implementation{Name: "velruna-test", Version: "0"}, nil)
 	session, err := client.Connect(ctx, &mcp.CommandTransport{Command: cmd}, nil)
 	if err != nil {
 		t.Fatalf("connect to MCP server: %v", err)
@@ -100,11 +100,11 @@ func childEnv(overrides []string) []string {
 }
 
 var wantTools = []string{
-	"memento_status", "memento_search", "memento_get",
-	"memento_add", "memento_add_batch", "memento_patch", "memento_patch_batch", "memento_list", "memento_keys",
-	"memento_prune", "memento_obsolete",
-	"memento_journal", "memento_history_info",
-	"memento_fetch_doc", "memento_get_doc", "memento_search_docs",
+	"velruna_status", "velruna_search", "velruna_get",
+	"velruna_add", "velruna_add_batch", "velruna_patch", "velruna_patch_batch", "velruna_list", "velruna_keys",
+	"velruna_prune", "velruna_obsolete",
+	"velruna_journal", "velruna_history_info",
+	"velruna_fetch_doc", "velruna_get_doc", "velruna_search_docs",
 }
 
 func TestMCPServerExposesAllTools(t *testing.T) {
@@ -136,18 +136,18 @@ func TestMCPServerExposesAllTools(t *testing.T) {
 }
 
 // TestMCPServerStatusNeverFails checks the status contract:
-// memento_status must report availability instead of failing, so an agent can
+// velruna_status must report availability instead of failing, so an agent can
 // explain the situation to the user even when OpenSearch is missing.
 func TestMCPServerStatusNeverFails(t *testing.T) {
 	session := connectTestServer(t)
 	ctx := context.Background()
 
-	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "memento_status"})
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "velruna_status"})
 	if err != nil {
-		t.Fatalf("CallTool(memento_status): %v", err)
+		t.Fatalf("CallTool(velruna_status): %v", err)
 	}
 	if res.IsError {
-		t.Fatalf("memento_status reported a tool error: %+v", res.Content)
+		t.Fatalf("velruna_status reported a tool error: %+v", res.Content)
 	}
 
 	// The structured result must carry the ok flag and a URL.
@@ -183,13 +183,13 @@ func TestMCPServerStoreToolsFailWhenUnreachable(t *testing.T) {
 		name string
 		args map[string]any
 	}{
-		{"memento_search", map[string]any{"query": "anything"}},
-		{"memento_get", map[string]any{"key": "any:key"}},
-		{"memento_list", map[string]any{"project": "any"}},
-		{"memento_prune", map[string]any{"key": "any:key", "confirm": true}},
-		{"memento_fetch_doc", map[string]any{"url": "https://example.com/x"}},
-		{"memento_get_doc", map[string]any{"hash": "abc123"}},
-		{"memento_search_docs", map[string]any{"query": "anything"}},
+		{"velruna_search", map[string]any{"query": "anything"}},
+		{"velruna_get", map[string]any{"key": "any:key"}},
+		{"velruna_list", map[string]any{"project": "any"}},
+		{"velruna_prune", map[string]any{"key": "any:key", "confirm": true}},
+		{"velruna_fetch_doc", map[string]any{"url": "https://example.com/x"}},
+		{"velruna_get_doc", map[string]any{"hash": "abc123"}},
+		{"velruna_search_docs", map[string]any{"query": "anything"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: tc.name, Arguments: tc.args})
@@ -212,7 +212,7 @@ func TestMCPServerStoreToolsFailWhenUnreachable(t *testing.T) {
 func TestMCPServerDocToolsValidateOffline(t *testing.T) {
 	session := connectTestServer(t,
 		"OPENSEARCH_URL=https://127.0.0.1:9",
-		"MEMENTO_FETCH_HOSTS=allowed.example.com",
+		"VELRUNA_FETCH_HOSTS=allowed.example.com",
 	)
 	ctx := context.Background()
 
@@ -221,18 +221,18 @@ func TestMCPServerDocToolsValidateOffline(t *testing.T) {
 		args map[string]any
 		want string
 	}{
-		{"memento_fetch_doc", map[string]any{"url": ""}, "empty url"},
-		{"memento_fetch_doc", map[string]any{"url": "ftp://allowed.example.com/x"}, "scheme"},
-		{"memento_fetch_doc", map[string]any{"url": "https://denied.example.com/x"}, "fetch_allow_hosts"},
+		{"velruna_fetch_doc", map[string]any{"url": ""}, "empty url"},
+		{"velruna_fetch_doc", map[string]any{"url": "ftp://allowed.example.com/x"}, "scheme"},
+		{"velruna_fetch_doc", map[string]any{"url": "https://denied.example.com/x"}, "fetch_allow_hosts"},
 		// The project tag is stored text: it is guard-scanned at the call,
 		// before the store (the cache-hit re-tag path never sees the content
 		// guard, so the gate lives here).
-		{"memento_fetch_doc", map[string]any{"url": "https://allowed.example.com/x", "project": "p " + guardSentinel}, "secret-guard"},
-		{"memento_search_docs", map[string]any{"query": ""}, "query"},
-		{"memento_get_doc", map[string]any{"hash": ""}, "hash"},
+		{"velruna_fetch_doc", map[string]any{"url": "https://allowed.example.com/x", "project": "p " + guardSentinel}, "secret-guard"},
+		{"velruna_search_docs", map[string]any{"query": ""}, "query"},
+		{"velruna_get_doc", map[string]any{"hash": ""}, "hash"},
 		// A negative section would silently read block 0 (readDocBlocks
 		// skips orders below start): refuse it before the store.
-		{"memento_get_doc", map[string]any{"hash": "abcd1234abcd1234", "section": -1}, "section must be 0 or greater"},
+		{"velruna_get_doc", map[string]any{"hash": "abcd1234abcd1234", "section": -1}, "section must be 0 or greater"},
 	} {
 		t.Run(tc.name+" "+tc.want, func(t *testing.T) {
 			res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: tc.name, Arguments: tc.args})
@@ -253,7 +253,7 @@ func TestMCPServerDocToolsValidateOffline(t *testing.T) {
 	}
 }
 
-// TestMCPServerAddValidatesShapeOffline pins that memento_add rejects a blank
+// TestMCPServerAddValidatesShapeOffline pins that velruna_add rejects a blank
 // key, a blank value, and an unknown category before touching the store: an
 // empty key produces a cryptic store error, and an unknown category never
 // ages (silent rot). The store is a discard port: any text mentioning it
@@ -277,12 +277,12 @@ func TestMCPServerAddValidatesShapeOffline(t *testing.T) {
 		// through because only key/value/notes/summary/source were scanned).
 		{map[string]any{"key": "k", "value": "v", "category": "config", "keywords": []any{"token=AKIAIOSFODNN7EXAMPLE"}}, "keywords"},
 	} {
-		res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "memento_add", Arguments: tc.args})
+		res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "velruna_add", Arguments: tc.args})
 		if err != nil {
-			t.Fatalf("CallTool(memento_add): %v", err)
+			t.Fatalf("CallTool(velruna_add): %v", err)
 		}
 		if !res.IsError {
-			t.Fatalf("memento_add accepted invalid input: %+v", tc.args)
+			t.Fatalf("velruna_add accepted invalid input: %+v", tc.args)
 		}
 		text := toolText(res)
 		if !strings.Contains(text, tc.want) {
@@ -294,31 +294,31 @@ func TestMCPServerAddValidatesShapeOffline(t *testing.T) {
 	}
 }
 
-// TestMCPServerListRequiresProjectOffline pins that memento_list refuses a
+// TestMCPServerListRequiresProjectOffline pins that velruna_list refuses a
 // blank project before store contact. The CLI demands a project for the same
 // reason: a project-less list silently returns nothing on a multi-project
 // store, and an agent reads that silence as "no facts" and re-derives work
-// that is already stored. memento_keys is the cross-project tool.
+// that is already stored. velruna_keys is the cross-project tool.
 func TestMCPServerListRequiresProjectOffline(t *testing.T) {
 	session := connectTestServer(t, "OPENSEARCH_URL=https://127.0.0.1:9")
 	ctx := context.Background()
 
 	for _, project := range []string{"", "   "} {
 		res, err := session.CallTool(ctx, &mcp.CallToolParams{
-			Name:      "memento_list",
+			Name:      "velruna_list",
 			Arguments: map[string]any{"project": project},
 		})
 		if err != nil {
-			t.Fatalf("CallTool(memento_list): %v", err)
+			t.Fatalf("CallTool(velruna_list): %v", err)
 		}
 		if !res.IsError {
-			t.Fatalf("memento_list accepted blank project %q", project)
+			t.Fatalf("velruna_list accepted blank project %q", project)
 		}
 		text := toolText(res)
 		if !strings.Contains(text, "project is required") {
 			t.Errorf("error must demand a project, got: %s", text)
 		}
-		if !strings.Contains(text, "memento_keys") {
+		if !strings.Contains(text, "velruna_keys") {
 			t.Errorf("error must point at the cross-project tool, got: %s", text)
 		}
 		if strings.Contains(text, "127.0.0.1:9") {
@@ -336,21 +336,21 @@ func TestMCPServerAddBatchSurfacesPartialSuccess(t *testing.T) {
 	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
-		case r.Method == http.MethodHead && r.URL.Path == "/memento":
+		case r.Method == http.MethodHead && r.URL.Path == "/velruna":
 			w.WriteHeader(http.StatusOK) // the facts index exists
-		case r.Method == http.MethodGet && (r.URL.Path == "/memento/_doc/k" || r.URL.Path == "/memento/_doc/k2"):
+		case r.Method == http.MethodGet && (r.URL.Path == "/velruna/_doc/k" || r.URL.Path == "/velruna/_doc/k2"):
 			w.WriteHeader(http.StatusNotFound)
-			_, _ = io.WriteString(w, `{"error":{"type":"document_missing_exception","reason":"no such document","index":"memento"},"status":404}`)
-		case r.Method == http.MethodGet && r.URL.Path == "/memento/_doc/t":
-			_, _ = io.WriteString(w, `{"_index":"memento","_id":"t","_version":1,"_seq_no":3,"_primary_term":1,"found":true,"_source":{"key":"t","value":"v","category":"config","project":"p","status":"verified"}}`)
-		case r.Method == http.MethodGet && r.URL.Path == "/memento/_doc/t2":
-			_, _ = io.WriteString(w, `{"_index":"memento","_id":"t2","_version":1,"_seq_no":3,"_primary_term":1,"found":true,"_source":{"key":"t2","value":"v","category":"config","project":"p","status":"verified"}}`)
-		case r.Method == http.MethodGet && r.URL.Path == "/memento/_doc/t3":
-			_, _ = io.WriteString(w, `{"_index":"memento","_id":"t3","_version":1,"_seq_no":3,"_primary_term":1,"found":true,"_source":{"key":"t3","value":"v","category":"config","project":"p","status":"verified"}}`)
-		case r.Method == http.MethodGet && r.URL.Path == "/memento/_doc/t4":
-			_, _ = io.WriteString(w, `{"_index":"memento","_id":"t4","_version":1,"_seq_no":3,"_primary_term":1,"found":true,"_source":{"key":"t4","value":"v","category":"config","project":"p","status":"verified"}}`)
-		case r.Method == http.MethodGet && r.URL.Path == "/memento/_doc/c":
-			_, _ = io.WriteString(w, `{"_index":"memento","_id":"c","_version":1,"_seq_no":4,"_primary_term":1,"found":true,"_source":{"key":"c","value":"old","category":"config","project":"p","status":"verified"}}`)
+			_, _ = io.WriteString(w, `{"error":{"type":"document_missing_exception","reason":"no such document","index":"velruna"},"status":404}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/velruna/_doc/t":
+			_, _ = io.WriteString(w, `{"_index":"velruna","_id":"t","_version":1,"_seq_no":3,"_primary_term":1,"found":true,"_source":{"key":"t","value":"v","category":"config","project":"p","status":"verified"}}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/velruna/_doc/t2":
+			_, _ = io.WriteString(w, `{"_index":"velruna","_id":"t2","_version":1,"_seq_no":3,"_primary_term":1,"found":true,"_source":{"key":"t2","value":"v","category":"config","project":"p","status":"verified"}}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/velruna/_doc/t3":
+			_, _ = io.WriteString(w, `{"_index":"velruna","_id":"t3","_version":1,"_seq_no":3,"_primary_term":1,"found":true,"_source":{"key":"t3","value":"v","category":"config","project":"p","status":"verified"}}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/velruna/_doc/t4":
+			_, _ = io.WriteString(w, `{"_index":"velruna","_id":"t4","_version":1,"_seq_no":3,"_primary_term":1,"found":true,"_source":{"key":"t4","value":"v","category":"config","project":"p","status":"verified"}}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/velruna/_doc/c":
+			_, _ = io.WriteString(w, `{"_index":"velruna","_id":"c","_version":1,"_seq_no":4,"_primary_term":1,"found":true,"_source":{"key":"c","value":"old","category":"config","project":"p","status":"verified"}}`)
 		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "-history-") && strings.Contains(r.URL.Path, "/_doc/"):
 			// journal appends go PUT /<hist>/_doc/<id> (opensearch-go
 			// Index with a DocumentID). Fail only the k and c entries: the
@@ -362,16 +362,16 @@ func TestMCPServerAddBatchSurfacesPartialSuccess(t *testing.T) {
 				_, _ = io.WriteString(w, `{"error":{"type":"cluster_block_exception","reason":"journal write blocked"},"status":500}`)
 				return
 			}
-			_, _ = io.WriteString(w, `{"_index":"memento-history","_id":"journal-entry-1","_version":1,"_seq_no":0,"_primary_term":1,"result":"created"}`)
+			_, _ = io.WriteString(w, `{"_index":"velruna-history","_id":"journal-entry-1","_version":1,"_seq_no":0,"_primary_term":1,"result":"created"}`)
 		default:
-			_, _ = io.WriteString(w, `{"_index":"memento","_id":"k","_version":1,"_seq_no":0,"_primary_term":1,"result":"created"}`)
+			_, _ = io.WriteString(w, `{"_index":"velruna","_id":"k","_version":1,"_seq_no":0,"_primary_term":1,"result":"created"}`)
 		}
 	}))
 	t.Cleanup(fake.Close)
 	session := connectTestServer(t, "OPENSEARCH_URL="+fake.URL)
 
 	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
-		Name: "memento_add_batch",
+		Name: "velruna_add_batch",
 		Arguments: map[string]any{"items": []any{
 			map[string]any{"key": "k", "value": "v", "category": "config"},
 			// same-value re-declare of an existing fact: a clean touch —
@@ -394,7 +394,7 @@ func TestMCPServerAddBatchSurfacesPartialSuccess(t *testing.T) {
 		}},
 	})
 	if err != nil {
-		t.Fatalf("CallTool(memento_add_batch): %v", err)
+		t.Fatalf("CallTool(velruna_add_batch): %v", err)
 	}
 	raw, _ := json.Marshal(res.StructuredContent)
 	var out struct {
@@ -456,28 +456,28 @@ func TestMCPServerPatchBatchSurfacesPartialSuccess(t *testing.T) {
 	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
-		case r.Method == http.MethodHead && r.URL.Path == "/memento":
+		case r.Method == http.MethodHead && r.URL.Path == "/velruna":
 			w.WriteHeader(http.StatusOK)
-		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/memento/_doc/"):
-			_, _ = io.WriteString(w, `{"_index":"memento","_id":"k","_version":1,"_seq_no":3,"_primary_term":1,"found":true,"_source":{"key":"k","value":"old","category":"config","project":"p","status":"verified"}}`)
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/velruna/_doc/"):
+			_, _ = io.WriteString(w, `{"_index":"velruna","_id":"k","_version":1,"_seq_no":3,"_primary_term":1,"found":true,"_source":{"key":"k","value":"old","category":"config","project":"p","status":"verified"}}`)
 		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "-history-") && strings.Contains(r.URL.Path, "/_doc/"):
 			w.WriteHeader(http.StatusInternalServerError)
 			_, _ = io.WriteString(w, `{"error":{"type":"cluster_block_exception","reason":"journal write blocked"},"status":500}`)
 		default:
-			_, _ = io.WriteString(w, `{"_index":"memento","_id":"k","result":"updated"}`)
+			_, _ = io.WriteString(w, `{"_index":"velruna","_id":"k","result":"updated"}`)
 		}
 	}))
 	t.Cleanup(fake.Close)
 	session := connectTestServer(t, "OPENSEARCH_URL="+fake.URL)
 
 	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
-		Name: "memento_patch_batch",
+		Name: "velruna_patch_batch",
 		Arguments: map[string]any{"items": []any{
 			map[string]any{"key": "k", "value": "new value"},
 		}},
 	})
 	if err != nil {
-		t.Fatalf("CallTool(memento_patch_batch): %v", err)
+		t.Fatalf("CallTool(velruna_patch_batch): %v", err)
 	}
 	raw, _ := json.Marshal(res.StructuredContent)
 	var out struct {
@@ -512,23 +512,23 @@ func TestMCPServerPatchBatchSurfacesPartialSuccess(t *testing.T) {
 // with an unscanned reason into the plaintext store.
 func TestMCPServerObsoleteFailsOnBrokenConfig(t *testing.T) {
 	dir := t.TempDir()
-	conf := filepath.Join(dir, "memento.conf")
+	conf := filepath.Join(dir, "velruna.conf")
 	if err := os.WriteFile(conf, []byte("{broken"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	session := connectTestServer(t, "MEMENTO_CONF="+conf)
+	session := connectTestServer(t, "VELRUNA_CONF="+conf)
 	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
-		Name:      "memento_obsolete",
+		Name:      "velruna_obsolete",
 		Arguments: map[string]any{"key": "k", "reason": "the file was deleted"},
 	})
 	if err != nil {
-		t.Fatalf("CallTool(memento_obsolete): %v", err)
+		t.Fatalf("CallTool(velruna_obsolete): %v", err)
 	}
 	if !res.IsError {
 		t.Fatal("obsolete wrote with an unloadable guard policy")
 	}
 	text := toolText(res)
-	if !strings.Contains(text, "memento_obsolete") {
+	if !strings.Contains(text, "velruna_obsolete") {
 		t.Errorf("error must name the tool: %s", text)
 	}
 	if strings.Contains(text, "127.0.0.1:9") {
@@ -548,18 +548,18 @@ func TestMCPGetDocMissingIsFoundFalse(t *testing.T) {
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
-		_, _ = io.WriteString(w, `{"error":{"type":"document_missing_exception","reason":"Document with id abcd not found.","index":"memento-docs"},"status":404}`)
+		_, _ = io.WriteString(w, `{"error":{"type":"document_missing_exception","reason":"Document with id abcd not found.","index":"velruna-docs"},"status":404}`)
 	}))
 	t.Cleanup(fake.Close)
 
 	session := connectTestServer(t, "OPENSEARCH_URL="+fake.URL)
 	ctx := context.Background()
 	res, err := session.CallTool(ctx, &mcp.CallToolParams{
-		Name:      "memento_get_doc",
+		Name:      "velruna_get_doc",
 		Arguments: map[string]any{"hash": "abcd1234abcd1234"},
 	})
 	if err != nil {
-		t.Fatalf("CallTool(memento_get_doc): %v", err)
+		t.Fatalf("CallTool(velruna_get_doc): %v", err)
 	}
 	if res.IsError {
 		t.Fatalf("missing doc must be found:false, got tool error: %s", toolText(res))
@@ -570,8 +570,8 @@ func TestMCPGetDocMissingIsFoundFalse(t *testing.T) {
 	}
 }
 
-// TestMCPGetDocOutlineCapped pins the read-side outline budget: memento_get_doc
-// caps the outline at outlineRows lines exactly like memento_fetch_doc, so a
+// TestMCPGetDocOutlineCapped pins the read-side outline budget: velruna_get_doc
+// caps the outline at outlineRows lines exactly like velruna_fetch_doc, so a
 // long page cannot flood the answer. sections_hidden counts the blocks left
 // out and hint names their range; a capped read adds its own hint without
 // losing the outline one.
@@ -595,7 +595,7 @@ func TestMCPGetDocOutlineCapped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal doc: %v", err)
 	}
-	body := fmt.Sprintf(`{"_index":"memento-docs","_id":"abcd1234abcd1234","found":true,"_source":%s}`, source)
+	body := fmt.Sprintf(`{"_index":"velruna-docs","_id":"abcd1234abcd1234","found":true,"_source":%s}`, source)
 	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodHead {
@@ -610,12 +610,12 @@ func TestMCPGetDocOutlineCapped(t *testing.T) {
 	ctx := context.Background()
 	call := func(args map[string]any) map[string]any {
 		t.Helper()
-		res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "memento_get_doc", Arguments: args})
+		res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "velruna_get_doc", Arguments: args})
 		if err != nil {
-			t.Fatalf("CallTool(memento_get_doc): %v", err)
+			t.Fatalf("CallTool(velruna_get_doc): %v", err)
 		}
 		if res.IsError {
-			t.Fatalf("memento_get_doc failed: %s", toolText(res))
+			t.Fatalf("velruna_get_doc failed: %s", toolText(res))
 		}
 		raw, err := json.Marshal(res.StructuredContent)
 		if err != nil {
@@ -653,14 +653,14 @@ func TestMCPGetDocOutlineCapped(t *testing.T) {
 // and no explicit keep, the refusal is a config-state answer that must not
 // touch the store (the round-10 shape-before-store contract).
 func TestMCPPruneKeepRefusalOffline(t *testing.T) {
-	session := connectTestServer(t, "OPENSEARCH_URL=https://127.0.0.1:9", "MEMENTO_HISTORY_LIMIT=0")
+	session := connectTestServer(t, "OPENSEARCH_URL=https://127.0.0.1:9", "VELRUNA_HISTORY_LIMIT=0")
 	ctx := context.Background()
 	res, err := session.CallTool(ctx, &mcp.CallToolParams{
-		Name:      "memento_prune",
+		Name:      "velruna_prune",
 		Arguments: map[string]any{"key": "k"},
 	})
 	if err != nil {
-		t.Fatalf("CallTool(memento_prune): %v", err)
+		t.Fatalf("CallTool(velruna_prune): %v", err)
 	}
 	if !res.IsError {
 		t.Fatal("history_limit=0 without keep must be refused")
@@ -726,9 +726,9 @@ func TestMCPServerAddSecretGuard(t *testing.T) {
 	}
 
 	t.Run("reject blocks before the store", func(t *testing.T) {
-		session := connectTestServer(t, "MEMENTO_SECRET_GUARD=reject", storeDown)
+		session := connectTestServer(t, "VELRUNA_SECRET_GUARD=reject", storeDown)
 		res, err := session.CallTool(context.Background(),
-			&mcp.CallToolParams{Name: "memento_add", Arguments: secretArgs})
+			&mcp.CallToolParams{Name: "velruna_add", Arguments: secretArgs})
 		if err != nil {
 			t.Fatalf("CallTool: %v", err)
 		}
@@ -745,13 +745,13 @@ func TestMCPServerAddSecretGuard(t *testing.T) {
 	})
 
 	t.Run("confirm does not bypass reject", func(t *testing.T) {
-		session := connectTestServer(t, "MEMENTO_SECRET_GUARD=reject", storeDown)
+		session := connectTestServer(t, "VELRUNA_SECRET_GUARD=reject", storeDown)
 		args := map[string]any{"confirm_secret": true}
 		for k, v := range secretArgs {
 			args[k] = v
 		}
 		res, err := session.CallTool(context.Background(),
-			&mcp.CallToolParams{Name: "memento_add", Arguments: args})
+			&mcp.CallToolParams{Name: "velruna_add", Arguments: args})
 		if err != nil {
 			t.Fatalf("CallTool: %v", err)
 		}
@@ -761,9 +761,9 @@ func TestMCPServerAddSecretGuard(t *testing.T) {
 	})
 
 	t.Run("ask needs the confirmation flag", func(t *testing.T) {
-		session := connectTestServer(t, "MEMENTO_SECRET_GUARD=ask", storeDown)
+		session := connectTestServer(t, "VELRUNA_SECRET_GUARD=ask", storeDown)
 		res, err := session.CallTool(context.Background(),
-			&mcp.CallToolParams{Name: "memento_add", Arguments: secretArgs})
+			&mcp.CallToolParams{Name: "velruna_add", Arguments: secretArgs})
 		if err != nil {
 			t.Fatalf("CallTool: %v", err)
 		}
@@ -780,13 +780,13 @@ func TestMCPServerAddSecretGuard(t *testing.T) {
 	})
 
 	t.Run("ask with confirmation reaches the store", func(t *testing.T) {
-		session := connectTestServer(t, "MEMENTO_SECRET_GUARD=ask", storeDown)
+		session := connectTestServer(t, "VELRUNA_SECRET_GUARD=ask", storeDown)
 		args := map[string]any{"confirm_secret": true}
 		for k, v := range secretArgs {
 			args[k] = v
 		}
 		res, err := session.CallTool(context.Background(),
-			&mcp.CallToolParams{Name: "memento_add", Arguments: args})
+			&mcp.CallToolParams{Name: "velruna_add", Arguments: args})
 		if err != nil {
 			t.Fatalf("CallTool: %v", err)
 		}
@@ -797,7 +797,7 @@ func TestMCPServerAddSecretGuard(t *testing.T) {
 		if strings.Contains(text, "secret-guard") {
 			t.Errorf("confirmed ask must pass the guard; got: %s", text)
 		}
-		if !strings.Contains(text, "memento_add failed") {
+		if !strings.Contains(text, "velruna_add failed") {
 			t.Errorf("want the store error after the guard passed; got: %s", text)
 		}
 	})
@@ -892,7 +892,7 @@ func TestNewFactViewCarriesTimeAndHistory(t *testing.T) {
 	}
 }
 
-// TestMCPKeysEmptyQuery pins the memento_keys guard: an empty key query is a
+// TestMCPKeysEmptyQuery pins the velruna_keys guard: an empty key query is a
 // context flood, rejected before the store is touched. The store is
 // unreachable on purpose: the rejection must not depend on it.
 func TestMCPKeysEmptyQuery(t *testing.T) {
@@ -900,7 +900,7 @@ func TestMCPKeysEmptyQuery(t *testing.T) {
 	ctx := context.Background()
 
 	res, err := session.CallTool(ctx, &mcp.CallToolParams{
-		Name:      "memento_keys",
+		Name:      "velruna_keys",
 		Arguments: map[string]any{},
 	})
 	if err != nil {
@@ -1032,39 +1032,39 @@ func TestMCPServerM1ValidationOffline(t *testing.T) {
 		args map[string]any
 		want string
 	}{
-		{"memento_add_batch", map[string]any{"items": []any{}}, "1..10"},
-		{"memento_add_batch", map[string]any{"items": []any{
+		{"velruna_add_batch", map[string]any{"items": []any{}}, "1..10"},
+		{"velruna_add_batch", map[string]any{"items": []any{
 			map[string]any{"key": "k", "value": "v", "category": "config"},
 			map[string]any{"key": "k", "value": "w", "category": "config"},
 		}}, "duplicate key"},
 		// The dupe check runs on the TRIMMED key (what the store gets):
 		// " k " and "k" are one fact, and a batch of two is the silent
 		// correction the contract refuses.
-		{"memento_add_batch", map[string]any{"items": []any{
+		{"velruna_add_batch", map[string]any{"items": []any{
 			map[string]any{"key": " k ", "value": "v", "category": "config"},
 			map[string]any{"key": "k", "value": "w", "category": "config"},
 		}}, "duplicate key"},
-		{"memento_patch_batch", map[string]any{"items": []any{}}, "1..10"},
-		{"memento_patch_batch", map[string]any{"items": []any{
+		{"velruna_patch_batch", map[string]any{"items": []any{}}, "1..10"},
+		{"velruna_patch_batch", map[string]any{"items": []any{
 			map[string]any{"key": "k", "notes_append": "a"},
 			map[string]any{"key": " k ", "notes_append": "b"},
 		}}, "duplicate key"},
 		// The project label is agent-supplied identity text in the shared
 		// index: the fact path gates it exactly like the fetch path.
-		{"memento_add", map[string]any{"key": "k", "value": "v", "category": "config", "project": "rel " + guardSentinel}, "secret-guard"},
-		{"memento_patch", map[string]any{"key": ""}, "key is required"},
+		{"velruna_add", map[string]any{"key": "k", "value": "v", "category": "config", "project": "rel " + guardSentinel}, "secret-guard"},
+		{"velruna_patch", map[string]any{"key": ""}, "key is required"},
 		// The patch shape (nothing-to-change, bogus status, orphan reason) is
 		// validated before config/guard/store: a shape error must never arrive
 		// wrapped in the availability advice (round-8 parity with list/keys).
-		{"memento_patch", map[string]any{"key": "k", "status": "bogus"}, "status must be verified|obsolete"},
-		{"memento_patch", map[string]any{"key": "k", "reason": "gone"}, "reason is only accepted"},
+		{"velruna_patch", map[string]any{"key": "k", "status": "bogus"}, "status must be verified|obsolete"},
+		{"velruna_patch", map[string]any{"key": "k", "reason": "gone"}, "reason is only accepted"},
 		// The list prefix normalizes before the store too (the keys contract).
-		{"memento_list", map[string]any{"project": "p", "prefix": "a*b"}, "trailing *"},
-		{"memento_get", map[string]any{"key": "k", "keys": []any{"k"}}, "exactly one"},
-		{"memento_get", map[string]any{}, "exactly one"},
+		{"velruna_list", map[string]any{"project": "p", "prefix": "a*b"}, "trailing *"},
+		{"velruna_get", map[string]any{"key": "k", "keys": []any{"k"}}, "exactly one"},
+		{"velruna_get", map[string]any{}, "exactly one"},
 		// The fact-search edge refuses an empty query up-front (the
 		// search_docs contract): a silent zero is not an answer.
-		{"memento_search", map[string]any{"query": "  "}, "query is required"},
+		{"velruna_search", map[string]any{"query": "  "}, "query is required"},
 	} {
 		t.Run(tc.name+" "+tc.want, func(t *testing.T) {
 			res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: tc.name, Arguments: tc.args})
@@ -1095,7 +1095,7 @@ func TestMCPServerGetKeysCapOffline(t *testing.T) {
 		keys[i] = "k"
 	}
 	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
-		Name: "memento_get", Arguments: map[string]any{"keys": keys}})
+		Name: "velruna_get", Arguments: map[string]any{"keys": keys}})
 	if err != nil {
 		t.Fatalf("CallTool: %v", err)
 	}
@@ -1130,9 +1130,9 @@ func TestNewFactViewCompactDropsHistory(t *testing.T) {
 func TestMCPServerObsoleteGuardCoversKey(t *testing.T) {
 	const sentinel = "AKIAIOSFODNN7EXAMPLE"
 	storeDown := "OPENSEARCH_URL=https://127.0.0.1:9"
-	session := connectTestServer(t, "MEMENTO_SECRET_GUARD=reject", storeDown)
+	session := connectTestServer(t, "VELRUNA_SECRET_GUARD=reject", storeDown)
 	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
-		Name: "memento_obsolete",
+		Name: "velruna_obsolete",
 		Arguments: map[string]any{
 			"key":    "leak-" + sentinel,
 			"reason": "file deleted",
@@ -1156,7 +1156,7 @@ func TestMCPServerObsoleteGuardCoversKey(t *testing.T) {
 func TestMCPGetKeysEmptyPreValidated(t *testing.T) {
 	session := connectTestServer(t, "OPENSEARCH_URL=https://127.0.0.1:9")
 	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
-		Name:      "memento_get",
+		Name:      "velruna_get",
 		Arguments: map[string]any{"keys": []any{" k ", " "}},
 	})
 	if err != nil {
@@ -1179,14 +1179,14 @@ func TestMCPAddBatchEnsuresIndexOnce(t *testing.T) {
 	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
-		case r.Method == http.MethodHead && r.URL.Path == "/memento":
+		case r.Method == http.MethodHead && r.URL.Path == "/velruna":
 			heads.Add(1)
 			w.WriteHeader(http.StatusOK)
-		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/memento/_doc/"):
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/velruna/_doc/"):
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = io.WriteString(w, `{"error":{"type":"document_missing_exception","reason":"no such document"},"status":404}`)
 		default:
-			_, _ = io.WriteString(w, `{"_index":"memento","_id":"k","_version":1,"_seq_no":0,"_primary_term":1,"result":"created"}`)
+			_, _ = io.WriteString(w, `{"_index":"velruna","_id":"k","_version":1,"_seq_no":0,"_primary_term":1,"result":"created"}`)
 		}
 	}))
 	t.Cleanup(fake.Close)
@@ -1197,11 +1197,11 @@ func TestMCPAddBatchEnsuresIndexOnce(t *testing.T) {
 		items = append(items, map[string]any{"key": "k" + strconv.Itoa(i), "value": "v", "category": "config"})
 	}
 	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
-		Name:      "memento_add_batch",
+		Name:      "velruna_add_batch",
 		Arguments: map[string]any{"items": items},
 	})
 	if err != nil {
-		t.Fatalf("CallTool(memento_add_batch): %v", err)
+		t.Fatalf("CallTool(velruna_add_batch): %v", err)
 	}
 	if res.IsError {
 		t.Fatalf("tool reported an error: %v", res.Content)

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NemoNobody/memento/internal/client"
-	"github.com/NemoNobody/memento/internal/model"
+	"github.com/NemoNobody/velruna/internal/client"
+	"github.com/NemoNobody/velruna/internal/model"
 	"github.com/spf13/cobra"
 )
 
@@ -210,7 +210,7 @@ func printFact(w io.Writer, f *model.Fact, now time.Time, history bool, entries 
 				// --limit must be in the advice: the journal command defaults to
 				// the same window get already showed, so the bare suggestion
 				// would return the identical page.
-				b.WriteString(" (see `memento journal ")
+				b.WriteString(" (see `velruna journal ")
 				b.WriteString(strconv.Quote(f.Key))
 				b.WriteString(" --limit <N>`)")
 			}

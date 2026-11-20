@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NemoNobody/memento/internal/model"
+	"github.com/NemoNobody/velruna/internal/model"
 )
 
 // TestNeedsMigration pins the migration selection: unlinked facts and

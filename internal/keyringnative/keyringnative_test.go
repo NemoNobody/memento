@@ -110,7 +110,7 @@ func TestBackendErrorClassification(t *testing.T) {
 // wallet on a developer machine), and the counter proves the gate ran once per
 // operation.
 func TestOperationsRefuseWithoutBackend(t *testing.T) {
-	t.Setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent/memento-test-no-bus")
+	t.Setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent/velruna-test-no-bus")
 	orig := probe
 	calls := 0
 	probe = func() backendProbe {
@@ -119,13 +119,13 @@ func TestOperationsRefuseWithoutBackend(t *testing.T) {
 	}
 	t.Cleanup(func() { probe = orig })
 
-	if _, err := Get("memento-test", "user"); !errors.Is(err, ErrBackend) {
+	if _, err := Get("velruna-test", "user"); !errors.Is(err, ErrBackend) {
 		t.Errorf("Get = %v, want ErrBackend", err)
 	}
-	if err := Set("memento-test", "user", "value"); !errors.Is(err, ErrBackend) {
+	if err := Set("velruna-test", "user", "value"); !errors.Is(err, ErrBackend) {
 		t.Errorf("Set = %v, want ErrBackend", err)
 	}
-	if err := Delete("memento-test", "user"); !errors.Is(err, ErrBackend) {
+	if err := Delete("velruna-test", "user"); !errors.Is(err, ErrBackend) {
 		t.Errorf("Delete = %v, want ErrBackend", err)
 	}
 	if calls != 3 {
@@ -149,7 +149,7 @@ func TestProbeSecretServiceFailsFastOnDeadBus(t *testing.T) {
 
 // These tests talk to a REAL Secret Service provider (gnome-keyring, KWallet,
 // ksecretd) on the session bus. They touch the user's wallet, so they are opt-in:
-// MEMENTO_KEYRING_TEST=1. `make test-keyring` starts a disposable
+// VELRUNA_KEYRING_TEST=1. `make test-keyring` starts a disposable
 // dbus-run-session + gnome-keyring and sets the flag; CI does the same.
 //
 // The point is the part no fake can prove: the wire protocol, the default
@@ -157,8 +157,8 @@ func TestProbeSecretServiceFailsFastOnDeadBus(t *testing.T) {
 // as the provider actually reports them.
 func requireSecretService(t *testing.T) {
 	t.Helper()
-	if os.Getenv("MEMENTO_KEYRING_TEST") == "" {
-		t.Skip("keyring integration test disabled: set MEMENTO_KEYRING_TEST=1 to run against the session Secret Service")
+	if os.Getenv("VELRUNA_KEYRING_TEST") == "" {
+		t.Skip("keyring integration test disabled: set VELRUNA_KEYRING_TEST=1 to run against the session Secret Service")
 	}
 	conn, err := dbus.SessionBus()
 	if err != nil {
@@ -178,7 +178,7 @@ func requireSecretService(t *testing.T) {
 // name could delete entries the test never created.
 func testService(t *testing.T) string {
 	t.Helper()
-	svc := fmt.Sprintf("memento-ci-%d", os.Getpid())
+	svc := fmt.Sprintf("velruna-ci-%d", os.Getpid())
 	t.Cleanup(func() { _ = Delete(svc, "user") })
 	return svc
 }

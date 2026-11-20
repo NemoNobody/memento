@@ -7,10 +7,10 @@ timeFieldName and every visualization dies with "Could not locate that
 index-pattern-field". Re-run this after a mapping change and push again.
 
 Usage (from the repo root):
-    python3 docker/dashboards/gen_fields.py [path-to-memento.conf]
+    python3 docker/dashboards/gen_fields.py [path-to-velruna.conf]
 
-The cluster URL/user come from the config file (default ./memento.conf);
-the password resolves via `memento creds get` / OPENSEARCH_PASSWORD.
+The cluster URL/user come from the config file (default ./velruna.conf);
+the password resolves via `velruna creds get` / OPENSEARCH_PASSWORD.
 Never prints the password.
 """
 import base64
@@ -96,15 +96,15 @@ def flatten(props, prefix=""):
 
 
 def main():
-    conf_path = sys.argv[1] if len(sys.argv) > 1 else "memento.conf"
+    conf_path = sys.argv[1] if len(sys.argv) > 1 else "velruna.conf"
     with open(conf_path, encoding="utf-8") as f:
         conf = json.load(f)
-    url = os.environ.get("MEMENTO_OS_URL") or conf.get("opensearch_url")
-    user = os.environ.get("MEMENTO_OS_USER") or conf.get("opensearch_user", "admin")
+    url = os.environ.get("VELRUNA_OS_URL") or conf.get("opensearch_url")
+    user = os.environ.get("VELRUNA_OS_USER") or conf.get("opensearch_user", "admin")
     pw = os.environ.get("OPENSEARCH_PASSWORD")
     if not pw:
-        memento = os.environ.get("MEMENTO_BIN") or "memento"
-        pw = subprocess.run([memento, "creds", "get"],
+        velruna = os.environ.get("VELRUNA_BIN") or "velruna"
+        pw = subprocess.run([velruna, "creds", "get"],
                             capture_output=True, text=True, check=False).stdout.strip()
     if not url or not pw:
         sys.exit("cluster url/password unresolved (config + creds get or env)")
@@ -118,9 +118,9 @@ def main():
             return json.load(r)
 
     by_title = {
-        "memento": "memento",
-        "memento-history-*": "memento-history-*",
-        "memento-docs": "memento-docs",
+        "velruna": "velruna",
+        "velruna-history-*": "velruna-history-*",
+        "velruna-docs": "velruna-docs",
     }
     ndjson_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "objects.ndjson")
     objs = []

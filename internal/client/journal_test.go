@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NemoNobody/memento/internal/config"
-	"github.com/NemoNobody/memento/internal/model"
+	"github.com/NemoNobody/velruna/internal/config"
+	"github.com/NemoNobody/velruna/internal/model"
 )
 
 // journalInfraOK answers the infra probes as "pipeline and template already
@@ -18,9 +18,9 @@ import (
 func journalInfraOK(r recordedRequest) (int, string) {
 	switch {
 	case r.Method == http.MethodGet && strings.HasPrefix(r.Path, "/_ingest/pipeline/"):
-		return http.StatusOK, `{"memento-journal-ts":{"processors":[]}}`
+		return http.StatusOK, `{"velruna-journal-ts":{"processors":[]}}`
 	case r.Method == http.MethodGet && strings.HasPrefix(r.Path, "/_index_template/"):
-		return http.StatusOK, `{"index_templates":[{"name":"memento-journal","index_template":{"template":{"settings":{"index.number_of_replicas":"0"}}}}]}`
+		return http.StatusOK, `{"index_templates":[{"name":"velruna-journal","index_template":{"template":{"settings":{"index.number_of_replicas":"0"}}}}]}`
 	case r.Method == http.MethodPut && strings.HasSuffix(r.Path, "/_settings"):
 		return http.StatusOK, `{"acknowledged":true}`
 	}
@@ -34,15 +34,15 @@ func journalInfraOK(r recordedRequest) (int, string) {
 // route": the caller's own respond takes over.
 func journalRoutesOK(r recordedRequest) (int, string) {
 	switch {
-	case r.Method == http.MethodPost && strings.HasPrefix(r.Path, "/memento-history-") && strings.Contains(r.Path, "/_doc"):
+	case r.Method == http.MethodPost && strings.HasPrefix(r.Path, "/velruna-history-") && strings.Contains(r.Path, "/_doc"):
 		// auto-id appends (POST /_doc, no DocumentID)
 		return http.StatusOK, `{"_id":"journal-entry-1","result":"created"}`
-	case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-"):
+	case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/velruna-history-"):
 		// preallocated-id appends (migration, birth): Index sends PUT
 		// /<index>/_doc/<id> whenever a DocumentID is set (op_type=create
 		// is only the query param)
 		return http.StatusOK, `{"_id":"journal-entry-1","result":"created"}`
-	case r.Method == http.MethodPost && strings.HasPrefix(r.Path, "/memento-history-") && strings.HasSuffix(r.Path, "/_search"):
+	case r.Method == http.MethodPost && strings.HasPrefix(r.Path, "/velruna-history-") && strings.HasSuffix(r.Path, "/_search"):
 		return http.StatusOK, `{"took":1,"hits":{"total":{"value":0,"relation":"eq"},"hits":[]}}`
 	}
 	return journalInfraOK(r)
@@ -58,7 +58,7 @@ func journalAppends(fake *fakeOpenSearch) []recordedRequest {
 	var out []recordedRequest
 	for _, r := range fake.requests {
 		if (r.Method == http.MethodPost || r.Method == http.MethodPut) &&
-			strings.HasPrefix(r.Path, "/memento-history-") &&
+			strings.HasPrefix(r.Path, "/velruna-history-") &&
 			strings.Contains(r.Path, "/_doc") {
 			out = append(out, r)
 		}
@@ -74,20 +74,20 @@ func TestJournalIndexNamePeriods(t *testing.T) {
 		at     time.Time
 		want   string
 	}{
-		{"day", day, "memento-history-2026.11.09"},
-		{"week", day, "memento-history-2026-w46"},
-		{"week", isoWeekFlip, "memento-history-2026-w53"},
-		{"month", day, "memento-history-2026.11"},
-		{"quarter", day, "memento-history-2026-q4"},
-		{"quarter", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), "memento-history-2026-q1"},
+		{"day", day, "velruna-history-2026.11.09"},
+		{"week", day, "velruna-history-2026-w46"},
+		{"week", isoWeekFlip, "velruna-history-2026-w53"},
+		{"month", day, "velruna-history-2026.11"},
+		{"quarter", day, "velruna-history-2026-q4"},
+		{"quarter", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), "velruna-history-2026-q1"},
 		// quarter/year must partition on UTC, not the writer's zone: 00:30
 		// at UTC+3 on Oct 1 is Sep 30 21:30 UTC — the previous quarter.
-		{"quarter", time.Date(2026, 10, 1, 0, 30, 0, 0, time.FixedZone("UTC+3", 3*3600)), "memento-history-2026-q3"},
-		{"year", day, "memento-history-2026"},
-		{"bogus", day, "memento-history-2026.11"}, // config validates; raw calls default to month
+		{"quarter", time.Date(2026, 10, 1, 0, 30, 0, 0, time.FixedZone("UTC+3", 3*3600)), "velruna-history-2026-q3"},
+		{"year", day, "velruna-history-2026"},
+		{"bogus", day, "velruna-history-2026.11"}, // config validates; raw calls default to month
 	}
 	for _, tc := range tests {
-		if got := journalIndexName("memento", tc.period, tc.at); got != tc.want {
+		if got := journalIndexName("velruna", tc.period, tc.at); got != tc.want {
 			t.Errorf("period %s at %s: got %s, want %s", tc.period, tc.at, got, tc.want)
 		}
 	}
@@ -98,7 +98,7 @@ func TestAppendJournalWritesToDatedIndexWithCreate(t *testing.T) {
 		if code, body := journalInfraOK(r); code != http.StatusInternalServerError {
 			return code, body
 		}
-		if r.Method == http.MethodPost && r.Path == "/memento-history-2026.11/_doc" {
+		if r.Method == http.MethodPost && r.Path == "/velruna-history-2026.11/_doc" {
 			return http.StatusOK, `{"_id":"entry-1","result":"created"}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Path + `"}`
@@ -113,7 +113,7 @@ func TestAppendJournalWritesToDatedIndexWithCreate(t *testing.T) {
 	if id != "entry-1" {
 		t.Errorf("id = %q, want entry-1", id)
 	}
-	writes := fake.requestsFor(http.MethodPost, "/memento-history-2026.11/_doc")
+	writes := fake.requestsFor(http.MethodPost, "/velruna-history-2026.11/_doc")
 	if len(writes) != 1 {
 		t.Fatalf("journal appends = %d, want 1", len(writes))
 	}
@@ -138,9 +138,9 @@ func TestJournalReadsCarryUnavailableFlags(t *testing.T) {
 		if code, body := journalInfraOK(r); code != http.StatusInternalServerError {
 			return code, body
 		}
-		if r.Method == http.MethodPost && r.Path == "/memento-history-*/_search" {
+		if r.Method == http.MethodPost && r.Path == "/velruna-history-*/_search" {
 			return http.StatusOK, `{"hits":{"total":{"value":1},"hits":[
-				{"_index":"memento-history-2026.11","_id":"e1","_source":{
+				{"_index":"velruna-history-2026.11","_id":"e1","_source":{
 					"fact_key":"k","op":"write","value":"v","created_at":"2026-11-09T10:00:00Z"}}]}}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Path + `"}`
@@ -153,7 +153,7 @@ func TestJournalReadsCarryUnavailableFlags(t *testing.T) {
 	if meta.Total != 1 || meta.Truncated || len(entries) != 1 || entries[0].Value != "v" {
 		t.Fatalf("entries=%v total=%d truncated=%v", entries, meta.Total, meta.Truncated)
 	}
-	searches := fake.requestsFor(http.MethodPost, "/memento-history-*/_search")
+	searches := fake.requestsFor(http.MethodPost, "/velruna-history-*/_search")
 	if len(searches) != 1 {
 		t.Fatalf("searches = %d, want 1", len(searches))
 	}
@@ -188,11 +188,11 @@ func TestJournalEntriesCountUndecodable(t *testing.T) {
 		if code, body := journalInfraOK(r); code != http.StatusInternalServerError {
 			return code, body
 		}
-		if r.Method == http.MethodPost && r.Path == "/memento-history-*/_search" {
+		if r.Method == http.MethodPost && r.Path == "/velruna-history-*/_search" {
 			return http.StatusOK, `{"hits":{"total":{"value":3},"hits":[
-				{"_index":"memento-history-2026.11","_id":"e1","_source":{"fact_key":"k","op":"write","value":"good","created_at":"2026-11-09T10:00:00Z"}},
-				{"_index":"memento-history-2026.11","_id":"e2","_source":"not-an-object"},
-				{"_index":"memento-history-2026.11","_id":"e3","_source":"also-broken"}]}}`
+				{"_index":"velruna-history-2026.11","_id":"e1","_source":{"fact_key":"k","op":"write","value":"good","created_at":"2026-11-09T10:00:00Z"}},
+				{"_index":"velruna-history-2026.11","_id":"e2","_source":"not-an-object"},
+				{"_index":"velruna-history-2026.11","_id":"e3","_source":"also-broken"}]}}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Path + `"}`
 	})
@@ -219,10 +219,10 @@ func TestHistoryInfoParsesAggregations(t *testing.T) {
 			return code, body
 		}
 		switch {
-		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
-			return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
+		case r.Method == http.MethodGet && r.Path == "/velruna/_doc/k":
+			return http.StatusOK, `{"_index":"velruna","_id":"k","found":true,"_source":{
 				"key":"k","value":"v","category":"config","current_ref":"e2"}}`
-		case r.Method == http.MethodPost && r.Path == "/memento-history-*/_search":
+		case r.Method == http.MethodPost && r.Path == "/velruna-history-*/_search":
 			return http.StatusOK, `{"hits":{"total":{"value":3},"hits":[]},
 				"aggregations":{
 					"writes":{"doc_count":2},
@@ -273,13 +273,13 @@ func TestAddCorrectionUpdatesMainBeforeJournaling(t *testing.T) {
 			return code, body
 		}
 		switch {
-		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
-			return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
+		case r.Method == http.MethodGet && r.Path == "/velruna/_doc/k":
+			return http.StatusOK, `{"_index":"velruna","_id":"k","found":true,"_source":{
 				"key":"k","value":"v1","category":"config","status":"verified"}}`
-		case (r.Method == http.MethodPost || r.Method == http.MethodPut) && strings.HasPrefix(r.Path, "/memento-history-"):
+		case (r.Method == http.MethodPost || r.Method == http.MethodPut) && strings.HasPrefix(r.Path, "/velruna-history-"):
 			return http.StatusOK, `{"_id":"ignored","result":"created"}`
-		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
-			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+		case r.Method == http.MethodPost && r.Path == "/velruna/_update/k":
+			return http.StatusOK, `{"_index":"velruna","_id":"k","result":"updated"}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Method + " " + r.Path + `"}`
 	})
@@ -306,7 +306,7 @@ func TestAddCorrectionUpdatesMainBeforeJournaling(t *testing.T) {
 		t.Errorf("journal entry = %v, want op=write value=v2", je)
 	}
 
-	updates := fake.requestsFor(http.MethodPost, "/memento/_update/k")
+	updates := fake.requestsFor(http.MethodPost, "/velruna/_update/k")
 	if len(updates) != 1 {
 		t.Fatalf("main updates = %d, want 1", len(updates))
 	}
@@ -324,10 +324,10 @@ func TestAddCorrectionUpdatesMainBeforeJournaling(t *testing.T) {
 	appendedIdx, updatedIdx := -1, -1
 	fake.mu.Lock()
 	for i, r := range fake.requests {
-		if (r.Method == http.MethodPost || r.Method == http.MethodPut) && strings.HasPrefix(r.Path, "/memento-history-") {
+		if (r.Method == http.MethodPost || r.Method == http.MethodPut) && strings.HasPrefix(r.Path, "/velruna-history-") {
 			appendedIdx = i
 		}
-		if r.Method == http.MethodPost && r.Path == "/memento/_update/k" {
+		if r.Method == http.MethodPost && r.Path == "/velruna/_update/k" {
 			updatedIdx = i
 		}
 	}
@@ -340,11 +340,11 @@ func TestAddCorrectionUpdatesMainBeforeJournaling(t *testing.T) {
 func TestAddSameValueDoesNotAppendJournal(t *testing.T) {
 	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
 		switch {
-		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
-			return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
+		case r.Method == http.MethodGet && r.Path == "/velruna/_doc/k":
+			return http.StatusOK, `{"_index":"velruna","_id":"k","found":true,"_source":{
 				"key":"k","value":"v1","category":"config","status":"verified"}}`
-		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
-			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+		case r.Method == http.MethodPost && r.Path == "/velruna/_update/k":
+			return http.StatusOK, `{"_index":"velruna","_id":"k","result":"updated"}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Path + `"}`
 	})
@@ -353,7 +353,7 @@ func TestAddSameValueDoesNotAppendJournal(t *testing.T) {
 	if _, err := c.Add(context.Background(), f); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	if fake.sawAnyPrefix("/memento-history-") {
+	if fake.sawAnyPrefix("/velruna-history-") {
 		t.Error("same-value add must not touch the journal (no new observation)")
 	}
 }
@@ -373,10 +373,10 @@ func TestJournalCollisionStringShape(t *testing.T) {
 				return code, body
 			}
 			switch {
-			case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-"):
+			case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/velruna-history-"):
 				return http.StatusConflict, `{"error":"version conflict, document already exists","status":409}`
-			case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
-				return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+			case r.Method == http.MethodPost && r.Path == "/velruna/_update/k":
+				return http.StatusOK, `{"_index":"velruna","_id":"k","result":"updated"}`
 			}
 			return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Method + " " + r.Path + `"}`
 		})
@@ -395,7 +395,7 @@ func TestJournalCollisionStringShape(t *testing.T) {
 				return code, body
 			}
 			switch {
-			case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-"):
+			case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/velruna-history-"):
 				return http.StatusConflict, `{"error":"index blocked by policy","status":409}`
 			}
 			return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Method + " " + r.Path + `"}`
@@ -423,7 +423,7 @@ func TestJournalCollisionStringShape(t *testing.T) {
 					return code, b
 				}
 				switch {
-				case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-"):
+				case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/velruna-history-"):
 					return http.StatusBadRequest, body
 				}
 				return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Method + " " + r.Path + `"}`
@@ -444,10 +444,10 @@ func TestJournalCollisionStringShape(t *testing.T) {
 				return code, body
 			}
 			switch {
-			case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-"):
+			case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/velruna-history-"):
 				return http.StatusConflict, `{"error":{"type":"mapper_parsing_exception","reason":"document already exists"},"status":409}`
-			case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
-				return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+			case r.Method == http.MethodPost && r.Path == "/velruna/_update/k":
+				return http.StatusOK, `{"_index":"velruna","_id":"k","result":"updated"}`
 			}
 			return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Method + " " + r.Path + `"}`
 		})
@@ -470,14 +470,14 @@ func TestJournalCollisionStringShape(t *testing.T) {
 			// names the exception type, no "index [" marker
 			`{"error":"resource_already_exists_exception: [k2] already exists","status":409}`,
 			// carries the "index [" marker, no exception-type wording
-			`{"error":"index [memento-history-2026-11/uuid] already exists","status":409}`,
+			`{"error":"index [velruna-history-2026-11/uuid] already exists","status":409}`,
 			// struct shape: middlebox rewrote the type but left the
 			// exception name in the reason
 			`{"error":{"type":"mapper_parsing_exception","reason":"resource_already_exists_exception: [k2] already exists"},"status":409}`,
 			// struct shape: the CANONICAL collision type carrying the race
 			// wording — the guards must outrank the type acceptor, or a
 			// rewritten body fakes the append through the canonical door
-			`{"error":{"type":"version_conflict_engine_exception","reason":"index [memento-history-2026-11/uuid] already exists"},"status":409}`,
+			`{"error":{"type":"version_conflict_engine_exception","reason":"index [velruna-history-2026-11/uuid] already exists"},"status":409}`,
 			// struct shape: top type AND reason rewritten off the race
 			// signature, but the root_cause array still names the index
 			// race — the guard must read it too (three bodies, one per
@@ -485,16 +485,16 @@ func TestJournalCollisionStringShape(t *testing.T) {
 			// the name/type so each disjunct is pinned alone)
 			`{"error":{"type":"mapper_parsing_exception","reason":"[k2] already exists","root_cause":[{"type":"resource_already_exists_exception","reason":"[k2] cannot create"}]},"status":409}`,
 			`{"error":{"type":"mapper_parsing_exception","reason":"[k2] already exists","root_cause":[{"type":"engine_exception","reason":"resource_already_exists_exception for [k2]"}]},"status":409}`,
-			`{"error":{"type":"mapper_parsing_exception","reason":"[k2] already exists","root_cause":[{"type":"engine_exception","reason":"index [memento-history-2026-11/uuid] already exists"}]},"status":409}`,
+			`{"error":{"type":"mapper_parsing_exception","reason":"[k2] already exists","root_cause":[{"type":"engine_exception","reason":"index [velruna-history-2026-11/uuid] already exists"}]},"status":409}`,
 			// struct shape: the race lives only in the caused_by chain
-			`{"error":{"type":"mapper_parsing_exception","reason":"[k2] already exists","caused_by":{"type":"resource_already_exists_exception","reason":"index [memento-history-2026-11/uuid] already exists"}},"status":409}`,
+			`{"error":{"type":"mapper_parsing_exception","reason":"[k2] already exists","caused_by":{"type":"resource_already_exists_exception","reason":"index [velruna-history-2026-11/uuid] already exists"}},"status":409}`,
 		} {
 			c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
 				if code, b := journalInfraOK(r); code != http.StatusInternalServerError {
 					return code, b
 				}
 				switch {
-				case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-"):
+				case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/velruna-history-"):
 					return http.StatusConflict, body
 				}
 				return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Method + " " + r.Path + `"}`
@@ -515,8 +515,8 @@ func TestJournalCollisionStringShape(t *testing.T) {
 				return code, body
 			}
 			switch {
-			case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-"):
-				return http.StatusConflict, `{"error":"resource_already_exists_exception: index [memento-history-2026-11/uuid] already exists","status":409}`
+			case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/velruna-history-"):
+				return http.StatusConflict, `{"error":"resource_already_exists_exception: index [velruna-history-2026-11/uuid] already exists","status":409}`
 			}
 			return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Method + " " + r.Path + `"}`
 		})
@@ -535,8 +535,8 @@ func TestJournalCollisionStringShape(t *testing.T) {
 				return code, body
 			}
 			switch {
-			case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-"):
-				return http.StatusConflict, `{"error":{"type":"mapper_parsing_exception","reason":"index [memento-history-2026-11/uuid] already exists"},"status":409}`
+			case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/velruna-history-"):
+				return http.StatusConflict, `{"error":{"type":"mapper_parsing_exception","reason":"index [velruna-history-2026-11/uuid] already exists"},"status":409}`
 			}
 			return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Method + " " + r.Path + `"}`
 		})
@@ -565,18 +565,18 @@ func TestJournalCollisionStringShape(t *testing.T) {
 			// the race-wording compound must be CONJUNCTIVE: an "index ["
 			// marker with real conflict wording and no "already exists"
 			// is a doc collision, not the index race.
-			`{"error":{"type":"search_phase_execution_exception","reason":"index [memento]: version conflict, required seq_no [5]"},"status":409}`,
-			`{"error":"index [memento]: version conflict, required seq_no [5]","status":409}`,
+			`{"error":{"type":"search_phase_execution_exception","reason":"index [velruna]: version conflict, required seq_no [5]"},"status":409}`,
+			`{"error":"index [velruna]: version conflict, required seq_no [5]","status":409}`,
 		} {
 			c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
 				if code, b := journalInfraOK(r); code != http.StatusInternalServerError {
 					return code, b
 				}
 				switch {
-				case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-"):
+				case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/velruna-history-"):
 					return http.StatusConflict, body
-				case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
-					return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+				case r.Method == http.MethodPost && r.Path == "/velruna/_update/k":
+					return http.StatusOK, `{"_index":"velruna","_id":"k","result":"updated"}`
 				}
 				return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Method + " " + r.Path + `"}`
 			})
@@ -604,13 +604,13 @@ func TestUUIDAppendCollisionIsNotSuccess(t *testing.T) {
 			return code, body
 		}
 		switch {
-		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
-			return http.StatusOK, `{"_index":"memento","_id":"k","_version":1,"_seq_no":1,"_primary_term":1,"found":true,"_source":{"key":"k","value":"old","category":"config","project":"p","status":"verified"}}`
-		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
-			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+		case r.Method == http.MethodGet && r.Path == "/velruna/_doc/k":
+			return http.StatusOK, `{"_index":"velruna","_id":"k","_version":1,"_seq_no":1,"_primary_term":1,"found":true,"_source":{"key":"k","value":"old","category":"config","project":"p","status":"verified"}}`
+		case r.Method == http.MethodPost && r.Path == "/velruna/_update/k":
+			return http.StatusOK, `{"_index":"velruna","_id":"k","result":"updated"}`
 		// opensearch-go Index sends PUT /<index>/_doc/<id> for a set
 		// DocumentID (op_type=create is only the query param)
-		case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-"):
+		case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/velruna-history-"):
 			return http.StatusConflict, `{"error":"version conflict, document already exists","status":409}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Method + " " + r.Path + `"}`
@@ -625,7 +625,7 @@ func TestUUIDAppendCollisionIsNotSuccess(t *testing.T) {
 	fake.mu.Lock()
 	var sawAppend bool
 	for _, r := range fake.requests {
-		if r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-") && strings.Contains(r.Path, "/_doc/") {
+		if r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/velruna-history-") && strings.Contains(r.Path, "/_doc/") {
 			sawAppend = true
 		}
 	}
@@ -646,11 +646,11 @@ func TestResurrectAppendCollisionIsNotSuccess(t *testing.T) {
 			return code, body
 		}
 		switch {
-		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
-			return http.StatusOK, `{"_index":"memento","_id":"k","_version":1,"_seq_no":1,"_primary_term":1,"found":true,"_source":{"key":"k","value":"v","category":"config","project":"p","status":"obsolete"}}`
-		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
-			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
-		case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-"):
+		case r.Method == http.MethodGet && r.Path == "/velruna/_doc/k":
+			return http.StatusOK, `{"_index":"velruna","_id":"k","_version":1,"_seq_no":1,"_primary_term":1,"found":true,"_source":{"key":"k","value":"v","category":"config","project":"p","status":"obsolete"}}`
+		case r.Method == http.MethodPost && r.Path == "/velruna/_update/k":
+			return http.StatusOK, `{"_index":"velruna","_id":"k","result":"updated"}`
+		case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/velruna-history-"):
 			return http.StatusConflict, `{"error":"version conflict, document already exists","status":409}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Method + " " + r.Path + `"}`
@@ -665,7 +665,7 @@ func TestResurrectAppendCollisionIsNotSuccess(t *testing.T) {
 	fake.mu.Lock()
 	var sawAppend bool
 	for _, r := range fake.requests {
-		if r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-") && strings.Contains(r.Path, "/_doc/") {
+		if r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/velruna-history-") && strings.Contains(r.Path, "/_doc/") {
 			sawAppend = true
 		}
 	}
@@ -681,10 +681,10 @@ func TestMigrateFactMovesArrayToJournal(t *testing.T) {
 			return code, body
 		}
 		switch {
-		case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-"):
+		case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/velruna-history-"):
 			return http.StatusOK, `{"_id":"entry","result":"created"}`
-		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
-			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+		case r.Method == http.MethodPost && r.Path == "/velruna/_update/k":
+			return http.StatusOK, `{"_index":"velruna","_id":"k","result":"updated"}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Path + `"}`
 	})
@@ -705,11 +705,11 @@ func TestMigrateFactMovesArrayToJournal(t *testing.T) {
 	var oct, nov int
 	fake.mu.Lock()
 	for _, r := range fake.requests {
-		if r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-") {
+		if r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/velruna-history-") {
 			switch {
-			case strings.HasPrefix(r.Path, "/memento-history-2026.10/_doc/"):
+			case strings.HasPrefix(r.Path, "/velruna-history-2026.10/_doc/"):
 				oct++
-			case strings.HasPrefix(r.Path, "/memento-history-2026.11/_doc/"):
+			case strings.HasPrefix(r.Path, "/velruna-history-2026.11/_doc/"):
 				nov++
 			}
 		}
@@ -719,7 +719,7 @@ func TestMigrateFactMovesArrayToJournal(t *testing.T) {
 		t.Errorf("entries by month: oct=%d nov=%d, want 1/2 (observed_at decides the index)", oct, nov)
 	}
 
-	updates := fake.requestsFor(http.MethodPost, "/memento/_update/k")
+	updates := fake.requestsFor(http.MethodPost, "/velruna/_update/k")
 	if len(updates) != 1 {
 		t.Fatalf("fact updates = %d, want 1", len(updates))
 	}
@@ -757,14 +757,14 @@ func TestAddCreatesIndexThenJournalsNewFact(t *testing.T) {
 			return code, body
 		}
 		switch {
-		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
+		case r.Method == http.MethodGet && r.Path == "/velruna/_doc/k":
 			return http.StatusNotFound, `{"status":404,"error":{"type":"document_missing_exception"}}`
-		case r.Method == http.MethodPut && r.Path == "/memento/_doc/k":
-			return http.StatusOK, `{"_index":"memento","_id":"k","result":"created"}`
-		case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-"):
+		case r.Method == http.MethodPut && r.Path == "/velruna/_doc/k":
+			return http.StatusOK, `{"_index":"velruna","_id":"k","result":"created"}`
+		case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/velruna-history-"):
 			return http.StatusOK, `{"_id":"j1","result":"created"}`
-		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
-			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+		case r.Method == http.MethodPost && r.Path == "/velruna/_update/k":
+			return http.StatusOK, `{"_index":"velruna","_id":"k","result":"updated"}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Path + `"}`
 	})
@@ -791,7 +791,7 @@ func TestAddCreatesIndexThenJournalsNewFact(t *testing.T) {
 	if appends[0].Query.Get("op_type") != "create" {
 		t.Errorf("birth append must be create-only, query=%s", appends[0].Query.Encode())
 	}
-	updates := fake.requestsFor(http.MethodPost, "/memento/_update/k")
+	updates := fake.requestsFor(http.MethodPost, "/velruna/_update/k")
 	if len(updates) != 1 {
 		t.Fatalf("fact updates = %d, want 1 (the link)", len(updates))
 	}
@@ -816,11 +816,11 @@ func TestAddBirthLinkFailureRepairedByMigrationWithoutDuplication(t *testing.T) 
 			return code, body
 		}
 		switch {
-		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
+		case r.Method == http.MethodGet && r.Path == "/velruna/_doc/k":
 			return http.StatusNotFound, `{"status":404,"error":{"type":"document_missing_exception"}}`
-		case r.Method == http.MethodPut && r.Path == "/memento/_doc/k":
-			return http.StatusOK, `{"_index":"memento","_id":"k","result":"created"}`
-		case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-"):
+		case r.Method == http.MethodPut && r.Path == "/velruna/_doc/k":
+			return http.StatusOK, `{"_index":"velruna","_id":"k","result":"created"}`
+		case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/velruna-history-"):
 			mu.Lock()
 			defer mu.Unlock()
 			if journalDocs[r.Path] {
@@ -828,13 +828,13 @@ func TestAddBirthLinkFailureRepairedByMigrationWithoutDuplication(t *testing.T) 
 			}
 			journalDocs[r.Path] = true
 			return http.StatusOK, `{"_id":"j1","result":"created"}`
-		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+		case r.Method == http.MethodPost && r.Path == "/velruna/_update/k":
 			updateCalls++
 			if updateCalls == 1 {
 				// The blackout: the link update fails after the append landed.
 				return http.StatusInternalServerError, `{"status":500,"error":"transient link failure"}`
 			}
-			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+			return http.StatusOK, `{"_index":"velruna","_id":"k","result":"updated"}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Path + `"}`
 	})
@@ -860,7 +860,7 @@ func TestAddBirthLinkFailureRepairedByMigrationWithoutDuplication(t *testing.T) 
 	if len(journalDocs) != 1 {
 		t.Errorf("journal docs after repair = %d, want 1: the repair must collide, not duplicate", len(journalDocs))
 	}
-	if got := len(fake.requestsFor(http.MethodPost, "/memento/_update/k")); got != 2 {
+	if got := len(fake.requestsFor(http.MethodPost, "/velruna/_update/k")); got != 2 {
 		t.Errorf("fact updates = %d, want 2 (failed link, repair link)", got)
 	}
 }
@@ -875,8 +875,8 @@ func TestEnsureJournalInfraRetriesAfterFailure(t *testing.T) {
 	c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
 		switch {
 		case r.Method == http.MethodGet && strings.HasPrefix(r.Path, "/_ingest/pipeline/"):
-			return http.StatusOK, `{"memento-journal-ts":{"processors":[]}}`
-		case r.Method == http.MethodGet && r.Path == "/_index_template/memento-journal":
+			return http.StatusOK, `{"velruna-journal-ts":{"processors":[]}}`
+		case r.Method == http.MethodGet && r.Path == "/_index_template/velruna-journal":
 			return http.StatusNotFound, `{"status":404,"error":{"type":"status_exception","reason":"index template not found"}}`
 		case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/_index_template/"):
 			tplPuts++
@@ -886,7 +886,7 @@ func TestEnsureJournalInfraRetriesAfterFailure(t *testing.T) {
 			return http.StatusOK, `{"acknowledged":true}`
 		case r.Method == http.MethodPut && strings.HasSuffix(r.Path, "/_settings"):
 			return http.StatusOK, `{"acknowledged":true}`
-		case r.Method == http.MethodPost && r.Path == "/memento-history-2026.11/_doc":
+		case r.Method == http.MethodPost && r.Path == "/velruna-history-2026.11/_doc":
 			return http.StatusOK, `{"_id":"e1","result":"created"}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected: ` + r.Method + " " + r.Path + `"}`
@@ -910,11 +910,11 @@ func TestEnsureJournalInfraRetriesAfterFailure(t *testing.T) {
 func TestPruneJournalFailsOnFactReadFailure(t *testing.T) {
 	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
 		switch {
-		case r.Method == http.MethodPost && r.Path == "/memento-history-*/_search":
+		case r.Method == http.MethodPost && r.Path == "/velruna-history-*/_search":
 			return http.StatusOK, `{"took":1,"hits":{"total":{"value":2,"relation":"eq"},"hits":[
-				{"_index":"memento-history-2026.11","_id":"a","_source":{"fact_key":"k","op":"write","value":"v1","created_at":"2026-11-01T10:00:00Z"}},
-				{"_index":"memento-history-2026.11","_id":"b","_source":{"fact_key":"k","op":"write","value":"v0","created_at":"2026-10-01T10:00:00Z"}}]}}`
-		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
+				{"_index":"velruna-history-2026.11","_id":"a","_source":{"fact_key":"k","op":"write","value":"v1","created_at":"2026-11-01T10:00:00Z"}},
+				{"_index":"velruna-history-2026.11","_id":"b","_source":{"fact_key":"k","op":"write","value":"v0","created_at":"2026-10-01T10:00:00Z"}}]}}`
+		case r.Method == http.MethodGet && r.Path == "/velruna/_doc/k":
 			return http.StatusInternalServerError, `{"status":500,"error":"transient"}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected: ` + r.Path + `"}`
@@ -936,9 +936,9 @@ func TestPruneJournalFailsOnFactReadFailure(t *testing.T) {
 // relation=gte must not crash or hide the overflow.
 func TestPruneJournalCapMessageOnOverflow(t *testing.T) {
 	c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
-		if r.Method == http.MethodPost && r.Path == "/memento-history-*/_search" {
+		if r.Method == http.MethodPost && r.Path == "/velruna-history-*/_search" {
 			return http.StatusOK, `{"took":1,"hits":{"total":{"value":10000,"relation":"eq"},"hits":[
-				{"_index":"memento-history-2026.11","_id":"a","_source":{"fact_key":"k","op":"write","value":"v1","created_at":"2026-11-01T10:00:00Z"}}]}}`
+				{"_index":"velruna-history-2026.11","_id":"a","_source":{"fact_key":"k","op":"write","value":"v1","created_at":"2026-11-01T10:00:00Z"}}]}}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected: ` + r.Path + `"}`
 	})
@@ -964,7 +964,7 @@ func TestMigrateFactRerunCollidesOnDeterministicIDs(t *testing.T) {
 			return code, body
 		}
 		switch {
-		case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-"):
+		case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/velruna-history-"):
 			mu.Lock()
 			defer mu.Unlock()
 			if seen[r.Path] {
@@ -972,7 +972,7 @@ func TestMigrateFactRerunCollidesOnDeterministicIDs(t *testing.T) {
 			}
 			seen[r.Path] = true
 			return http.StatusOK, `{"_id":"x","result":"created"}`
-		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+		case r.Method == http.MethodPost && r.Path == "/velruna/_update/k":
 			updateCalls++
 			if updateCalls == 1 {
 				return http.StatusInternalServerError, `{"status":500,"error":"transient link failure"}`
@@ -1020,7 +1020,7 @@ func TestMigrateFactZeroTimestampRerunCollides(t *testing.T) {
 			return code, body
 		}
 		switch {
-		case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-"):
+		case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/velruna-history-"):
 			mu.Lock()
 			defer mu.Unlock()
 			if seen[r.Path] {
@@ -1028,7 +1028,7 @@ func TestMigrateFactZeroTimestampRerunCollides(t *testing.T) {
 			}
 			seen[r.Path] = true
 			return http.StatusOK, `{"_id":"x","result":"created"}`
-		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+		case r.Method == http.MethodPost && r.Path == "/velruna/_update/k":
 			updateCalls++
 			if updateCalls == 1 {
 				return http.StatusInternalServerError, `{"status":500,"error":"transient link failure"}`
@@ -1068,10 +1068,10 @@ func TestAddCorrectionJournalsDocFactID(t *testing.T) {
 			return code, body
 		}
 		switch {
-		case r.Method == http.MethodGet && r.Path == "/memento/_doc/k":
-			return http.StatusOK, `{"_index":"memento","_id":"k","found":true,"_source":{
+		case r.Method == http.MethodGet && r.Path == "/velruna/_doc/k":
+			return http.StatusOK, `{"_index":"velruna","_id":"k","found":true,"_source":{
 				"key":"k","fact_id":"doc-1","value":"old","category":"config","status":"verified"}}`
-		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
+		case r.Method == http.MethodPost && r.Path == "/velruna/_update/k":
 			return http.StatusOK, `{"result":"updated"}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected: ` + r.Path + `"}`
@@ -1116,7 +1116,7 @@ func TestAppendJournalPinsPipelineOnExistingIndex(t *testing.T) {
 		if code, body := journalInfraOK(r); code != http.StatusInternalServerError {
 			return code, body
 		}
-		if r.Method == http.MethodPost && r.Path == "/memento-history-2026.11/_doc" {
+		if r.Method == http.MethodPost && r.Path == "/velruna-history-2026.11/_doc" {
 			return http.StatusOK, `{"_id":"e1","result":"created"}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected: ` + r.Method + " " + r.Path + `"}`
@@ -1128,11 +1128,11 @@ func TestAppendJournalPinsPipelineOnExistingIndex(t *testing.T) {
 	if _, err := c.AppendJournal(context.Background(), e); err != nil {
 		t.Fatalf("AppendJournal #2: %v", err)
 	}
-	puts := fake.requestsFor(http.MethodPut, "/memento-history-2026.11/_settings")
+	puts := fake.requestsFor(http.MethodPut, "/velruna-history-2026.11/_settings")
 	if len(puts) != 1 {
 		t.Errorf("settings PUTs = %d, want 1 (pinned once per index per process)", len(puts))
 	}
-	if !strings.Contains(puts[0].Body, "memento-journal-ts") {
+	if !strings.Contains(puts[0].Body, "velruna-journal-ts") {
 		t.Errorf("settings body must wire the ts pipeline: %s", puts[0].Body)
 	}
 }
@@ -1145,9 +1145,9 @@ func TestAppendJournalPinsPipelineOnExistingIndex(t *testing.T) {
 // needs-migration SERVER-side so reruns converge past the page cap.
 func TestScanAllFactsEmptyProjectScansAll(t *testing.T) {
 	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
-		if r.Method == http.MethodPost && r.Path == "/memento/_search" {
+		if r.Method == http.MethodPost && r.Path == "/velruna/_search" {
 			return http.StatusOK, `{"took":1,"hits":{"total":{"value":1,"relation":"eq"},"hits":[
-				{"_index":"memento","_id":"k","_source":{"fact_id":"i","key":"k","project":"p1","value":"v","category":"config","status":"verified"}}]}}`
+				{"_index":"velruna","_id":"k","_source":{"fact_id":"i","key":"k","project":"p1","value":"v","category":"config","status":"verified"}}]}}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected: ` + r.Method + " " + r.Path + `"}`
 	})
@@ -1158,7 +1158,7 @@ func TestScanAllFactsEmptyProjectScansAll(t *testing.T) {
 	if len(facts) != 1 {
 		t.Fatalf("facts = %d, want 1: an empty project must scan all projects", len(facts))
 	}
-	reqs := fake.requestsFor(http.MethodPost, "/memento/_search")
+	reqs := fake.requestsFor(http.MethodPost, "/velruna/_search")
 	if len(reqs) != 1 {
 		t.Fatalf("searches = %d, want 1", len(reqs))
 	}
@@ -1179,7 +1179,7 @@ func TestScanAllFactsEmptyProjectScansAll(t *testing.T) {
 	if _, _, err := c.ScanAllFacts(context.Background(), "p1"); err != nil {
 		t.Fatalf("ScanAllFacts scoped: %v", err)
 	}
-	reqs = fake.requestsFor(http.MethodPost, "/memento/_search")
+	reqs = fake.requestsFor(http.MethodPost, "/velruna/_search")
 	if len(reqs) != 2 {
 		t.Fatalf("searches = %d, want 2", len(reqs))
 	}
@@ -1198,10 +1198,10 @@ func TestMigrateFactLinkedWithArrayAppendsOnlyHistory(t *testing.T) {
 			return code, body
 		}
 		switch {
-		case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/memento-history-"):
+		case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/velruna-history-"):
 			return http.StatusOK, `{"_id":"entry","result":"created"}`
-		case r.Method == http.MethodPost && r.Path == "/memento/_update/k":
-			return http.StatusOK, `{"_index":"memento","_id":"k","result":"updated"}`
+		case r.Method == http.MethodPost && r.Path == "/velruna/_update/k":
+			return http.StatusOK, `{"_index":"velruna","_id":"k","result":"updated"}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Path + `"}`
 	})
@@ -1224,7 +1224,7 @@ func TestMigrateFactLinkedWithArrayAppendsOnlyHistory(t *testing.T) {
 	if strings.Contains(appends[0].Body, "v-current") {
 		t.Errorf("must not re-journal the linked current value, body=%s", appends[0].Body)
 	}
-	updates := fake.requestsFor(http.MethodPost, "/memento/_update/k")
+	updates := fake.requestsFor(http.MethodPost, "/velruna/_update/k")
 	if len(updates) != 1 {
 		t.Fatalf("fact updates = %d, want 1 (the array must still be removed)", len(updates))
 	}
@@ -1242,7 +1242,7 @@ func TestMigrateFactLinkedWithArrayAppendsOnlyHistory(t *testing.T) {
 	if got := len(journalAppends(fake)); got != 1 {
 		t.Errorf("journal writes after no-op = %d, want still 1", got)
 	}
-	if got := len(fake.requestsFor(http.MethodPost, "/memento/_update/k")); got != 1 {
+	if got := len(fake.requestsFor(http.MethodPost, "/velruna/_update/k")); got != 1 {
 		t.Errorf("updates after no-op = %d, want still 1", got)
 	}
 }
@@ -1254,19 +1254,19 @@ func journalDriftRePutAnswers(tplPutStatus int) func(recordedRequest) (int, stri
 	return func(r recordedRequest) (int, string) {
 		switch {
 		case r.Method == http.MethodGet && strings.HasPrefix(r.Path, "/_ingest/pipeline/"):
-			return http.StatusOK, `{"memento-journal-ts":{"processors":[]}}`
-		case r.Method == http.MethodGet && r.Path == "/_index_template/memento-journal":
-			return http.StatusOK, `{"index_templates":[{"name":"memento-journal","index_template":{"template":{"settings":{"index":{"number_of_replicas":"0"}}}}}]}`
+			return http.StatusOK, `{"velruna-journal-ts":{"processors":[]}}`
+		case r.Method == http.MethodGet && r.Path == "/_index_template/velruna-journal":
+			return http.StatusOK, `{"index_templates":[{"name":"velruna-journal","index_template":{"template":{"settings":{"index":{"number_of_replicas":"0"}}}}}]}`
 		case r.Method == http.MethodGet && r.Path == "/_cluster/health":
 			return http.StatusOK, `{"status":"green","number_of_data_nodes":3}`
-		case r.Method == http.MethodPut && r.Path == "/_index_template/memento-journal":
+		case r.Method == http.MethodPut && r.Path == "/_index_template/velruna-journal":
 			if tplPutStatus == http.StatusForbidden {
 				return http.StatusForbidden, `{"status":403,"error":{"type":"security_exception"}}`
 			}
 			return http.StatusOK, `{"acknowledged":true}`
 		case r.Method == http.MethodPut && strings.HasSuffix(r.Path, "/_settings"):
 			return http.StatusOK, `{"acknowledged":true}`
-		case r.Method == http.MethodPost && strings.HasPrefix(r.Path, "/memento-history-") && strings.Contains(r.Path, "/_doc"):
+		case r.Method == http.MethodPost && strings.HasPrefix(r.Path, "/velruna-history-") && strings.Contains(r.Path, "/_doc"):
 			return http.StatusOK, `{"_id":"e1","result":"created"}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected: ` + r.Method + " " + r.Path + `"}`
@@ -1283,7 +1283,7 @@ func TestJournalDriftRePutFailureIsTolerated(t *testing.T) {
 	if _, err := c.AppendJournal(context.Background(), e); err != nil {
 		t.Fatalf("AppendJournal must survive a failed drift re-PUT: %v", err)
 	}
-	if puts := fake.requestsFor(http.MethodPut, "/_index_template/memento-journal"); len(puts) != 1 {
+	if puts := fake.requestsFor(http.MethodPut, "/_index_template/velruna-journal"); len(puts) != 1 {
 		t.Errorf("drift re-PUT attempts = %d, want 1 (attempted then tolerated)", len(puts))
 	}
 }
@@ -1302,7 +1302,7 @@ func TestJournalInfra403SkipsCreate(t *testing.T) {
 			return http.StatusForbidden, `{"status":403,"error":{"type":"security_exception"}}`
 		case r.Method == http.MethodPut && strings.HasSuffix(r.Path, "/_settings"):
 			return http.StatusOK, `{"acknowledged":true}`
-		case r.Method == http.MethodPost && strings.HasPrefix(r.Path, "/memento-history-") && strings.Contains(r.Path, "/_doc"):
+		case r.Method == http.MethodPost && strings.HasPrefix(r.Path, "/velruna-history-") && strings.Contains(r.Path, "/_doc"):
 			return http.StatusOK, `{"_id":"e1","result":"created"}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected: ` + r.Method + " " + r.Path + `"}`
@@ -1311,10 +1311,10 @@ func TestJournalInfra403SkipsCreate(t *testing.T) {
 	if _, err := c.AppendJournal(context.Background(), e); err != nil {
 		t.Fatalf("AppendJournal with 403 on infra GET: %v", err)
 	}
-	if p := fake.requestsFor(http.MethodPut, "/_ingest/pipeline/memento-journal-ts"); len(p) != 0 {
+	if p := fake.requestsFor(http.MethodPut, "/_ingest/pipeline/velruna-journal-ts"); len(p) != 0 {
 		t.Errorf("pipeline create attempts = %d, want 0 on 403", len(p))
 	}
-	if p := fake.requestsFor(http.MethodPut, "/_index_template/memento-journal"); len(p) != 0 {
+	if p := fake.requestsFor(http.MethodPut, "/_index_template/velruna-journal"); len(p) != 0 {
 		t.Errorf("template create attempts = %d, want 0 on 403", len(p))
 	}
 	if len(journalAppends(fake)) != 1 {
@@ -1332,11 +1332,11 @@ func TestAddJournalsKeywords(t *testing.T) {
 			return code, body
 		}
 		switch {
-		case r.Method == http.MethodGet && r.Path == "/memento/_doc/kw":
+		case r.Method == http.MethodGet && r.Path == "/velruna/_doc/kw":
 			return http.StatusNotFound, `{"status":404,"error":"document_missing_exception"}`
-		case r.Method == http.MethodPut && r.Path == "/memento/_doc/kw":
+		case r.Method == http.MethodPut && r.Path == "/velruna/_doc/kw":
 			return http.StatusOK, `{"result":"created","_seq_no":1,"_primary_term":1}`
-		case r.Method == http.MethodPost && r.Path == "/memento/_update/kw":
+		case r.Method == http.MethodPost && r.Path == "/velruna/_update/kw":
 			return http.StatusOK, `{"result":"updated"}`
 		}
 		return http.StatusInternalServerError, `{"status":500,"error":"unexpected ` + r.Method + ` ` + r.Path + `"}`
@@ -1423,7 +1423,7 @@ func TestJournalInfraRunsOncePerProcess(t *testing.T) {
 // TestJournalIndexPipelinePinnedOncePerProcess: the default_pipeline settings
 // PUT is idempotent but not free, and it used to run on every append.
 func TestJournalIndexPipelinePinnedOncePerProcess(t *testing.T) {
-	const index = "memento-history-2026.11"
+	const index = "velruna-history-2026.11"
 	c1, fake := newFakeClientCfg(t, nil, journalInfraOK)
 	if err := c1.ensureJournalIndexPipeline(context.Background(), index); err != nil {
 		t.Fatalf("first pin: %v", err)
@@ -1489,7 +1489,7 @@ func TestJournalInfraFailureIsReleasedForTheNextClient(t *testing.T) {
 // PUT must leave the pin claim open, or a legacy index keeps writing entries
 // without ingest_at for the rest of the process.
 func TestJournalIndexPipelineFailureIsReleasedForTheNextClient(t *testing.T) {
-	const index = "memento-history-2026.11"
+	const index = "velruna-history-2026.11"
 	broken := func(r recordedRequest) (int, string) {
 		if r.Method == http.MethodPut && strings.HasSuffix(r.Path, "/_settings") {
 			return http.StatusInternalServerError, `{"error":"boom"}`

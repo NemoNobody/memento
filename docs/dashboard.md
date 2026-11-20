@@ -1,6 +1,6 @@
 # Dashboard
 
-A ready-made OpenSearch Dashboards overview of the store — "Memento — store
+A ready-made OpenSearch Dashboards overview of the store — "Velruna — store
 overview". It covers facts, the journal (history) and cached documents:
 
 | Panel | Answers |
@@ -43,8 +43,8 @@ the index-pattern list per session. A quick start for the whole stack:
 
 ## How it reads the store
 
-- Three index patterns with time fields: `memento` (facts, `updated_at`),
-  `memento-history-*` (journal, `created_at`), `memento-docs` (doc snapshots,
+- Three index patterns with time fields: `velruna` (facts, `updated_at`),
+  `velruna-history-*` (journal, `created_at`), `velruna-docs` (doc snapshots,
   `fetched_at`). The dashboard pins a `now-90d` window (`timeRestore`).
 - The index patterns carry their field lists inside the bundle (OSD cannot
   introspect them over the API). After a mapping change regenerate and push:
@@ -54,8 +54,8 @@ the index-pattern list per session. A quick start for the whole stack:
   scripts/push-dashboards.sh
   ```
 
-- Journal entries are also readable without Dashboards: `memento journal
-  <key>` (entries) and `memento_history_info <key>` (counts).
+- Journal entries are also readable without Dashboards: `velruna journal
+  <key>` (entries) and `velruna_history_info <key>` (counts).
 
 ## Troubleshooting
 

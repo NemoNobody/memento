@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/NemoNobody/memento/internal/config"
+	"github.com/NemoNobody/velruna/internal/config"
 )
 
 func TestParseGitHubURL(t *testing.T) {
@@ -19,10 +19,10 @@ func TestParseGitHubURL(t *testing.T) {
 		ref   string
 		path  string
 	}{
-		{"https://github.com/NemoNobody/memento/blob/master/README.md", true, "NemoNobody", "memento", "master", "README.md"},
-		{"https://github.com/NemoNobody/memento/blob/master/docs/a.md", true, "NemoNobody", "memento", "master", "docs/a.md"},
-		{"https://github.com/NemoNobody/memento/raw/master/x.txt", true, "NemoNobody", "memento", "master", "x.txt"},
-		{"https://raw.githubusercontent.com/NemoNobody/memento/master/x.txt", true, "NemoNobody", "memento", "master", "x.txt"},
+		{"https://github.com/NemoNobody/velruna/blob/master/README.md", true, "NemoNobody", "velruna", "master", "README.md"},
+		{"https://github.com/NemoNobody/velruna/blob/master/docs/a.md", true, "NemoNobody", "velruna", "master", "docs/a.md"},
+		{"https://github.com/NemoNobody/velruna/raw/master/x.txt", true, "NemoNobody", "velruna", "master", "x.txt"},
+		{"https://raw.githubusercontent.com/NemoNobody/velruna/master/x.txt", true, "NemoNobody", "velruna", "master", "x.txt"},
 		{"https://github.com/o/r/tree/master", false, "", "", "", ""},
 		{"https://github.com/o/r", false, "", "", "", ""},
 		{"https://gitlab.com/o/r/blob/master/x", false, "", "", "", ""},
@@ -46,8 +46,8 @@ func TestNormalizeRemote(t *testing.T) {
 		ok          bool
 		owner, repo string
 	}{
-		{"git@github.com:NemoNobody/memento.git", true, "NemoNobody", "memento"},
-		{"git@github.com:NemoNobody/memento", true, "NemoNobody", "memento"},
+		{"git@github.com:NemoNobody/velruna.git", true, "NemoNobody", "velruna"},
+		{"git@github.com:NemoNobody/velruna", true, "NemoNobody", "velruna"},
 		{"ssh://git@github.com/o/r.git", true, "o", "r"},
 		{"https://github.com/o/r.git", true, "o", "r"},
 		{"https://github.com/o/r", true, "o", "r"},
@@ -108,44 +108,44 @@ func newLocalRepo(t *testing.T, dir, branch, remote string, files ...string) str
 
 func TestGitHubLocal(t *testing.T) {
 	root := t.TempDir()
-	repoDir := filepath.Join(root, "checkout", "memento")
-	sha := newLocalRepo(t, repoDir, "master", "git@github.com:NemoNobody/memento.git",
+	repoDir := filepath.Join(root, "checkout", "velruna")
+	sha := newLocalRepo(t, repoDir, "master", "git@github.com:NemoNobody/velruna.git",
 		"README.md", "docs/a.md")
 
 	cfg := &config.Config{LocalRepoRoots: []string{root}, LocalRepoScanDepth: 3}
 
 	// branch ref → local path
-	p, ok := GitHubLocal(cfg, "https://github.com/NemoNobody/memento/blob/master/README.md")
+	p, ok := GitHubLocal(cfg, "https://github.com/NemoNobody/velruna/blob/master/README.md")
 	if !ok || p != filepath.Join(repoDir, "README.md") {
 		t.Errorf("branch ref: got %q ok=%v", p, ok)
 	}
 	// nested path
-	p, ok = GitHubLocal(cfg, "https://raw.githubusercontent.com/NemoNobody/memento/master/docs/a.md")
+	p, ok = GitHubLocal(cfg, "https://raw.githubusercontent.com/NemoNobody/velruna/master/docs/a.md")
 	if !ok || p != filepath.Join(repoDir, "docs", "a.md") {
 		t.Errorf("nested path: got %q ok=%v", p, ok)
 	}
 	// commit sha ref
-	p, ok = GitHubLocal(cfg, "https://github.com/NemoNobody/memento/blob/"+sha+"/README.md")
+	p, ok = GitHubLocal(cfg, "https://github.com/NemoNobody/velruna/blob/"+sha+"/README.md")
 	if !ok || p == "" {
 		t.Errorf("sha ref: got %q ok=%v", p, ok)
 	}
 	// sha prefix (>=7)
 	if len(sha) >= 8 {
-		p, ok = GitHubLocal(cfg, "https://github.com/NemoNobody/memento/blob/"+sha[:8]+"/README.md")
+		p, ok = GitHubLocal(cfg, "https://github.com/NemoNobody/velruna/blob/"+sha[:8]+"/README.md")
 		if !ok || p == "" {
 			t.Errorf("sha prefix: got %q ok=%v", p, ok)
 		}
 	}
 	// stale ref must NOT be served from the working tree
-	if _, ok := GitHubLocal(cfg, "https://github.com/NemoNobody/memento/blob/main/README.md"); ok {
+	if _, ok := GitHubLocal(cfg, "https://github.com/NemoNobody/velruna/blob/main/README.md"); ok {
 		t.Error("stale ref must not hit the local clone")
 	}
 	// missing file
-	if _, ok := GitHubLocal(cfg, "https://github.com/NemoNobody/memento/blob/master/absent.md"); ok {
+	if _, ok := GitHubLocal(cfg, "https://github.com/NemoNobody/velruna/blob/master/absent.md"); ok {
 		t.Error("missing file must not hit")
 	}
 	// path escaping the repo root (decoded ../)
-	if _, ok := GitHubLocal(cfg, "https://github.com/NemoNobody/memento/blob/master/..%2Fsecret"); ok {
+	if _, ok := GitHubLocal(cfg, "https://github.com/NemoNobody/velruna/blob/master/..%2Fsecret"); ok {
 		t.Error("path traversal must be rejected")
 	}
 	// committed/working-tree symlink escaping the clone: the lexical check
@@ -158,28 +158,28 @@ func TestGitHubLocal(t *testing.T) {
 	if err := os.Symlink(secret, filepath.Join(repoDir, "ESCAPE.md")); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := GitHubLocal(cfg, "https://github.com/NemoNobody/memento/blob/master/ESCAPE.md"); ok {
+	if _, ok := GitHubLocal(cfg, "https://github.com/NemoNobody/velruna/blob/master/ESCAPE.md"); ok {
 		t.Error("symlink escaping the clone root must be rejected")
 	}
 	// other repo
-	if _, ok := GitHubLocal(cfg, "https://github.com/other/memento/blob/master/README.md"); ok {
+	if _, ok := GitHubLocal(cfg, "https://github.com/other/velruna/blob/master/README.md"); ok {
 		t.Error("other owner must not hit")
 	}
 	// no roots configured
-	if _, ok := GitHubLocal(&config.Config{}, "https://github.com/NemoNobody/memento/blob/master/README.md"); ok {
+	if _, ok := GitHubLocal(&config.Config{}, "https://github.com/NemoNobody/velruna/blob/master/README.md"); ok {
 		t.Error("empty roots must not hit")
 	}
 }
 
 func TestFindLocalRepoDepth(t *testing.T) {
 	root := t.TempDir()
-	deep := filepath.Join(root, "a", "b", "memento")
-	newLocalRepo(t, deep, "master", "https://github.com/NemoNobody/memento.git", "README.md")
+	deep := filepath.Join(root, "a", "b", "velruna")
+	newLocalRepo(t, deep, "master", "https://github.com/NemoNobody/velruna.git", "README.md")
 
-	if _, ok := FindLocalRepo(&config.Config{LocalRepoRoots: []string{root}, LocalRepoScanDepth: 2}, "NemoNobody", "memento"); ok {
+	if _, ok := FindLocalRepo(&config.Config{LocalRepoRoots: []string{root}, LocalRepoScanDepth: 2}, "NemoNobody", "velruna"); ok {
 		t.Error("depth 2 must not find a repo at depth 3")
 	}
-	dir, ok := FindLocalRepo(&config.Config{LocalRepoRoots: []string{root}, LocalRepoScanDepth: 3}, "NemoNobody", "memento")
+	dir, ok := FindLocalRepo(&config.Config{LocalRepoRoots: []string{root}, LocalRepoScanDepth: 3}, "NemoNobody", "velruna")
 	if !ok || dir != deep {
 		t.Errorf("depth 3: got %q ok=%v, want %q", dir, ok, deep)
 	}
