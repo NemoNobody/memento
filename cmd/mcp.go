@@ -249,7 +249,7 @@ func runMCPServer(confPath string) error {
 			"the page is extracted: a cached snapshot with all its text keeps its " +
 			"stored split (a revalidating 304 included), while a truncated snapshot " +
 			"re-extracted for a larger max_chars is re-blocked at the requested " +
-			"size. Section text is read with " +
+			"size when that budget stores more text. Section text is read with " +
 			"memento_get_doc; the raw page is never returned (context economy). " +
 			"Requests send no cookies and no credentials; a host outside " +
 			"fetch_allow_hosts is rejected before the request. GitHub URLs that " +

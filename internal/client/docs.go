@@ -3,6 +3,8 @@ package client
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -652,7 +654,7 @@ func (c *Client) ReextractDoc(ctx context.Context, hash string, limits ExtractLi
 			return current, false, nil
 		}
 	}
-	if err := c.updateDocText(ctx, hash, doc, seqNo, primaryTerm); err != nil {
+	if err := c.updateDocText(ctx, hash, doc, seqNo, primaryTerm, full); err != nil {
 		if isVersionConflict(err) {
 			if current, gerr := c.GetDocByHash(ctx, hash); gerr == nil {
 				return current, false, nil
@@ -665,12 +667,17 @@ func (c *Client) ReextractDoc(ctx context.Context, hash string, limits ExtractLi
 
 // updateDocText replaces the stored blocks and their accounting (and the audit
 // lists the re-extraction touched), leaving the raw html and the cache metadata
-// untouched.
-func (c *Client) updateDocText(ctx context.Context, hash string, doc *model.Doc, seqNo, primaryTerm int) error {
+// untouched. content_hash is rewritten in the current scheme: a snapshot from
+// before full_chars existed still carries the old definition, and the
+// never-shrink gate cannot compare two schemes.
+func (c *Client) updateDocText(ctx context.Context, hash string, doc *model.Doc, seqNo, primaryTerm int, full string) error {
+	sum := sha256.Sum256([]byte(full))
+	doc.ContentHash = hex.EncodeToString(sum[:])
 	fields := map[string]interface{}{
 		"sections":             doc.Sections,
 		"size":                 doc.Size,
 		"full_chars":           doc.FullChars,
+		"content_hash":         doc.ContentHash,
 		"truncated":            doc.Truncated,
 		"redactions":           doc.Redactions,
 		"guard_medium_ignored": doc.GuardMediumIgnored,
