@@ -51,7 +51,10 @@ import (
 )
 
 const (
-	busName         = "org.freedesktop.secrets"
+	busName = "org.freedesktop.secrets"
+	// kwalletBus is the KDE wallet daemon's own name: its presence is a KDE
+	// signal that does not depend on environment variables.
+	kwalletBus      = "org.kde.kwalletd6"
 	objPath         = "/org/freedesktop/secrets"
 	ifaceService    = "org.freedesktop.Secret.Service"
 	ifaceCollection = "org.freedesktop.Secret.Collection"
@@ -117,7 +120,8 @@ type backendProbe struct {
 	HasOwner bool   // org.freedesktop.secrets has an owner on the session bus
 	Owner    string // unique bus name of that owner, "" when unknown
 	Comm     string // /proc/<pid>/comm of the owner, "" when unknown
-	Desktop  string // XDG_CURRENT_DESKTOP
+	Desktop  string // XDG_CURRENT_DESKTOP, falling back to XDG_SESSION_DESKTOP
+	KWallet  bool   // org.kde.kwalletd6 owns its name: a KDE session
 	BusErr   error  // session bus unavailable
 }
 
@@ -131,6 +135,12 @@ var probe = probeSecretService
 // collection is unlocked.
 func probeSecretService() backendProbe {
 	p := backendProbe{Desktop: os.Getenv("XDG_CURRENT_DESKTOP")}
+	if p.Desktop == "" {
+		// A session started by a launcher, a systemd user unit or ssh in a KDE
+		// session can miss XDG_CURRENT_DESKTOP; XDG_SESSION_DESKTOP is the
+		// next best signal, and the kwalletd owner below is the last one.
+		p.Desktop = os.Getenv("XDG_SESSION_DESKTOP")
+	}
 	// The same guard as newClient: dbus.SessionBus falls back to dbus-launch
 	// when the address is unset or "autolaunch:", which hangs in containers
 	// and over ssh instead of reporting a missing bus.
@@ -155,6 +165,14 @@ func probeSecretService() backendProbe {
 		return p
 	}
 	p.HasOwner = hasOwner
+	// A running kwalletd is a KDE signal of its own: the gnome-keyring refusal
+	// below must not depend on an environment variable a launcher can drop.
+	var hasKWallet bool
+	kwalletCtx, cancelKWallet := context.WithTimeout(context.Background(), rpcTimeout)
+	defer cancelKWallet()
+	if err := bus.CallWithContext(kwalletCtx, "org.freedesktop.DBus.NameHasOwner", 0, kwalletBus).Store(&hasKWallet); err == nil {
+		p.KWallet = hasKWallet
+	}
 	if !hasOwner {
 		return p
 	}
@@ -193,20 +211,19 @@ func ownerComm(conn *dbus.Conn, owner string) string {
 // otherwise. It never touches the wallet.
 func BackendError() error {
 	p := probe()
+	kde := isKDE(p.Desktop) || p.KWallet
 	switch {
 	case p.BusErr != nil:
 		return fmt.Errorf("%w: no session bus (containers/ssh): use OPENSEARCH_PASSWORD (%v)", ErrBackend, p.BusErr)
+	case !p.HasOwner && kde:
+		return fmt.Errorf("%w: no Secret Service provider: start kwalletd (KDE unlocks it at login) or set OPENSEARCH_PASSWORD", ErrBackend)
 	case !p.HasOwner:
-		return fmt.Errorf("%w: no Secret Service provider (KDE: install/enable ksecretd or set OPENSEARCH_PASSWORD)", ErrBackend)
-	case isKDE(p.Desktop) && isGNOMEKeyring(p.Comm):
-		return fmt.Errorf("%w: gnome-keyring on KDE writes an ephemeral login keyring (credentials die on logout); use KWallet-native or OPENSEARCH_PASSWORD", ErrBackend)
+		return fmt.Errorf("%w: no Secret Service provider (install one or set OPENSEARCH_PASSWORD)", ErrBackend)
+	case kde && isGNOMEKeyring(p.Comm):
+		return fmt.Errorf("%w: gnome-keyring on KDE writes an ephemeral login keyring (credentials die at logout); mask gnome-keyring-daemon.service/.socket so kwalletd serves org.freedesktop.secrets, or set OPENSEARCH_PASSWORD", ErrBackend)
 	}
 	return nil
 }
-
-// SecretServiceUsable is the dispatcher-facing name of BackendError: nil when
-// Secret Service is the right backend for this desktop.
-func SecretServiceUsable() error { return BackendError() }
 
 // isKDE matches the name Plasma exports in XDG_CURRENT_DESKTOP ("KDE",
 // "KDE:Plasma").

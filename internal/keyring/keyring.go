@@ -6,6 +6,8 @@
 // timeouts and a prompt on Linux is a human at the desktop, not a hang.
 package keyring
 
+import "errors"
+
 // Get returns the secret stored for (service, user). It returns a value
 // matching ErrNotFound via errors.Is when no entry exists, and other errors
 // when the provider is unreachable (no session bus in a container, locked
@@ -24,6 +26,15 @@ var ErrNotFound error
 // ErrBackend is the "no usable keyring backend" sentinel: the provider gate
 // of internal/keyringnative refused this desktop (no session bus, no Secret
 // Service provider, or gnome-keyring on KDE). Callers match it with errors.Is
-// to tell an unusable provider from a missing entry. Nil on darwin/windows,
-// which have a single always-present provider.
-var ErrBackend error
+// to tell an unusable provider from a missing entry.
+//
+// It is never nil: darwin/windows have a single always-present provider and
+// never refuse, but the sentinel still exists so errors.Is and %w cannot see a
+// nil error.
+var ErrBackend error = errors.New("keyring: no usable backend")
+
+// Backend names the provider the next operation would use ("secret-service",
+// "kwallet-native", the macOS Keychain or Windows Credential Manager), or an
+// empty string when none is reachable. Diagnostic only: `memento creds status`
+// prints it so a user with two possible backends knows where the entry lives.
+var Backend func() string

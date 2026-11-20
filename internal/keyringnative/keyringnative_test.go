@@ -51,6 +51,21 @@ func TestBackendErrorClassification(t *testing.T) {
 			wantText:   "no session bus",
 		},
 		{
+			// The refusal must not depend on XDG_CURRENT_DESKTOP: a launcher, a
+			// systemd user unit or ssh can drop it, and that is exactly when the
+			// ephemeral keyring silently eats the credentials.
+			name:       "gnome-keyring on KDE detected only by the kwalletd owner",
+			probe:      backendProbe{HasOwner: true, Owner: ":1.11", Comm: "gnome-keyring-d", KWallet: true},
+			wantRefuse: true,
+			wantText:   "ephemeral login keyring",
+		},
+		{
+			name:       "no provider on a non-KDE desktop",
+			probe:      backendProbe{Desktop: "ubuntu:GNOME"},
+			wantRefuse: true,
+			wantText:   "no Secret Service provider",
+		},
+		{
 			name:  "KDE served by kwalletd6",
 			probe: backendProbe{HasOwner: true, Owner: ":1.7", Comm: "kwalletd6", Desktop: "KDE"},
 		},
@@ -86,19 +101,6 @@ func TestBackendErrorClassification(t *testing.T) {
 				t.Errorf("BackendError text = %q, want it to mention %q", err, tc.wantText)
 			}
 		})
-	}
-}
-
-// TestSecretServiceUsableIsBackendError pins the dispatcher-facing alias: one
-// verdict, two names, so the gate and the fallback choice can never disagree.
-func TestSecretServiceUsableIsBackendError(t *testing.T) {
-	withProbe(t, backendProbe{HasOwner: true, Owner: ":1.1", Comm: "kwalletd6", Desktop: "KDE"})
-	if err := SecretServiceUsable(); err != nil {
-		t.Errorf("SecretServiceUsable = %v, want nil", err)
-	}
-	withProbe(t, backendProbe{})
-	if err := SecretServiceUsable(); !errors.Is(err, ErrBackend) {
-		t.Errorf("SecretServiceUsable = %v, want ErrBackend", err)
 	}
 }
 

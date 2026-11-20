@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -195,7 +196,7 @@ func TestRenderCredsStatus(t *testing.T) {
 
 	// keyring present, resolving.
 	cfg.PasswordSource = "keyring"
-	text := renderCredsStatus("os.test:9200", cfg, nil)
+	text := renderCredsStatus("os.test:9200", cfg, nil, "secret-service")
 	for _, want := range []string{"account: memento/os.test:9200", "source: keyring", "entry present"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("text lacks %q:\n%s", want, text)
@@ -210,7 +211,7 @@ func TestRenderCredsStatus(t *testing.T) {
 	cfg.PasswordSource = "none"
 	cfg.FileHasPlaintext = true
 	cfg.AllowPlaintext = false
-	text = renderCredsStatus("os.test:9200", cfg, errors.New("no session bus"))
+	text = renderCredsStatus("os.test:9200", cfg, errors.New("no session bus"), "")
 	for _, want := range []string{"REFUSED", "no session bus", "hint:"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("text lacks %q:\n%s", want, text)
@@ -220,7 +221,7 @@ func TestRenderCredsStatus(t *testing.T) {
 	// --url overrides the endpoint: the config's password source belongs to a
 	// different host, so it must not be shown, and the config-file section
 	// (plaintext status, migration hint) is about the configured host too.
-	text = renderCredsStatus("os.test:9200", nil, nil)
+	text = renderCredsStatus("os.test:9200", nil, nil, "")
 	for _, want := range []string{"source: n/a (--url", "entry present"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("nil-config text lacks %q:\n%s", want, text)
@@ -230,6 +231,24 @@ func TestRenderCredsStatus(t *testing.T) {
 		if strings.Contains(text, deny) {
 			t.Errorf("nil-config text must not mention %q:\n%s", deny, text)
 		}
+	}
+
+	// A refused backend names its own fix: the container hint must not be
+	// appended, or it would contradict the reason on a desktop with the wrong
+	// provider. The active backend is printed when one is reachable.
+	cfg = config.DefaultConfig()
+	cfg.PasswordSource = "none"
+	text = renderCredsStatus("os.test:9200", cfg, fmt.Errorf("%w: gnome-keyring on KDE", keyring.ErrBackend), "")
+	if !strings.Contains(text, "gnome-keyring on KDE") {
+		t.Errorf("refusal reason missing:\n%s", text)
+	}
+	if strings.Contains(text, "no session bus in containers/ssh") {
+		t.Errorf("an ErrBackend refusal must not carry the container hint:\n%s", text)
+	}
+
+	text = renderCredsStatus("os.test:9200", cfg, nil, "kwallet-native")
+	if !strings.Contains(text, "backend: kwallet-native") {
+		t.Errorf("active backend not named:\n%s", text)
 	}
 }
 

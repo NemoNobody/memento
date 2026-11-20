@@ -191,7 +191,7 @@ func credsStatusCmd() *cobra.Command {
 			}
 			host := accountFor(target)
 			_, kerr := keyring.Get(config.KeyringService, host)
-			text := renderCredsStatus(host, cfg, kerr)
+			text := renderCredsStatus(host, cfg, kerr, keyring.Backend())
 			if _, err := io.WriteString(out, text); err != nil {
 				fatalErr(err)
 			}
@@ -200,8 +200,10 @@ func credsStatusCmd() *cobra.Command {
 }
 
 // renderCredsStatus explains the credential resolution for one host. The
-// password value is never part of the output.
-func renderCredsStatus(host string, cfg *config.Config, keyringErr error) string {
+// password value is never part of the output. backend is the provider name the
+// next operation would use (empty when none is reachable), so a machine with
+// both Secret Service and a KWallet can tell where the entry lives.
+func renderCredsStatus(host string, cfg *config.Config, keyringErr error, backend string) string {
 	var b strings.Builder
 	b.WriteString("account: ")
 	b.WriteString(config.KeyringService)
@@ -212,6 +214,10 @@ func renderCredsStatus(host string, cfg *config.Config, keyringErr error) string
 		b.WriteString("n/a (--url overrides the configured endpoint)")
 	} else {
 		b.WriteString(cfg.PasswordSource)
+	}
+	if backend != "" {
+		b.WriteString("\nbackend: ")
+		b.WriteString(backend)
 	}
 	b.WriteString("\nkeyring: ")
 	switch {

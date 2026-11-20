@@ -168,7 +168,7 @@ chmod 600 ~/.memento.conf
   | XFCE / LXQt / MATE / Cinnamon / tiling WMs | whatever Secret Service is installed (usually gnome-keyring) | works if the daemon runs and the keyring is unlocked |
   | KeePassXC (Secret Service integration) | KeePassXC | entries are namespaced by service + username, same as everywhere |
   | headless / container / ssh | none | no bus, no keyring: export `OPENSEARCH_PASSWORD`; `memento status` reports `password_from: env` and the keyring error |
-  | Windows | Credential Manager — not covered | put the password in `OPENSEARCH_PASSWORD` or in a mode-0600 config file (`allow_plaintext: true`) |
+  | Windows | Windows Credential Manager (zalando/go-keyring) | used by the binary, but not covered by tests and not a supported contract: for a reproducible setup put the password in `OPENSEARCH_PASSWORD` or in a config file readable only by the user |
 
   A renamed KDE wallet is the one case that needs the variable:
   `export MEMENTO_KEYRING_COLLECTION=<wallet label>` (kwalletrc "Default Wallet").
@@ -191,10 +191,14 @@ chmod 600 ~/.memento.conf
   - **No owner on the bus** (no daemon, no provider): the keyring is refused
     with a hint — never reported as a working store.
   - **A locked wallet**: `open()` may raise the KDE Wallet password dialog. On
-    a desktop, answer it; a headless MCP server has nobody to answer, so the
-    call ends with a deadline and a "wallet locked" error instead of hanging.
-    Enable `pam_kwallet5` (or unlock the wallet once per session) for an
-    unattended server.
+    a desktop, answer it within the call budget (`open` waits ~20 s); a headless
+    MCP server has nobody to answer, so the call ends with a deadline and a
+    "wallet locked" error instead of hanging. Enable `pam_kwallet5` (or unlock
+    the wallet once per session) for an unattended server.
+  - **The native fallback is not KDE-only.** Whichever desktop runs kwalletd
+    without a Secret Service owner gets the KWallet-native backend; it is a
+    durable store there too (only the gnome-keyring-on-KDE case above is
+    refused).
   - **Credentials do not migrate.** An entry stored through Secret Service and
     one stored in KWallet are different records: after switching backends (or
     installing ksecretd) run `memento creds set` once more.

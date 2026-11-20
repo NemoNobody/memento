@@ -1,11 +1,11 @@
 //go:build linux
 
 // Package kwalletnative talks to KWallet directly over D-Bus
-// (org.kde.kwalletd6). The cross-desktop Secret Service API is the first
-// choice, but KDE before KF 6.14 (Debian 13/trixie) ships no provider for it:
-// kwalletd6 owns only its own bus name, so a Secret Service client has nowhere
-// to go — and gnome-keyring, when it grabs the name, writes to an ephemeral
-// login keyring. The wallet itself is reachable through org.kde.KWallet:
+// (org.kde.kwalletd6). It is the fallback for a desktop where nothing serves
+// the cross-desktop Secret Service API on the bus: KF 6.13 kwalletd publishes
+// that name only when it was started by PAM and nobody else holds it, so on a
+// box where gnome-keyring owns the name a Secret Service client has nowhere to
+// go. The wallet itself is always reachable through org.kde.KWallet:
 // folder = service, key = account, application = "memento".
 //
 // Every call carries a deadline. open() on a locked wallet makes kwalletd show
@@ -19,6 +19,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	dbus "github.com/godbus/dbus/v5"
@@ -35,7 +37,9 @@ const (
 	defaultWallet = "kdewallet"
 
 	rpcTimeout = 15 * time.Second
-	// openTimeout covers the unlock dialog: the human may need a moment.
+	// openTimeout covers the unlock dialog: the human may need a moment. It is
+	// applied on its own, not inside the per-operation budget, otherwise the
+	// dialog would get the shorter rpc deadline.
 	openTimeout = 20 * time.Second
 )
 
@@ -48,13 +52,34 @@ type client struct {
 	obj  dbus.BusObject
 }
 
+// busUsable reports whether a session bus can be reached without dbus-launch.
+// An unset address is fine when godbus can discover $XDG_RUNTIME_DIR/bus (the
+// systemd user session): refusing that case would break a working setup. An
+// explicit "autolaunch:" is not fine — godbus would try to spawn a bus instead
+// of reporting the missing one, which hangs in containers and over ssh.
+func busUsable() error {
+	switch addr := os.Getenv("DBUS_SESSION_BUS_ADDRESS"); addr {
+	case "":
+		if dir := os.Getenv("XDG_RUNTIME_DIR"); dir != "" {
+			if fi, err := os.Stat(filepath.Join(dir, "bus")); err == nil && fi.Mode()&os.ModeSocket != 0 {
+				return nil
+			}
+		}
+		return errors.New("kwallet: no session bus (containers/ssh): use OPENSEARCH_PASSWORD")
+	case "autolaunch:":
+		return errors.New("kwallet: the session bus address is autolaunch (containers/ssh): use OPENSEARCH_PASSWORD")
+	default:
+		return nil
+	}
+}
+
 // dial binds the wallet object. dbus.SessionBus returns a process-wide shared
 // connection, so it is never closed: closing it would break every later call in
 // the same process (an MCP server reads the password repeatedly). Kept as a
 // variable so tests can substitute a connection.
 var dial = func() (*client, error) {
-	if os.Getenv("DBUS_SESSION_BUS_ADDRESS") == "" {
-		return nil, errors.New("kwallet: no session bus (containers/ssh): use OPENSEARCH_PASSWORD")
+	if err := busUsable(); err != nil {
+		return nil, err
 	}
 	conn, err := dbus.SessionBus()
 	if err != nil {
@@ -66,7 +91,7 @@ var dial = func() (*client, error) {
 // Available reports whether kwalletd6 owns its bus name. Read-only: it never
 // opens a wallet and never prompts.
 func Available() bool {
-	if os.Getenv("DBUS_SESSION_BUS_ADDRESS") == "" {
+	if err := busUsable(); err != nil {
 		return false
 	}
 	conn, err := dbus.SessionBus()
@@ -82,15 +107,26 @@ func Available() bool {
 	return has
 }
 
+// call runs one org.kde.KWallet method under the rpc deadline. The context it
+// receives carries no deadline of its own: one operation makes several calls
+// and open() needs a longer budget than the rest, so the deadline belongs to
+// the individual call, not to the operation.
+func (c *client) call(ctx context.Context, method string, args ...any) *dbus.Call {
+	cctx, cancel := context.WithTimeout(ctx, rpcTimeout)
+	defer cancel()
+	return c.obj.CallWithContext(cctx, iface+"."+method, 0, args...)
+}
+
 // walletName resolves the wallet to use: an explicit MEMENTO_KWALLET_NAME,
 // then kwalletd's localWallet() (kwalletrc "Default Wallet"), then the
-// conventional name.
+// conventional name. The override is trimmed: kwalletd would treat
+// " kdewallet" as a different, brand-new (empty) wallet.
 func (c *client) walletName(ctx context.Context) string {
-	if v := os.Getenv("MEMENTO_KWALLET_NAME"); v != "" {
+	if v := strings.TrimSpace(os.Getenv("MEMENTO_KWALLET_NAME")); v != "" {
 		return v
 	}
 	var name string
-	if err := c.obj.CallWithContext(ctx, iface+".localWallet", 0).Store(&name); err == nil && name != "" {
+	if err := c.call(ctx, "localWallet").Store(&name); err == nil && name != "" {
 		return name
 	}
 	return defaultWallet
@@ -123,13 +159,13 @@ func (c *client) open(ctx context.Context) (int32, string, error) {
 // Passing the wallet name there makes every call fail with -1.
 func (c *client) hasFolder(ctx context.Context, handle int32, folder string) (bool, error) {
 	var has bool
-	err := c.obj.CallWithContext(ctx, iface+".hasFolder", 0, handle, folder, appID).Store(&has)
+	err := c.call(ctx, "hasFolder", handle, folder, appID).Store(&has)
 	return has, err
 }
 
 func (c *client) createFolder(ctx context.Context, handle int32, folder string) error {
 	var ok bool
-	if err := c.obj.CallWithContext(ctx, iface+".createFolder", 0, handle, folder, appID).Store(&ok); err != nil {
+	if err := c.call(ctx, "createFolder", handle, folder, appID).Store(&ok); err != nil {
 		return fmt.Errorf("kwallet: create folder %q: %w", folder, err)
 	}
 	if !ok {
@@ -145,8 +181,28 @@ func (c *client) createFolder(ctx context.Context, handle int32, folder string) 
 
 func (c *client) hasEntry(ctx context.Context, handle int32, folder, key string) (bool, error) {
 	var has bool
-	err := c.obj.CallWithContext(ctx, iface+".hasEntry", 0, handle, folder, key, appID).Store(&has)
+	err := c.call(ctx, "hasEntry", handle, folder, key, appID).Store(&has)
 	return has, err
+}
+
+// sessionOpen reports whether the handle still belongs to a live session.
+// hasEntry answers false for a dead handle or a mismatched appId too — the very
+// shape a regression in the argument order produces — so "no entry" must be
+// confirmed before it is reported as a missing secret.
+func (c *client) sessionOpen(ctx context.Context, handle int32) (bool, error) {
+	var open bool
+	err := c.call(ctx, "isOpen", handle).Store(&open)
+	return open, err
+}
+
+// errNoEntry distinguishes "the wallet has no such entry" from "the session is
+// gone"; the caller maps the former to ErrNotFound.
+func (c *client) errNoEntry(ctx context.Context, handle int32) error {
+	open, err := c.sessionOpen(ctx, handle)
+	if err == nil && !open {
+		return errors.New("kwallet: the wallet session is no longer open (closed or kwalletd restarted): retry, or unlock the wallet")
+	}
+	return ErrNotFound
 }
 
 // Get returns the secret stored under (service, user).
@@ -155,8 +211,7 @@ func Get(service, user string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
-	defer cancel()
+	ctx := context.Background()
 	handle, _, err := c.open(ctx)
 	if err != nil {
 		return "", err
@@ -166,26 +221,30 @@ func Get(service, user string) (string, error) {
 		return "", fmt.Errorf("kwallet: hasEntry %s/%s: %w", service, user, err)
 	}
 	if !has {
-		return "", ErrNotFound
+		return "", c.errNoEntry(ctx, handle)
 	}
 	var value string
-	if err := c.obj.CallWithContext(ctx, iface+".readPassword", 0, handle, service, user, appID).Store(&value); err != nil {
+	if err := c.call(ctx, "readPassword", handle, service, user, appID).Store(&value); err != nil {
 		return "", fmt.Errorf("kwallet: readPassword %s/%s: %w", service, user, err)
 	}
 	if value == "" {
-		return "", ErrNotFound
+		return "", c.errNoEntry(ctx, handle)
 	}
 	return value, nil
 }
 
 // Set stores the secret under (service, user), creating the folder if needed.
 func Set(service, user, value string) error {
+	if value == "" {
+		// An empty value reads back as "no entry", so accepting it would make
+		// the write look successful and the read fail: refuse it up front.
+		return errors.New("kwallet: refusing an empty secret")
+	}
 	c, err := dial()
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
-	defer cancel()
+	ctx := context.Background()
 	handle, _, err := c.open(ctx)
 	if err != nil {
 		return err
@@ -200,7 +259,7 @@ func Set(service, user, value string) error {
 		}
 	}
 	var code int32
-	if err := c.obj.CallWithContext(ctx, iface+".writePassword", 0, handle, service, user, value, appID).Store(&code); err != nil {
+	if err := c.call(ctx, "writePassword", handle, service, user, value, appID).Store(&code); err != nil {
 		return fmt.Errorf("kwallet: writePassword %s/%s: %w", service, user, err)
 	}
 	if code < 0 {
@@ -215,8 +274,7 @@ func Delete(service, user string) error {
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
-	defer cancel()
+	ctx := context.Background()
 	handle, _, err := c.open(ctx)
 	if err != nil {
 		return err
@@ -226,10 +284,10 @@ func Delete(service, user string) error {
 		return fmt.Errorf("kwallet: hasEntry %s/%s: %w", service, user, err)
 	}
 	if !has {
-		return ErrNotFound
+		return c.errNoEntry(ctx, handle)
 	}
 	var code int32
-	if err := c.obj.CallWithContext(ctx, iface+".removeEntry", 0, handle, service, user, appID).Store(&code); err != nil {
+	if err := c.call(ctx, "removeEntry", handle, service, user, appID).Store(&code); err != nil {
 		return fmt.Errorf("kwallet: removeEntry %s/%s: %w", service, user, err)
 	}
 	if code < 0 {
