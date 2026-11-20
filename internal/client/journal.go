@@ -141,8 +141,8 @@ type installGate struct {
 }
 
 // infraGate returns the gate for a key, creating it on first use. Keys are
-// prefixed by the piece of infrastructure ("journal|", "mapping|") so the two
-// do not share a claim.
+// prefixed by the piece of infrastructure ("journal|", "mapping|",
+// "pipeline|...|<index>") so the pieces do not share a claim.
 func infraGate(key string) *installGate {
 	infraGatesMu.Lock()
 	defer infraGatesMu.Unlock()

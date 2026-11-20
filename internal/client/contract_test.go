@@ -43,8 +43,6 @@ func newFakeClient(t *testing.T, respond func(r recordedRequest) (int, string)) 
 	return newFakeClientCfg(t, nil, respond)
 }
 
-// newFakeClientCfg is newFakeClient with a hook to override config values
-// (e.g. HistoryLimit) after the defaults are applied.
 // resetProcessCaches clears the process-wide "already installed" claims. The
 // fake stores are per-test, so the keys would not collide today; clearing them
 // keeps a future test that reuses a store name from inheriting a claim, and
@@ -59,6 +57,9 @@ func resetProcessCaches() {
 	infraGatesMu.Unlock()
 }
 
+// newFakeClientCfg is newFakeClient with a hook to override config values
+// (e.g. HistoryLimit) after the defaults are applied. It clears the
+// process-wide install claims first.
 func newFakeClientCfg(t *testing.T, mutate func(*config.Config),
 	respond func(r recordedRequest) (int, string)) (*Client, *fakeOpenSearch) {
 	t.Helper()

@@ -1519,3 +1519,53 @@ func TestJournalIndexPipelineFailureIsReleasedForTheNextClient(t *testing.T) {
 		t.Fatalf("settings puts = %d, want 2 (a failed pin must not claim the index)", puts)
 	}
 }
+
+// TestJournalInfraWaitsForTheFirstPass pins the "wait, not skip" property: a
+// second caller must return only after the first install finished. With
+// skip-on-claim it would return while the template is still missing and write
+// an entry without the ingest pipeline.
+func TestJournalInfraWaitsForTheFirstPass(t *testing.T) {
+	release := make(chan struct{})
+	started := make(chan struct{}, 1)
+	c1, _ := newFakeClientCfg(t, nil, func(r recordedRequest) (int, string) {
+		if r.Method == http.MethodGet && strings.HasPrefix(r.Path, "/_ingest/pipeline/") {
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			<-release
+		}
+		return journalInfraOK(r)
+	})
+	c2, err := NewClient(c1.cfg)
+	if err != nil {
+		t.Fatalf("second NewClient: %v", err)
+	}
+
+	firstDone := make(chan struct{})
+	go func() {
+		_ = c1.ensureJournalInfra(context.Background())
+		close(firstDone)
+	}()
+	<-started
+
+	secondDone := make(chan struct{})
+	go func() {
+		_ = c2.ensureJournalInfra(context.Background())
+		close(secondDone)
+	}()
+
+	select {
+	case <-secondDone:
+		t.Fatal("the second caller returned while the first install was still running (skip, not wait)")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(release)
+	<-firstDone
+	select {
+	case <-secondDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the second caller never returned after the first install finished")
+	}
+}
