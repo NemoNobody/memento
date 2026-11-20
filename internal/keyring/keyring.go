@@ -20,3 +20,10 @@ var Delete func(service, user string) error
 
 // ErrNotFound is the "no such entry" sentinel of the active provider.
 var ErrNotFound error
+
+// ErrBackend is the "no usable keyring backend" sentinel: the provider gate
+// of internal/keyringnative refused this desktop (no session bus, no Secret
+// Service provider, or gnome-keyring on KDE). Callers match it with errors.Is
+// to tell an unusable provider from a missing entry. Nil on darwin/windows,
+// which have a single always-present provider.
+var ErrBackend error

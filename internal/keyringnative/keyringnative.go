@@ -30,6 +30,11 @@
 // gnome-keyring-daemon may race for the bus name and serve its own
 // empty-password login keyring — see docs/setup.md. On GNOME the
 // provider is gnome-keyring.
+//
+// Every operation is gated by BackendError first: a desktop/provider
+// combination that cannot keep a secret (KDE served by gnome-keyring) and a
+// missing provider are refused with an actionable hint instead of touching
+// the wallet. Callers match the refusal with errors.Is(ErrBackend).
 package keyringnative
 
 import (
@@ -38,6 +43,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -97,6 +103,123 @@ func (c *client) getProperty(ctx context.Context, obj dbus.BusObject, iface, pro
 // ErrNotFound is returned when the collection or the item does not exist.
 // Callers match it with errors.Is, like zalando's keyring.ErrNotFound.
 var ErrNotFound = errors.New("keyring: entry not found")
+
+// ErrBackend marks "no usable Secret Service backend": no session bus, no
+// provider owning org.freedesktop.secrets, or a provider that loses the
+// credentials at logout. Callers match it with errors.Is to pick another
+// backend or to fall back to OPENSEARCH_PASSWORD.
+var ErrBackend = errors.New("keyring: no usable backend")
+
+// backendProbe is the read-only classification input: who owns the Secret
+// Service name and which desktop we are on. BusErr reports that the question
+// could not be asked at all (no session bus).
+type backendProbe struct {
+	HasOwner bool   // org.freedesktop.secrets has an owner on the session bus
+	Owner    string // unique bus name of that owner, "" when unknown
+	Comm     string // /proc/<pid>/comm of the owner, "" when unknown
+	Desktop  string // XDG_CURRENT_DESKTOP
+	BusErr   error  // session bus unavailable
+}
+
+// probe inspects the session bus without reading or writing a secret. It is a
+// variable so tests can classify without a live D-Bus; production never
+// reassigns it.
+var probe = probeSecretService
+
+// probeSecretService asks the bus who owns org.freedesktop.secrets and
+// resolves the owner's process name. Read-only: no session is opened, no
+// collection is unlocked.
+func probeSecretService() backendProbe {
+	p := backendProbe{Desktop: os.Getenv("XDG_CURRENT_DESKTOP")}
+	// The same guard as newClient: dbus.SessionBus falls back to dbus-launch
+	// when the address is unset or "autolaunch:", which hangs in containers
+	// and over ssh instead of reporting a missing bus.
+	address := os.Getenv("DBUS_SESSION_BUS_ADDRESS")
+	if address == "" || address == "autolaunch:" {
+		p.BusErr = errors.New("no session D-Bus address (DBUS_SESSION_BUS_ADDRESS unset)")
+		return p
+	}
+	conn, err := dbus.SessionBus()
+	if err != nil {
+		p.BusErr = err
+		return p
+	}
+	bus := conn.BusObject()
+	// godbus has no Go method for these org.freedesktop.DBus calls; the bus
+	// daemon answers them like any other method.
+	var hasOwner bool
+	hasCtx, cancelHas := context.WithTimeout(context.Background(), rpcTimeout)
+	defer cancelHas()
+	if err := bus.CallWithContext(hasCtx, "org.freedesktop.DBus.NameHasOwner", 0, busName).Store(&hasOwner); err != nil {
+		p.BusErr = fmt.Errorf("ask the bus for %s: %w", busName, err)
+		return p
+	}
+	p.HasOwner = hasOwner
+	if !hasOwner {
+		return p
+	}
+	var owner string
+	ownerCtx, cancelOwner := context.WithTimeout(context.Background(), rpcTimeout)
+	defer cancelOwner()
+	if err := bus.CallWithContext(ownerCtx, "org.freedesktop.DBus.GetNameOwner", 0, busName).Store(&owner); err != nil {
+		// The name had an owner a moment ago: the provider is still usable,
+		// only the desktop mismatch below cannot be evaluated.
+		return p
+	}
+	p.Owner = owner
+	p.Comm = ownerComm(conn, owner)
+	return p
+}
+
+// ownerComm resolves the owner's process name. An unknown pid or an
+// unreadable /proc entry (hidepid, SELinux) yields "": the desktop mismatch
+// check only fires on a confirmed gnome-keyring, never on a guess.
+func ownerComm(conn *dbus.Conn, owner string) string {
+	var pid uint32
+	ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
+	defer cancel()
+	if err := conn.BusObject().CallWithContext(ctx, "org.freedesktop.DBus.GetConnectionUnixProcessID", 0, owner).Store(&pid); err != nil {
+		return ""
+	}
+	b, err := os.ReadFile("/proc/" + strconv.FormatUint(uint64(pid), 10) + "/comm")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+// BackendError reports whether the Secret Service backend can be used: nil
+// when it can, an error matching ErrBackend (with the reason and the fix)
+// otherwise. It never touches the wallet.
+func BackendError() error {
+	p := probe()
+	switch {
+	case p.BusErr != nil:
+		return fmt.Errorf("%w: no session bus (containers/ssh): use OPENSEARCH_PASSWORD (%v)", ErrBackend, p.BusErr)
+	case !p.HasOwner:
+		return fmt.Errorf("%w: no Secret Service provider (KDE: install/enable ksecretd or set OPENSEARCH_PASSWORD)", ErrBackend)
+	case isKDE(p.Desktop) && isGNOMEKeyring(p.Comm):
+		return fmt.Errorf("%w: gnome-keyring on KDE writes an ephemeral login keyring (credentials die on logout); use KWallet-native or OPENSEARCH_PASSWORD", ErrBackend)
+	}
+	return nil
+}
+
+// SecretServiceUsable is the dispatcher-facing name of BackendError: nil when
+// Secret Service is the right backend for this desktop.
+func SecretServiceUsable() error { return BackendError() }
+
+// isKDE matches the name Plasma exports in XDG_CURRENT_DESKTOP ("KDE",
+// "KDE:Plasma").
+func isKDE(desktop string) bool {
+	return strings.Contains(strings.ToUpper(desktop), "KDE")
+}
+
+// isGNOMEKeyring matches the daemon family name. /proc/<pid>/comm is cut to
+// 15 bytes ("gnome-keyring-d" for gnome-keyring-daemon), so this is a
+// substring test, not an equality test.
+func isGNOMEKeyring(comm string) bool {
+	return strings.Contains(strings.ToLower(comm), "gnome-keyring")
+}
 
 // collectionName is the Label of the fallback collection (default: the KDE
 // wallet name). Read-only at runtime (init-time writes only) so concurrent
@@ -454,6 +577,12 @@ func (c *client) deleteItemsExcept(coll dbus.ObjectPath, attrs map[string]string
 // Get returns the secret stored for (service, user). Read-only: it never
 // creates collections.
 func Get(service, user string) (string, error) {
+	// Gate before any keyring call: on KDE a gnome-keyring-served Secret
+	// Service answers reads happily until logout, which would hide the real
+	// problem behind a "working" wallet.
+	if err := BackendError(); err != nil {
+		return "", err
+	}
 	c, err := newClient()
 	if err != nil {
 		return "", err
@@ -494,6 +623,9 @@ func Get(service, user string) (string, error) {
 // wallet unlocked at session login — the normal case — this runs without
 // any dialog.
 func Set(service, user, value string) error {
+	if err := BackendError(); err != nil {
+		return err
+	}
 	c, err := newClient()
 	if err != nil {
 		return err
@@ -579,6 +711,9 @@ func Set(service, user, value string) error {
 
 // Delete removes the entry for (service, user).
 func Delete(service, user string) error {
+	if err := BackendError(); err != nil {
+		return err
+	}
 	c, err := newClient()
 	if err != nil {
 		return err

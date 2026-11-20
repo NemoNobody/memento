@@ -5,9 +5,23 @@ project was developed privately before it, so entries start there.
 
 ## Unreleased
 
-Nothing yet. A change lands here while it is in review; the release commit
+Unreleased work lands here while it is in review; the release commit
 moves the section under its version number (`.github/workflows/release.yml`
 reads that heading to build the release notes).
+
+- keyring: provider detection on Linux — the bus owner of
+  `org.freedesktop.secrets` is probed, and an unusable provider is a named
+  refusal instead of a place to keep credentials: KDE with gnome-keyring
+  owning the name (ephemeral master key, credentials die at logout) and no
+  owner at all are both refused.
+- keyring: a KWallet-native backend (`org.kde.kwalletd6`, wallet `kdewallet`,
+  folder = service, key = account) when no usable Secret Service provider
+  exists.
+- keyring: every call is bounded by a deadline, so a locked wallet's GUI
+  prompt ends as a "wallet locked" error instead of hanging the server.
+- `memento creds set` refuses on an unusable backend with a hint
+  (`OPENSEARCH_PASSWORD` or a plaintext config), instead of reporting a
+  successful write.
 
 ## v0.8.5 — 2026-11-20
 

@@ -6,10 +6,144 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	dbus "github.com/godbus/dbus/v5"
 )
+
+// withProbe swaps the backend probe for the duration of a test, so the
+// classification table never needs a session bus.
+func withProbe(t *testing.T, p backendProbe) {
+	t.Helper()
+	orig := probe
+	probe = func() backendProbe { return p }
+	t.Cleanup(func() { probe = orig })
+}
+
+// TestBackendErrorClassification pins the provider verdicts that gate every
+// operation. The two "nil" rows are as important as the refusals: a false
+// refusal disables the working desktops.
+func TestBackendErrorClassification(t *testing.T) {
+	cases := []struct {
+		name       string
+		probe      backendProbe
+		wantRefuse bool
+		wantText   string
+	}{
+		{
+			name:       "KDE served by gnome-keyring is refused",
+			probe:      backendProbe{HasOwner: true, Owner: ":1.42", Comm: "gnome-keyring-d", Desktop: "KDE"},
+			wantRefuse: true,
+			wantText:   "ephemeral login keyring",
+		},
+		{
+			name:       "no provider owns the name",
+			probe:      backendProbe{Desktop: "KDE"},
+			wantRefuse: true,
+			wantText:   "no Secret Service provider",
+		},
+		{
+			name:       "no session bus",
+			probe:      backendProbe{Desktop: "KDE", BusErr: errors.New("dial unix: no such file")},
+			wantRefuse: true,
+			wantText:   "no session bus",
+		},
+		{
+			name:  "KDE served by kwalletd6",
+			probe: backendProbe{HasOwner: true, Owner: ":1.7", Comm: "kwalletd6", Desktop: "KDE"},
+		},
+		{
+			name:  "KDE served by ksecretd",
+			probe: backendProbe{HasOwner: true, Owner: ":1.8", Comm: "ksecretd", Desktop: "KDE:Plasma"},
+		},
+		{
+			name:  "GNOME served by gnome-keyring",
+			probe: backendProbe{HasOwner: true, Owner: ":1.9", Comm: "gnome-keyring-d", Desktop: "ubuntu:GNOME"},
+		},
+		{
+			// The mismatch needs a confirmed process name: hidepid or SELinux
+			// can hide /proc, and guessing there would lock out a working wallet.
+			name:  "owner process unknown on KDE is allowed",
+			probe: backendProbe{HasOwner: true, Owner: ":1.10", Desktop: "KDE"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			withProbe(t, tc.probe)
+			err := BackendError()
+			if !tc.wantRefuse {
+				if err != nil {
+					t.Fatalf("BackendError = %v, want nil", err)
+				}
+				return
+			}
+			if !errors.Is(err, ErrBackend) {
+				t.Fatalf("BackendError = %v, want an error matching ErrBackend", err)
+			}
+			if !strings.Contains(err.Error(), tc.wantText) {
+				t.Errorf("BackendError text = %q, want it to mention %q", err, tc.wantText)
+			}
+		})
+	}
+}
+
+// TestSecretServiceUsableIsBackendError pins the dispatcher-facing alias: one
+// verdict, two names, so the gate and the fallback choice can never disagree.
+func TestSecretServiceUsableIsBackendError(t *testing.T) {
+	withProbe(t, backendProbe{HasOwner: true, Owner: ":1.1", Comm: "kwalletd6", Desktop: "KDE"})
+	if err := SecretServiceUsable(); err != nil {
+		t.Errorf("SecretServiceUsable = %v, want nil", err)
+	}
+	withProbe(t, backendProbe{})
+	if err := SecretServiceUsable(); !errors.Is(err, ErrBackend) {
+		t.Errorf("SecretServiceUsable = %v, want ErrBackend", err)
+	}
+}
+
+// TestOperationsRefuseWithoutBackend pins the gate itself: with a refused
+// backend Get/Set/Delete return ErrBackend before any keyring call. The dead
+// bus address makes an ungated call fail differently (or touch the user's real
+// wallet on a developer machine), and the counter proves the gate ran once per
+// operation.
+func TestOperationsRefuseWithoutBackend(t *testing.T) {
+	t.Setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent/memento-test-no-bus")
+	orig := probe
+	calls := 0
+	probe = func() backendProbe {
+		calls++
+		return backendProbe{HasOwner: true, Owner: ":1.1", Comm: "gnome-keyring-d", Desktop: "KDE"}
+	}
+	t.Cleanup(func() { probe = orig })
+
+	if _, err := Get("memento-test", "user"); !errors.Is(err, ErrBackend) {
+		t.Errorf("Get = %v, want ErrBackend", err)
+	}
+	if err := Set("memento-test", "user", "value"); !errors.Is(err, ErrBackend) {
+		t.Errorf("Set = %v, want ErrBackend", err)
+	}
+	if err := Delete("memento-test", "user"); !errors.Is(err, ErrBackend) {
+		t.Errorf("Delete = %v, want ErrBackend", err)
+	}
+	if calls != 3 {
+		t.Errorf("probe called %d times, want 3 (one gate per operation)", calls)
+	}
+}
+
+// TestProbeSecretServiceFailsFastOnDeadBus covers the real probe without a live
+// provider: a set-but-unreachable address must yield BusErr, not a hang and not
+// a dbus-launch autolaunch.
+func TestProbeSecretServiceFailsFastOnDeadBus(t *testing.T) {
+	t.Setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path="+filepath.Join(t.TempDir(), "no-bus"))
+	p := probeSecretService()
+	if p.BusErr == nil {
+		t.Fatalf("probe = %+v, want a BusErr for an unreachable address", p)
+	}
+	if err := BackendError(); !errors.Is(err, ErrBackend) {
+		t.Errorf("BackendError = %v, want ErrBackend", err)
+	}
+}
 
 // These tests talk to a REAL Secret Service provider (gnome-keyring, KWallet,
 // ksecretd) on the session bus. They touch the user's wallet, so they are opt-in:

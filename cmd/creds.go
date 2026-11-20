@@ -222,7 +222,13 @@ func renderCredsStatus(host string, cfg *config.Config, keyringErr error) string
 	default:
 		b.WriteString("unavailable: ")
 		b.WriteString(keyringErr.Error())
-		b.WriteString("\n  (no session bus in containers/ssh: use OPENSEARCH_PASSWORD)\n")
+		// An ErrBackend text already names its own fix (env var, ksecretd,
+		// KWallet-native); adding the container hint would contradict it on a
+		// desktop that simply has the wrong provider.
+		if !errors.Is(keyringErr, keyring.ErrBackend) {
+			b.WriteString("\n  (no session bus in containers/ssh: use OPENSEARCH_PASSWORD)")
+		}
+		b.WriteString("\n")
 	}
 	if cfg != nil {
 		b.WriteString("config file plaintext: ")

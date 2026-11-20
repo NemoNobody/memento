@@ -19,6 +19,15 @@ response within a few days.
   `redactions`, so a stored value can be visibly shorter than the one written.
   It is not protection: "Never store secrets" remains a rule for agents (see
   the README). Reports about the store not being encrypted are by design.
+- The OS keyring is **best-effort per platform**: Secret Service on Linux
+  (GNOME gnome-keyring, KDE ksecretd/KWallet plus a KWallet-native fallback),
+  Keychain on macOS; Windows Credential Manager is not covered (use
+  `OPENSEARCH_PASSWORD` or a mode-0600 config file). When the backend is
+  unusable, the secret is not written at all — there is no silent success:
+  `memento creds set` fails with a hint instead. On KDE where gnome-keyring
+  owns `org.freedesktop.secrets`, that provider is refused explicitly (its
+  login collection uses an ephemeral master key, so the password would not
+  survive a logout).
 - Relevant areas: credential handling (`memento.conf`, environment variables),
   the MCP server (stdio), request construction to OpenSearch, and anything that
   could leak a secret into logs or outputs.

@@ -156,20 +156,46 @@ chmod 600 ~/.memento.conf
   A plaintext password in the file is only read when `allow_plaintext: true`
   (off by default). Containers and ssh sessions have no keyring — export
   `OPENSEARCH_PASSWORD` there.
-- **Keyring by desktop.** memento talks to the freedesktop Secret Service
-  (`org.freedesktop.secrets` over D-Bus), so any desktop that provides one
-  works without DE-specific code:
+- **Keyring by desktop.** On Linux the keyring path is the freedesktop Secret
+  Service (`org.freedesktop.secrets` over D-Bus), so any desktop that provides
+  one works without DE-specific code:
 
   | Desktop | Provider | Notes |
   |---|---|---|
-  | KDE Plasma | ksecretd / kwalletd6 | the default alias is used; if it is dead, the collection labelled by `MEMENTO_KEYRING_COLLECTION` (default `kdewallet`, the KDE wallet name) is found and used |
-  | GNOME | gnome-keyring | login keyring, alias normally present |
+  | GNOME | gnome-keyring | login keyring, alias normally present; covered by the keyring tests |
+  | KDE Plasma (KF 6.14+, Debian 14+) | ksecretd / KWallet | KWallet registers the Secret Service name (default alias); if it is dead, the collection labelled by `MEMENTO_KEYRING_COLLECTION` (default `kdewallet`, the KDE wallet name) is used |
+  | KDE Plasma without ksecretd (Debian 13 / kwallet6 6.13) | KWallet-native (`org.kde.kwalletd6`) | used when no usable Secret Service provider exists: wallet `kdewallet`, folder = service, key = account |
   | XFCE / LXQt / MATE / Cinnamon / tiling WMs | whatever Secret Service is installed (usually gnome-keyring) | works if the daemon runs and the keyring is unlocked |
   | KeePassXC (Secret Service integration) | KeePassXC | entries are namespaced by service + username, same as everywhere |
   | headless / container / ssh | none | no bus, no keyring: export `OPENSEARCH_PASSWORD`; `memento status` reports `password_from: env` and the keyring error |
+  | Windows | Credential Manager — not covered | put the password in `OPENSEARCH_PASSWORD` or in a mode-0600 config file (`allow_plaintext: true`) |
 
   A renamed KDE wallet is the one case that needs the variable:
   `export MEMENTO_KEYRING_COLLECTION=<wallet label>` (kwalletrc "Default Wallet").
+
+  The provider is detected with a read-only probe of the bus owner, and an
+  unusable one is refused instead of being used anyway:
+
+  - **KDE where `org.freedesktop.secrets` is owned by gnome-keyring** (a
+    typical Debian KDE install pulls it in as a dependency): its login
+    collection gets an ephemeral master key, so `creds set` "succeeds" and the
+    password is gone after the next logout. That provider is refused; memento
+    falls back to the KWallet-native backend when it is available, otherwise
+    `creds set` fails with a hint.
+  - **No owner on the bus** (no daemon, no provider): the keyring is refused
+    with a hint — never reported as a working store.
+  - **A locked wallet**: `open()` may raise the KDE Wallet password dialog. On
+    a desktop, answer it; a headless MCP server has nobody to answer, so the
+    call ends with a deadline and a "wallet locked" error instead of hanging.
+    Enable `pam_kwallet5` (or unlock the wallet once per session) for an
+    unattended server.
+  - **Credentials do not migrate.** An entry stored through Secret Service and
+    one stored in KWallet are different records: after switching backends (or
+    installing ksecretd) run `memento creds set` once more.
+
+  When the backend refuses, nothing is written: use `OPENSEARCH_PASSWORD`
+  (env) or a plaintext `opensearch_password` in a mode-0600 config with
+  `allow_plaintext: true`. `memento creds status` names the refusal reason.
 
 - The index is created automatically on first use — you do not have to create it.
 - Newly created memento indices stamp a replica count from `index_replicas`
