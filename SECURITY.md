@@ -21,7 +21,8 @@ response within a few days.
   the README). Reports about the store not being encrypted are by design.
 - The OS keyring is **best-effort per platform**: Secret Service on Linux
   (gnome-keyring, or KWallet serving the name; plus a KWallet-native D-Bus
-  fallback when nothing owns the name), Keychain on macOS. On Windows the
+  fallback when no usable Secret Service provider is available — no owner, or
+  gnome-keyring on KDE), Keychain on macOS. On Windows the
   binary uses Credential Manager through the same library and the `windows` CI
   job exercises it, but the policy around a locked store or a dismissed prompt
   is unexplored — a config file only the user can read or `OPENSEARCH_PASSWORD`

@@ -243,6 +243,8 @@ func renderCredsStatus(host string, cfg *config.Config, keyringErr error, backen
 			b.WriteString("absent\n")
 		case cfg.AllowPlaintext:
 			b.WriteString("present, in use (allow_plaintext on)\n")
+		case errors.Is(keyringErr, keyring.ErrBackend):
+			b.WriteString("present, REFUSED (allow_plaintext off): fix the keyring backend above, or export OPENSEARCH_PASSWORD\n")
 		default:
 			b.WriteString("present, REFUSED (allow_plaintext off): migrate with 'memento creds set', then remove opensearch_password from the file\n")
 		}

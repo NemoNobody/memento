@@ -16,6 +16,11 @@ func unsupported() error {
 	return errors.New("kwallet: not supported on this platform")
 }
 
+// Get reports the platform as unsupported; the dispatcher only calls it on Linux.
 func Get(string, string) (string, error) { return "", unsupported() }
-func Set(string, string, string) error   { return unsupported() }
-func Delete(string, string) error        { return unsupported() }
+
+// Set reports the platform as unsupported; the dispatcher only calls it on Linux.
+func Set(string, string, string) error { return unsupported() }
+
+// Delete reports the platform as unsupported; the dispatcher only calls it on Linux.
+func Delete(string, string) error { return unsupported() }

@@ -81,12 +81,13 @@ var busDiscovered = func() bool {
 		return false
 	}
 	dir := filepath.Join("/run/user", u.Uid)
-	for _, name := range []string{"bus", "dbus-session"} {
-		if _, statErr := os.Stat(filepath.Join(dir, name)); statErr == nil {
-			return true
-		}
+	if _, statErr := os.Stat(filepath.Join(dir, "bus")); statErr == nil {
+		return true
 	}
-	return false
+	// godbus only accepts dbus-session when it starts with the variable prefix;
+	// a truncated file would send it to dbus-launch instead.
+	b, readErr := os.ReadFile(filepath.Join(dir, "dbus-session"))
+	return readErr == nil && strings.HasPrefix(string(b), "DBUS_SESSION_BUS_ADDRESS=")
 }
 
 // dial binds the wallet object. dbus.SessionBus returns a process-wide shared
@@ -148,9 +149,10 @@ func (c *client) walletName(ctx context.Context) string {
 	return defaultWallet
 }
 
-// open returns a handle for the wallet. A negative handle and a deadline are
-// both "the wallet is not available to this process": the caller must unlock
-// it in KWallet or fall back to the environment password.
+// open returns a handle for the wallet and the wallet name it resolved (for
+// error messages and the live test). A negative handle and a deadline are both
+// "the wallet is not available to this process": the caller must unlock it in
+// KWallet or fall back to the environment password.
 func (c *client) open(ctx context.Context) (int32, string, error) {
 	wallet := c.walletName(ctx)
 	octx, cancel := context.WithTimeout(ctx, openTimeout)
@@ -230,8 +232,9 @@ func (c *client) errNoEntry(ctx context.Context, handle int32) error {
 }
 
 // Get returns the secret stored under (service, user). An entry that exists but
-// is empty reads back as ErrNotFound: an empty secret is refused on the write
-// side, so this only happens to entries other tools created.
+// is empty is reported as missing: empty secrets are refused on the write side,
+// so this only happens to entries other tools created. A wallet session that is
+// gone is reported as an error, never as a missing entry.
 func Get(service, user string) (string, error) {
 	c, err := dial()
 	if err != nil {

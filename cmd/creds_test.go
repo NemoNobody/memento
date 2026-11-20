@@ -251,10 +251,14 @@ func TestRenderCredsStatus(t *testing.T) {
 		t.Errorf("active backend not named:\n%s", text)
 	}
 
-	// A refused backend must not be paired with "store with memento creds set":
-	// that store cannot be written to until the backend is fixed.
+	// A refused backend must not be paired with "memento creds set": neither the
+	// hint nor the plaintext-migration line may point at a store that cannot be
+	// written to until the backend is fixed. The plaintext branch only prints
+	// when the file actually carries a password, so both paths are exercised.
 	cfg = config.DefaultConfig()
 	cfg.PasswordSource = "none"
+	cfg.FileHasPlaintext = true
+	cfg.AllowPlaintext = false
 	text = renderCredsStatus("os.test:9200", cfg, fmt.Errorf("%w: no owner", keyring.ErrBackend), "")
 	if strings.Contains(text, "memento creds set") {
 		t.Errorf("refused backend still advertises 'creds set':\n%s", text)
