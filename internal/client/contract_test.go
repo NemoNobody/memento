@@ -50,15 +50,15 @@ func newFakeClient(t *testing.T, respond func(r recordedRequest) (int, string)) 
 // one per tool call: without this, a claim made by one test would silently
 // disable the work another test asserts.
 func resetProcessCaches() {
-	for _, m := range []*sync.Map{&reconciledMappings, &journalPipelines, &reconciledStores} {
+	for _, m := range []*sync.Map{&journalPipelines, &reconciledStores} {
 		m.Range(func(key, _ any) bool {
 			m.Delete(key)
 			return true
 		})
 	}
-	journalGatesMu.Lock()
-	journalGates = map[string]*infraGate{}
-	journalGatesMu.Unlock()
+	infraGatesMu.Lock()
+	infraGates = map[string]*installGate{}
+	infraGatesMu.Unlock()
 }
 
 func newFakeClientCfg(t *testing.T, mutate func(*config.Config),

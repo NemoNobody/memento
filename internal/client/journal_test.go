@@ -1447,3 +1447,40 @@ func TestJournalIndexPipelinePinnedOncePerProcess(t *testing.T) {
 		t.Fatalf("settings puts = %d, want 1 (per index per process)", puts)
 	}
 }
+
+// TestJournalInfraFailureIsReleasedForTheNextClient: a failed install must not
+// leave the store marked done, or a long-lived server appends entries without
+// the ingest pipeline and the template mappings.
+func TestJournalInfraFailureIsReleasedForTheNextClient(t *testing.T) {
+	broken := func(r recordedRequest) (int, string) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasPrefix(r.Path, "/_ingest/pipeline/"):
+			return http.StatusInternalServerError, `{"error":"boom"}`
+		case r.Method == http.MethodPut && strings.Contains(r.Path, "/_ingest/pipeline/"):
+			return http.StatusInternalServerError, `{"error":"boom"}`
+		}
+		return journalInfraOK(r)
+	}
+	c1, fake := newFakeClientCfg(t, nil, broken)
+	if err := c1.ensureJournalInfra(context.Background()); err == nil {
+		t.Fatal("first install must fail")
+	}
+	c2, err := NewClient(c1.cfg)
+	if err != nil {
+		t.Fatalf("second NewClient: %v", err)
+	}
+	if err := c2.ensureJournalInfra(context.Background()); err == nil {
+		t.Fatal("the second client must retry and fail too")
+	}
+	probes := 0
+	fake.mu.Lock()
+	for _, r := range fake.requests {
+		if r.Method == http.MethodGet && strings.HasPrefix(r.Path, "/_ingest/pipeline/") {
+			probes++
+		}
+	}
+	fake.mu.Unlock()
+	if probes != 2 {
+		t.Fatalf("pipeline probes = %d, want 2 (a failed pass must not claim the store)", probes)
+	}
+}

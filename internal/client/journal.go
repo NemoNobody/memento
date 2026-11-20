@@ -127,28 +127,36 @@ func buildJournalPipelineBody(prefix string) map[string]interface{} {
 }
 
 // infraGate marks one piece of store infrastructure as installed for the whole
-// process. The MCP server builds a fresh client per tool call, so per-client
-// flags would re-run the probes on every call.
-type infraGate struct {
+// process, and makes concurrent callers wait for the first pass instead of
+// skipping it: work that lands on an unprepared index (an append before the
+// template exists, a write before the mapping is additive) cannot be undone.
+//
+// The claim lives for the process: the topology and the store's templates are
+// assumed stable while a process runs. A cluster swap or a deleted template
+// under the same URL is picked up on restart — the same assumption the replica
+// reconcile already makes.
+type installGate struct {
 	mu   sync.Mutex
 	done bool
 }
 
-// journalInfraGate returns the gate for a store, creating it on first use.
-func journalInfraGate(key string) *infraGate {
-	journalGatesMu.Lock()
-	defer journalGatesMu.Unlock()
-	gate, ok := journalGates[key]
+// infraGate returns the gate for a key, creating it on first use. Keys are
+// prefixed by the piece of infrastructure ("journal|", "mapping|") so the two
+// do not share a claim.
+func infraGate(key string) *installGate {
+	infraGatesMu.Lock()
+	defer infraGatesMu.Unlock()
+	gate, ok := infraGates[key]
 	if !ok {
-		gate = &infraGate{}
-		journalGates[key] = gate
+		gate = &installGate{}
+		infraGates[key] = gate
 	}
 	return gate
 }
 
 var (
-	journalGatesMu sync.Mutex
-	journalGates   = map[string]*infraGate{}
+	infraGatesMu sync.Mutex
+	infraGates   = map[string]*installGate{}
 	// journalPipelines claims one default_pipeline pin per journal index per
 	// process, released on failure so a refused settings PUT retries.
 	journalPipelines sync.Map
@@ -161,7 +169,7 @@ var (
 // retry, or a long-lived MCP server would append journal entries forever
 // without the template's mappings and the server-clock pipeline.
 func (c *Client) ensureJournalInfra(ctx context.Context) error {
-	gate := journalInfraGate(c.cfg.OpenSearchURL + "|" + c.cfg.IndexName)
+	gate := infraGate("journal|" + c.cfg.OpenSearchURL + "|" + c.cfg.IndexName)
 	// The lock makes a concurrent append wait for the first pass instead of
 	// skipping it: an entry written before the template exists would land on an
 	// index without the ingest pipeline and the stamped replica count.

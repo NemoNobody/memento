@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sync"
 
 	"github.com/opensearch-project/opensearch-go/v4/opensearchapi"
 )
@@ -18,32 +17,35 @@ import (
 // an exact tag filter would silently stop matching tags the analyzer splits.
 //
 // It runs once per store per process. The MCP server builds a fresh client per
-// tool call, so a per-client flag would pay the PUT on every call; the claim
-// below is process-wide and is released on failure, so a refused PUT (a field
-// already exists with a conflicting type) is retried by the next caller.
+// tool call, so a per-client flag would pay the PUT on every call. The gate
+// also makes a concurrent caller WAIT for the pass: a write racing the first
+// PUT would otherwise let the dynamic mapping pin a field (a `keywords` array
+// becomes text+keyword) and the later PUT would conflict on every retry,
+// leaving the degraded type silently in place.
+//
 // The failure is deliberately not fatal, matching the replica reconcile: reads
 // and writes stay correct, only the type best-effort degrades, and an operator
 // can see the real types in GET _mapping.
-var reconciledMappings sync.Map
-
 func (c *Client) reconcileMapping(ctx context.Context) error {
-	key := c.cfg.OpenSearchURL + "|" + c.cfg.IndexName
-	if _, loaded := reconciledMappings.LoadOrStore(key, struct{}{}); loaded {
+	gate := infraGate("mapping|" + c.cfg.OpenSearchURL + "|" + c.cfg.IndexName)
+	gate.mu.Lock()
+	defer gate.mu.Unlock()
+	if gate.done {
 		return nil
 	}
 	body, err := json.Marshal(map[string]interface{}{
 		"properties": buildIndexProperties(),
 	})
 	if err != nil {
-		reconciledMappings.Delete(key)
 		return fmt.Errorf("reconcile index mapping %s: %w", c.cfg.IndexName, err)
 	}
 	if _, err := c.api.Indices.Mapping.Put(ctx, opensearchapi.MappingPutReq{
 		Indices: []string{c.cfg.IndexName},
 		Body:    bytes.NewReader(body),
 	}); err != nil {
-		reconciledMappings.Delete(key)
+		// The gate stays open: the next caller retries.
 		return fmt.Errorf("reconcile index mapping %s: %w", c.cfg.IndexName, err)
 	}
+	gate.done = true
 	return nil
 }

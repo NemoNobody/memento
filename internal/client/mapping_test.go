@@ -33,9 +33,10 @@ func mappingCase(t *testing.T, failFirst int) (*Client, *fakeOpenSearch, *int) {
 	return c, fake, &puts
 }
 
-// TestReconcileMappingOncePerProcess pins the caching half of the additive
-// mapping reconcile: EnsureIndex runs on every command path, and a long-lived
-// MCP server must not PUT the mapping before every call.
+// TestReconcileMappingOncePerProcess pins the per-client half of the caching:
+// repeated EnsureIndex calls on one client must not repeat the PUT. The
+// cross-client claim (a fresh client per MCP tool call) is
+// TestMappingReconcileIsProcessWide.
 func TestReconcileMappingOncePerProcess(t *testing.T) {
 	c, fake, _ := mappingCase(t, 0)
 	for i := 0; i < 3; i++ {
@@ -89,5 +90,25 @@ func TestMappingReconcileIsProcessWide(t *testing.T) {
 	}
 	if puts := fake.requestsFor(http.MethodPut, "/memento/_mapping"); len(puts) != 1 {
 		t.Fatalf("mapping puts = %d, want 1 (the claim is per store, not per client)", len(puts))
+	}
+}
+
+// TestMappingReconcileFailureIsReleasedForTheNextClient: a refused PUT must not
+// leave the store marked done for the whole process, or the degraded dynamic
+// mapping stays until a restart.
+func TestMappingReconcileFailureIsReleasedForTheNextClient(t *testing.T) {
+	c1, fake, _ := mappingCase(t, 1) // the first PUT fails
+	if err := c1.EnsureIndex(context.Background()); err != nil {
+		t.Fatalf("EnsureIndex must stay best effort: %v", err)
+	}
+	c2, err := NewClient(c1.cfg)
+	if err != nil {
+		t.Fatalf("second NewClient: %v", err)
+	}
+	if err := c2.EnsureIndex(context.Background()); err != nil {
+		t.Fatalf("second EnsureIndex: %v", err)
+	}
+	if puts := fake.requestsFor(http.MethodPut, "/memento/_mapping"); len(puts) != 2 {
+		t.Fatalf("mapping puts = %d, want 2 (the failed pass must not claim the store)", len(puts))
 	}
 }

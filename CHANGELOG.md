@@ -30,6 +30,14 @@ heading to build the release notes).
 - keyring: the session-bus connection is never closed. `dbus.SessionBus`
   returns a process-wide connection, so closing it after one call broke every
   later call in the same process (an MCP server reads the password repeatedly).
+- client: the additive mapping reconcile, the journal infrastructure install
+  and the journal index pipeline pinning run once per store per process
+  instead of once per client. The MCP server builds a client per tool call,
+  so every call paid a `PUT _mapping` and every append paid two or three
+  extra requests. Concurrent callers wait for the first pass rather than
+  skipping it (a write racing the old code could pin a field with the dynamic
+  mapping). The work is assumed stable for the process lifetime: restart
+  after a cluster swap or a deleted template.
 - docs: on KF 6.13 KWallet can serve `org.freedesktop.secrets` itself when
   kwalletd is started by PAM and the bus name is free, so `ksecretd` is
   optional there; gnome-keyring must stay out of the session, otherwise it
