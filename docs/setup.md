@@ -170,8 +170,11 @@ chmod 600 ~/.memento.conf
   | headless / container / ssh | none | no bus, no keyring: export `OPENSEARCH_PASSWORD`; `memento status` reports `password_from: env` and the keyring error |
   | Windows | Windows Credential Manager (zalando/go-keyring) | exercised by the `windows` CI job, but its locked-store and dismissed-prompt policy is unexplored: for a reproducible setup use `OPENSEARCH_PASSWORD` or a config file only the user can read |
 
-  A renamed KDE wallet is the one case that needs the variable:
+  A renamed KDE wallet is addressed by label on the Secret Service path:
   `export MEMENTO_KEYRING_COLLECTION=<wallet label>` (kwalletrc "Default Wallet").
+  The KWallet-native path asks kwalletd for its default wallet and accepts an
+  override too: `MEMENTO_KWALLET_NAME=<wallet>` (trimmed; empty keeps the
+  kwalletd default).
 
   The provider is detected with a read-only probe of the bus owner, and an
   unusable one is refused instead of being used anyway:

@@ -250,6 +250,18 @@ func TestRenderCredsStatus(t *testing.T) {
 	if !strings.Contains(text, "backend: kwallet-native") {
 		t.Errorf("active backend not named:\n%s", text)
 	}
+
+	// A refused backend must not be paired with "store with memento creds set":
+	// that store cannot be written to until the backend is fixed.
+	cfg = config.DefaultConfig()
+	cfg.PasswordSource = "none"
+	text = renderCredsStatus("os.test:9200", cfg, fmt.Errorf("%w: no owner", keyring.ErrBackend), "")
+	if strings.Contains(text, "memento creds set") {
+		t.Errorf("refused backend still advertises 'creds set':\n%s", text)
+	}
+	if !strings.Contains(text, "fix the keyring backend") {
+		t.Errorf("refused backend hint missing:\n%s", text)
+	}
 }
 
 // creds get pipes the resolved password to stdout (scripted curl, dashboard

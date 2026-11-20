@@ -4,6 +4,7 @@ package kwalletnative
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 )
@@ -34,17 +35,13 @@ func TestLiveKWallet(t *testing.T) {
 		t.Fatalf("hasFolder: %v", err)
 	}
 	created := false
-	if !has {
-		if err := c.createFolder(ctx, handle, service); err != nil {
-			t.Fatalf("createFolder: %v", err)
-		}
-		created = true
-	}
-	// Registered right after the folder exists, so a later failure cannot leave
-	// it behind; only a folder this test created is removed (a pre-existing one
-	// may hold the user's entries).
+	// Registered before the folder is created, so a failure during creation
+	// (or later) cannot leave it behind; only a folder this test created is
+	// removed (a pre-existing one may hold the user's entries).
 	t.Cleanup(func() {
-		_ = Delete(service, user)
+		if err := Delete(service, user); err != nil && !errors.Is(err, ErrNotFound) {
+			t.Logf("Delete %q: %v", service, err)
+		}
 		if !created {
 			return
 		}
@@ -53,6 +50,17 @@ func TestLiveKWallet(t *testing.T) {
 			t.Logf("removeFolder %q: %v", service, err)
 		}
 	})
+	if !has {
+		if err := c.createFolder(ctx, handle, service); err != nil {
+			// The daemon may have created the folder before failing; keep the
+			// cleanup honest about what is on disk.
+			if again, herr := c.hasFolder(ctx, handle, service); herr == nil && again {
+				created = true
+			}
+			t.Fatalf("createFolder: %v", err)
+		}
+		created = true
+	}
 
 	if err := Set(service, user, secret); err != nil {
 		t.Fatalf("Set: %v", err)
@@ -67,7 +75,7 @@ func TestLiveKWallet(t *testing.T) {
 	if err := Delete(service, user); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if _, err := Get(service, user); err != ErrNotFound {
+	if _, err := Get(service, user); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Get after Delete = %v, want ErrNotFound", err)
 	}
 }

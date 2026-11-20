@@ -5,7 +5,9 @@ package kwalletnative
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	dbus "github.com/godbus/dbus/v5"
@@ -31,13 +33,8 @@ func TestWalletNameFromEnvTrimmed(t *testing.T) {
 	}
 }
 
-// TestErrNotFoundIdentity: the dispatcher maps this sentinel, so it must stay a
-// plain comparable error.
-func TestErrNotFoundIdentity(t *testing.T) {
-	if !errors.Is(ErrNotFound, ErrNotFound) {
-		t.Fatal("ErrNotFound does not match itself")
-	}
-}
+// TestErrNotFoundIdentity is covered by the dispatcher tests: this package's
+// sentinel is mapped there (internal/keyring), not here.
 
 // TestSetRejectsEmptySecret: an empty value reads back as "not found", so the
 // write must be refused before any wallet call.
@@ -140,8 +137,11 @@ func (f *fakeObj) Destination() string                      { return busName }
 func (f *fakeObj) Path() dbus.ObjectPath                    { return objPath }
 
 // withFake makes dial return a client backed by f for the duration of a test.
+// MEMENTO_KWALLET_NAME is cleared so a developer's shell cannot change which
+// calls the test expects.
 func withFake(t *testing.T, f *fakeObj) {
 	t.Helper()
+	t.Setenv("MEMENTO_KWALLET_NAME", "")
 	orig := dial
 	dial = func() (*client, error) { return &client{obj: f}, nil }
 	t.Cleanup(func() { dial = orig })
@@ -160,10 +160,20 @@ func replies(t *testing.T, table map[string]any) func(string, []any) ([]any, err
 	}
 }
 
+// assertCalls compares the whole call list. Only method names and argument
+// counts are printed: a future test may carry a real secret in an argument, and
+// a failing assertion must not copy it into the log.
 func assertCalls(t *testing.T, got []recordedCall, want []recordedCall) {
 	t.Helper()
+	describe := func(calls []recordedCall) string {
+		out := make([]string, len(calls))
+		for i, c := range calls {
+			out[i] = fmt.Sprintf("%s(%d args)", c.method, len(c.args))
+		}
+		return strings.Join(out, ", ")
+	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("calls:\n got  %#v\n want %#v", got, want)
+		t.Fatalf("calls:\n got  %s\n want %s", describe(got), describe(want))
 	}
 }
 
@@ -284,6 +294,94 @@ func TestClosedSessionIsNotANotFound(t *testing.T) {
 	_, err := Get("svc", "user")
 	if err == nil || errors.Is(err, ErrNotFound) {
 		t.Fatalf("Get = %v, want a session error, not ErrNotFound", err)
+	}
+}
+
+// TestGetFallsBackToDefaultWalletName: when kwalletd does not name a wallet,
+// the conventional name is used, and the override wins over both.
+func TestGetFallsBackToDefaultWalletName(t *testing.T) {
+	f := &fakeObj{reply: func(method string, _ []any) ([]any, error) {
+		switch method {
+		case iface + ".localWallet":
+			return nil, errors.New("no such method")
+		case iface + ".open":
+			return []any{int32(7)}, nil
+		case iface + ".hasEntry":
+			return []any{false}, nil
+		case iface + ".isOpen":
+			return []any{true}, nil
+		}
+		return nil, errFakeStop
+	}}
+	withFake(t, f)
+	_, _ = Get("svc", "user")
+	if len(f.calls) < 2 || f.calls[1].method != iface+".open" {
+		t.Fatalf("unexpected call list: %v", f.calls)
+	}
+	if got := f.calls[1].args[0]; got != defaultWallet {
+		t.Errorf("open wallet = %v, want the default %q", got, defaultWallet)
+	}
+}
+
+// TestOpenRefusedHandleIsAnError: a negative handle means the wallet stayed
+// locked; it must surface as an error, not as an empty store.
+func TestOpenRefusedHandleIsAnError(t *testing.T) {
+	f := &fakeObj{reply: replies(t, map[string]any{
+		iface + ".localWallet": []any{"kdewallet"},
+		iface + ".open":        []any{int32(-1)},
+	})}
+	withFake(t, f)
+	if _, err := Get("svc", "user"); err == nil || errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get = %v, want a refused-wallet error", err)
+	}
+}
+
+// TestCreateFolderRefusedIsAnError: a folder that is neither created nor present
+// must not be followed by a write.
+func TestCreateFolderRefusedIsAnError(t *testing.T) {
+	f := &fakeObj{reply: func(method string, _ []any) ([]any, error) {
+		switch method {
+		case iface + ".localWallet":
+			return []any{"kdewallet"}, nil
+		case iface + ".open":
+			return []any{int32(7)}, nil
+		case iface + ".hasFolder":
+			return []any{false}, nil
+		case iface + ".createFolder":
+			return []any{false}, nil
+		}
+		return nil, errFakeStop
+	}}
+	withFake(t, f)
+	if err := Set("svc", "user", "v1"); err == nil {
+		t.Fatal("Set succeeded although the folder was refused")
+	}
+	for _, c := range f.calls {
+		if c.method == iface+".writePassword" {
+			t.Error("writePassword was called although the folder was refused")
+		}
+	}
+}
+
+// TestReadPasswordFailureIsAnError: a hit whose read fails must not look like a
+// missing entry.
+func TestReadPasswordFailureIsAnError(t *testing.T) {
+	f := &fakeObj{reply: func(method string, _ []any) ([]any, error) {
+		switch method {
+		case iface + ".localWallet":
+			return []any{"kdewallet"}, nil
+		case iface + ".open":
+			return []any{int32(7)}, nil
+		case iface + ".hasEntry":
+			return []any{true}, nil
+		case iface + ".readPassword":
+			return nil, errors.New("dbus: timed out")
+		}
+		return nil, errFakeStop
+	}}
+	withFake(t, f)
+	if _, err := Get("svc", "user"); err == nil || errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get = %v, want the read failure", err)
 	}
 }
 

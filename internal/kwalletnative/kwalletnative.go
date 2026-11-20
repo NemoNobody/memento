@@ -49,8 +49,7 @@ const (
 var ErrNotFound = errors.New("keyring: entry not found")
 
 type client struct {
-	conn *dbus.Conn
-	obj  dbus.BusObject
+	obj dbus.BusObject
 }
 
 // busUsable reports whether a session bus can be reached without dbus-launch.
@@ -102,7 +101,7 @@ var dial = func() (*client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("kwallet: session bus: %w", err)
 	}
-	return &client{conn: conn, obj: conn.Object(busName, objPath)}, nil
+	return &client{obj: conn.Object(busName, objPath)}, nil
 }
 
 // Available reports whether kwalletd6 owns its bus name. Read-only: it never
@@ -230,7 +229,9 @@ func (c *client) errNoEntry(ctx context.Context, handle int32) error {
 	return ErrNotFound
 }
 
-// Get returns the secret stored under (service, user).
+// Get returns the secret stored under (service, user). An entry that exists but
+// is empty reads back as ErrNotFound: an empty secret is refused on the write
+// side, so this only happens to entries other tools created.
 func Get(service, user string) (string, error) {
 	c, err := dial()
 	if err != nil {

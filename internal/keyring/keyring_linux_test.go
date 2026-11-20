@@ -175,6 +175,36 @@ func TestDispatchSetAndDeletePaths(t *testing.T) {
 			t.Fatalf("Delete = %v, want both the wallet error and ErrBackend", err)
 		}
 	})
+	t.Run("set wraps a wallet failure", func(t *testing.T) {
+		walletErr := errors.New("wallet closed")
+		use(t, stubs{
+			verdict: errRefusal,
+			wallet:  true,
+			wSet:    func(s, u, v string) error { return walletErr },
+		})
+		err := Set("svc", "user", "v")
+		if !errors.Is(err, walletErr) || !errors.Is(err, ErrBackend) {
+			t.Fatalf("Set = %v, want both the wallet error and ErrBackend", err)
+		}
+	})
+	t.Run("delete goes to secret service", func(t *testing.T) {
+		called := false
+		use(t, stubs{ssDel: func(s, u string) error { called = true; return nil }})
+		if err := Delete("svc", "user"); err != nil || !called {
+			t.Fatalf("Delete = %v, called=%v", err, called)
+		}
+	})
+	t.Run("delete falls back to the wallet", func(t *testing.T) {
+		called := false
+		use(t, stubs{
+			verdict: errRefusal,
+			wallet:  true,
+			wDel:    func(s, u string) error { called = true; return nil },
+		})
+		if err := Delete("svc", "user"); err != nil || !called {
+			t.Fatalf("Delete = %v, called=%v", err, called)
+		}
+	})
 }
 
 func TestDispatchRefusesWithoutAnyBackend(t *testing.T) {

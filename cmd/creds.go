@@ -247,7 +247,14 @@ func renderCredsStatus(host string, cfg *config.Config, keyringErr error, backen
 			b.WriteString("present, REFUSED (allow_plaintext off): migrate with 'memento creds set', then remove opensearch_password from the file\n")
 		}
 		if cfg.PasswordSource == "none" {
-			b.WriteString("hint: store with 'memento creds set' (keyring) or export OPENSEARCH_PASSWORD (containers, headless)\n")
+			// A refused backend already prints its own fix above; the generic
+			// "memento creds set" advice would point at a store that cannot be
+			// written to.
+			if errors.Is(keyringErr, keyring.ErrBackend) {
+				b.WriteString("hint: fix the keyring backend listed above, or export OPENSEARCH_PASSWORD\n")
+			} else {
+				b.WriteString("hint: store with 'memento creds set' (keyring) or export OPENSEARCH_PASSWORD (containers, headless)\n")
+			}
 		}
 	}
 	return b.String()
