@@ -84,8 +84,9 @@ skip unless the flag is set.
 
 - **secure profile** (`make dev-opensearch-secure`, https + demo certs) —
   infrastructure ready, live run pending.
-- **Windows Credential Manager** — now run by the `windows` CI job; the policy
-  around it (locked store, dismissed prompt) is still platform-unexplored.
+- **Windows Credential Manager policy** (locked store, dismissed prompt) — the
+  `windows` CI job does create/read/delete on every push, but these paths are
+  unexplored.
 - The OpenSearch **Dashboards bundle** targets the current OSD line; older OSD
   versions are out of scope by decision: adapting saved objects to every old
   OSD line is a maintenance tax with no paying user.

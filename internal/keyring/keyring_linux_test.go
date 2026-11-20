@@ -105,10 +105,11 @@ func TestDispatchWalletNotFoundMapsToErrNotFound(t *testing.T) {
 }
 
 func TestDispatchWalletFailureKeepsRefusalReason(t *testing.T) {
+	walletErr := errors.New("wallet closed")
 	use(t, stubs{
 		verdict: errRefusal,
 		wallet:  true,
-		wGet:    func(s, u string) (string, error) { return "", errors.New("wallet closed") },
+		wGet:    func(s, u string) (string, error) { return "", walletErr },
 	})
 	_, err := Get("svc", "user")
 	if err == nil {
@@ -117,6 +118,63 @@ func TestDispatchWalletFailureKeepsRefusalReason(t *testing.T) {
 	if !strings.Contains(err.Error(), "Secret Service refused") {
 		t.Errorf("error %q does not say why the backend was refused", err)
 	}
+	if !errors.Is(err, walletErr) {
+		t.Errorf("error %q lost the wallet failure", err)
+	}
+	// The refusal must stay matchable: `creds status` keys the container hint
+	// off it, and printing that hint next to a refusal contradicts it.
+	if !errors.Is(err, ErrBackend) {
+		t.Errorf("error %q is not an ErrBackend, so the refusal reason cannot be recognised", err)
+	}
+}
+
+func TestDispatchSetAndDeletePaths(t *testing.T) {
+	t.Run("set goes to secret service", func(t *testing.T) {
+		called := false
+		use(t, stubs{ssSet: func(s, u, v string) error { called = true; return nil }})
+		if err := Set("svc", "user", "v"); err != nil || !called {
+			t.Fatalf("Set = %v, called=%v", err, called)
+		}
+	})
+	t.Run("set falls back to the wallet", func(t *testing.T) {
+		called := false
+		use(t, stubs{
+			verdict: errRefusal,
+			wallet:  true,
+			wSet:    func(s, u, v string) error { called = true; return nil },
+		})
+		if err := Set("svc", "user", "v"); err != nil || !called {
+			t.Fatalf("Set = %v, called=%v", err, called)
+		}
+	})
+	t.Run("set refusal without a wallet", func(t *testing.T) {
+		use(t, stubs{verdict: errRefusal, wallet: false})
+		if err := Set("svc", "user", "v"); !errors.Is(err, ErrBackend) {
+			t.Fatalf("Set = %v, want ErrBackend", err)
+		}
+	})
+	t.Run("delete maps wallet not-found", func(t *testing.T) {
+		use(t, stubs{
+			verdict: errRefusal,
+			wallet:  true,
+			wDel:    func(s, u string) error { return kwalletnative.ErrNotFound },
+		})
+		if err := Delete("svc", "user"); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("Delete = %v, want ErrNotFound", err)
+		}
+	})
+	t.Run("delete wraps a wallet failure", func(t *testing.T) {
+		walletErr := errors.New("wallet closed")
+		use(t, stubs{
+			verdict: errRefusal,
+			wallet:  true,
+			wDel:    func(s, u string) error { return walletErr },
+		})
+		err := Delete("svc", "user")
+		if !errors.Is(err, walletErr) || !errors.Is(err, ErrBackend) {
+			t.Fatalf("Delete = %v, want both the wallet error and ErrBackend", err)
+		}
+	})
 }
 
 func TestDispatchRefusesWithoutAnyBackend(t *testing.T) {

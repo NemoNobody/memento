@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"time"
@@ -53,24 +54,40 @@ type client struct {
 }
 
 // busUsable reports whether a session bus can be reached without dbus-launch.
-// An unset address is fine when godbus can discover $XDG_RUNTIME_DIR/bus (the
-// systemd user session): refusing that case would break a working setup. An
-// explicit "autolaunch:" is not fine — godbus would try to spawn a bus instead
-// of reporting the missing one, which hangs in containers and over ssh.
+// With no usable address godbus discovers /run/user/<uid>/bus (the socket) or
+// /run/user/<uid>/dbus-session (an address file); that discovery is mirrored
+// here, because an explicit "autolaunch:" would otherwise make godbus spawn a
+// bus instead of reporting the missing one, which hangs in containers and over
+// ssh.
 func busUsable() error {
-	switch addr := os.Getenv("DBUS_SESSION_BUS_ADDRESS"); addr {
-	case "":
-		if dir := os.Getenv("XDG_RUNTIME_DIR"); dir != "" {
-			if fi, err := os.Stat(filepath.Join(dir, "bus")); err == nil && fi.Mode()&os.ModeSocket != 0 {
-				return nil
-			}
-		}
-		return errors.New("kwallet: no session bus (containers/ssh): use OPENSEARCH_PASSWORD")
-	case "autolaunch:":
-		return errors.New("kwallet: the session bus address is autolaunch (containers/ssh): use OPENSEARCH_PASSWORD")
-	default:
+	addr := os.Getenv("DBUS_SESSION_BUS_ADDRESS")
+	if addr != "" && addr != "autolaunch:" {
 		return nil
 	}
+	if busDiscovered() {
+		return nil
+	}
+	if addr == "autolaunch:" {
+		return errors.New("kwallet: the session bus address is autolaunch and nothing was discovered (containers/ssh): use OPENSEARCH_PASSWORD")
+	}
+	return errors.New("kwallet: no session bus (containers/ssh): use OPENSEARCH_PASSWORD")
+}
+
+// busDiscovered mirrors godbus' own fallback: the runtime directory is
+// /run/user/<uid> (not $XDG_RUNTIME_DIR), and either file counts. A variable so
+// tests can drive the branches without a live bus.
+var busDiscovered = func() bool {
+	u, err := user.Current()
+	if err != nil {
+		return false
+	}
+	dir := filepath.Join("/run/user", u.Uid)
+	for _, name := range []string{"bus", "dbus-session"} {
+		if _, statErr := os.Stat(filepath.Join(dir, name)); statErr == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // dial binds the wallet object. dbus.SessionBus returns a process-wide shared
@@ -171,10 +188,13 @@ func (c *client) createFolder(ctx context.Context, handle int32, folder string) 
 	if !ok {
 		// createFolder reports false when the folder already exists, and
 		// another process may have created it between our check and this call.
-		if has, err := c.hasFolder(ctx, handle, folder); err == nil && has {
-			return nil
+		has, err := c.hasFolder(ctx, handle, folder)
+		if err != nil {
+			return fmt.Errorf("kwallet: create folder %q: %w", folder, err)
 		}
-		return fmt.Errorf("kwallet: create folder %q refused", folder)
+		if !has {
+			return fmt.Errorf("kwallet: create folder %q refused", folder)
+		}
 	}
 	return nil
 }
@@ -196,10 +216,15 @@ func (c *client) sessionOpen(ctx context.Context, handle int32) (bool, error) {
 }
 
 // errNoEntry distinguishes "the wallet has no such entry" from "the session is
-// gone"; the caller maps the former to ErrNotFound.
+// gone"; the caller maps the former to ErrNotFound. A failure of the check
+// itself is reported as a failure: an unreadable state must never be passed off
+// as "there is no secret".
 func (c *client) errNoEntry(ctx context.Context, handle int32) error {
 	open, err := c.sessionOpen(ctx, handle)
-	if err == nil && !open {
+	if err != nil {
+		return fmt.Errorf("kwallet: isOpen: %w", err)
+	}
+	if !open {
 		return errors.New("kwallet: the wallet session is no longer open (closed or kwalletd restarted): retry, or unlock the wallet")
 	}
 	return ErrNotFound

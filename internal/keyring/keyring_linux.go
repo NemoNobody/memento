@@ -62,12 +62,14 @@ func backendName() string {
 }
 
 // refusedFallback wraps a KWallet-native failure with the Secret Service
-// refusal that sent us there: the user needs both halves to fix the setup.
+// refusal that sent us there: the user needs both halves to fix the setup. The
+// refusal is wrapped with %w as well, so errors.Is(err, ErrBackend) still tells
+// callers (and `creds status`) that no usable backend was found.
 func refusedFallback(err, verdict error) error {
 	if err == nil {
 		return nil
 	}
-	return fmt.Errorf("%w (Secret Service refused: %v)", err, verdict)
+	return fmt.Errorf("%w (Secret Service refused: %w)", err, verdict)
 }
 
 // dispatchGet runs one read through the first usable backend.

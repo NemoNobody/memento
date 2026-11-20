@@ -168,7 +168,7 @@ chmod 600 ~/.memento.conf
   | XFCE / LXQt / MATE / Cinnamon / tiling WMs | whatever Secret Service is installed (usually gnome-keyring) | works if the daemon runs and the keyring is unlocked |
   | KeePassXC (Secret Service integration) | KeePassXC | entries are namespaced by service + username, same as everywhere |
   | headless / container / ssh | none | no bus, no keyring: export `OPENSEARCH_PASSWORD`; `memento status` reports `password_from: env` and the keyring error |
-  | Windows | Windows Credential Manager (zalando/go-keyring) | used by the binary, but not covered by tests and not a supported contract: for a reproducible setup put the password in `OPENSEARCH_PASSWORD` or in a config file readable only by the user |
+  | Windows | Windows Credential Manager (zalando/go-keyring) | exercised by the `windows` CI job, but its locked-store and dismissed-prompt policy is unexplored: for a reproducible setup use `OPENSEARCH_PASSWORD` or a config file only the user can read |
 
   A renamed KDE wallet is the one case that needs the variable:
   `export MEMENTO_KEYRING_COLLECTION=<wallet label>` (kwalletrc "Default Wallet").

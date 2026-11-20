@@ -5,8 +5,7 @@ package kwalletnative
 import (
 	"context"
 	"errors"
-	"net"
-	"path/filepath"
+	"reflect"
 	"testing"
 
 	dbus "github.com/godbus/dbus/v5"
@@ -41,55 +40,65 @@ func TestErrNotFoundIdentity(t *testing.T) {
 }
 
 // TestSetRejectsEmptySecret: an empty value reads back as "not found", so the
-// write must not look successful.
+// write must be refused before any wallet call.
 func TestSetRejectsEmptySecret(t *testing.T) {
-	t.Setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent")
+	orig := dial
+	dial = func() (*client, error) {
+		t.Fatal("Set must reject an empty secret before touching the wallet")
+		return nil, errors.New("unreachable")
+	}
+	t.Cleanup(func() { dial = orig })
+
 	if err := Set("service", "user", ""); err == nil {
 		t.Fatal("Set accepted an empty secret")
 	}
 }
 
 func TestBusUsable(t *testing.T) {
+	withDiscovery := func(t *testing.T, discovered bool) {
+		t.Helper()
+		orig := busDiscovered
+		busDiscovered = func() bool { return discovered }
+		t.Cleanup(func() { busDiscovered = orig })
+	}
+
 	t.Run("explicit address", func(t *testing.T) {
 		t.Setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/1000/bus")
+		withDiscovery(t, false)
 		if err := busUsable(); err != nil {
 			t.Fatalf("busUsable: %v", err)
 		}
 	})
-	t.Run("autolaunch is refused", func(t *testing.T) {
+	t.Run("discovered bus without the variable", func(t *testing.T) {
+		t.Setenv("DBUS_SESSION_BUS_ADDRESS", "")
+		withDiscovery(t, true)
+		if err := busUsable(); err != nil {
+			t.Fatalf("busUsable with a discovered bus: %v", err)
+		}
+	})
+	t.Run("autolaunch is refused when nothing is discovered", func(t *testing.T) {
 		t.Setenv("DBUS_SESSION_BUS_ADDRESS", "autolaunch:")
+		withDiscovery(t, false)
 		if err := busUsable(); err == nil {
 			t.Fatal("autolaunch: accepted; godbus would try to spawn a bus")
 		}
 	})
-	t.Run("discovered socket is accepted", func(t *testing.T) {
-		dir := t.TempDir()
+	t.Run("no address and no discovery", func(t *testing.T) {
 		t.Setenv("DBUS_SESSION_BUS_ADDRESS", "")
-		t.Setenv("XDG_RUNTIME_DIR", dir)
-		l, err := net.Listen("unix", filepath.Join(dir, "bus"))
-		if err != nil {
-			t.Skipf("unix sockets unavailable: %v", err)
-		}
-		defer func() { _ = l.Close() }()
-		if err := busUsable(); err != nil {
-			t.Fatalf("busUsable with a live socket: %v", err)
-		}
-	})
-	t.Run("no address and no socket", func(t *testing.T) {
-		t.Setenv("DBUS_SESSION_BUS_ADDRESS", "")
-		t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+		withDiscovery(t, false)
 		if err := busUsable(); err == nil {
 			t.Fatal("missing bus accepted")
 		}
 	})
 }
 
-// fakeObj records D-Bus calls and fails them, so a helper stops right after the
-// call it made. It is what catches the argument-order class of bugs that made
-// an earlier iteration look like a corrupted wallet: the wallet name sent where
-// kwalletd expects the appId.
+// fakeObj records D-Bus calls and answers them from reply, so a test can drive
+// Get/Set/Delete end to end and compare the exact argument list of every call.
+// It is what catches the argument-order class of bugs that made an earlier
+// iteration look like a corrupted wallet.
 type fakeObj struct {
 	calls []recordedCall
+	reply func(method string, args []any) ([]any, error)
 }
 
 type recordedCall struct {
@@ -97,11 +106,15 @@ type recordedCall struct {
 	args   []any
 }
 
-var errFakeStop = errors.New("fake: stop after recording")
+var errFakeStop = errors.New("fake: no reply configured")
 
 func (f *fakeObj) rec(method string, args []any) *dbus.Call {
 	f.calls = append(f.calls, recordedCall{method: method, args: args})
-	return &dbus.Call{Err: errFakeStop}
+	if f.reply == nil {
+		return &dbus.Call{Err: errFakeStop}
+	}
+	body, err := f.reply(method, args)
+	return &dbus.Call{Body: body, Err: err}
 }
 
 func (f *fakeObj) Call(m string, _ dbus.Flags, a ...any) *dbus.Call { return f.rec(m, a) }
@@ -126,50 +139,174 @@ func (f *fakeObj) SetProperty(string, any) error            { return errFakeStop
 func (f *fakeObj) Destination() string                      { return busName }
 func (f *fakeObj) Path() dbus.ObjectPath                    { return objPath }
 
-// TestWalletCallsPassAppIDLast pins the shape of every wallet call: the handle
-// first, the appId last, and the wallet name nowhere. It is the regression test
-// for the bug that broke writes against a real kwalletd.
-func TestWalletCallsPassAppIDLast(t *testing.T) {
-	f := &fakeObj{}
-	c := &client{obj: f}
-	ctx := context.Background()
-	h := int32(7)
+// withFake makes dial return a client backed by f for the duration of a test.
+func withFake(t *testing.T, f *fakeObj) {
+	t.Helper()
+	orig := dial
+	dial = func() (*client, error) { return &client{obj: f}, nil }
+	t.Cleanup(func() { dial = orig })
+}
 
-	_, _ = c.hasFolder(ctx, h, "svc")
-	_ = c.createFolder(ctx, h, "svc")
-	_, _ = c.hasEntry(ctx, h, "svc", "user")
-	_, _ = c.sessionOpen(ctx, h)
-	var s string
-	_ = c.call(ctx, "readPassword", h, "svc", "user", appID).Store(&s)
-	var n int32
-	_ = c.call(ctx, "writePassword", h, "svc", "user", "value", appID).Store(&n)
-	_ = c.call(ctx, "removeEntry", h, "svc", "user", appID).Store(&n)
-
-	wantMethods := []string{"hasFolder", "createFolder", "hasEntry", "isOpen", "readPassword", "writePassword", "removeEntry"}
-	if len(f.calls) != len(wantMethods) {
-		t.Fatalf("recorded %d calls, want %d: %+v", len(f.calls), len(wantMethods), f.calls)
+// replies maps a method to its canned answer; an unlisted method fails the test.
+func replies(t *testing.T, table map[string]any) func(string, []any) ([]any, error) {
+	t.Helper()
+	return func(method string, _ []any) ([]any, error) {
+		body, ok := table[method]
+		if !ok {
+			t.Errorf("unexpected D-Bus method %q", method)
+			return nil, errFakeStop
+		}
+		return body.([]any), nil
 	}
-	for i, want := range wantMethods {
-		got := f.calls[i]
-		if got.method != iface+"."+want {
-			t.Errorf("call %d: method %q, want %q", i, got.method, iface+"."+want)
+}
+
+func assertCalls(t *testing.T, got []recordedCall, want []recordedCall) {
+	t.Helper()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("calls:\n got  %#v\n want %#v", got, want)
+	}
+}
+
+// TestGetCallShape pins every argument of a miss: the handle first, the appId
+// last, and the middle arguments in their documented order.
+func TestGetCallShape(t *testing.T) {
+	f := &fakeObj{reply: replies(t, map[string]any{
+		iface + ".localWallet": []any{"kdewallet"},
+		iface + ".open":        []any{int32(7)},
+		iface + ".hasEntry":    []any{false},
+		iface + ".isOpen":      []any{true},
+	})}
+	withFake(t, f)
+
+	if _, err := Get("svc", "user"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get = %v, want ErrNotFound", err)
+	}
+	assertCalls(t, f.calls, []recordedCall{
+		{iface + ".localWallet", nil},
+		{iface + ".open", []any{"kdewallet", int64(0), appID}},
+		{iface + ".hasEntry", []any{int32(7), "svc", "user", appID}},
+		{iface + ".isOpen", []any{int32(7)}},
+	})
+}
+
+// TestGetReturnsValue covers the hit path (no isOpen call).
+func TestGetReturnsValue(t *testing.T) {
+	f := &fakeObj{reply: replies(t, map[string]any{
+		iface + ".localWallet":  []any{"kdewallet"},
+		iface + ".open":         []any{int32(7)},
+		iface + ".hasEntry":     []any{true},
+		iface + ".readPassword": []any{"v1"},
+	})}
+	withFake(t, f)
+
+	got, err := Get("svc", "user")
+	if err != nil || got != "v1" {
+		t.Fatalf("Get = (%q, %v), want (v1, nil)", got, err)
+	}
+	assertCalls(t, f.calls, []recordedCall{
+		{iface + ".localWallet", nil},
+		{iface + ".open", []any{"kdewallet", int64(0), appID}},
+		{iface + ".hasEntry", []any{int32(7), "svc", "user", appID}},
+		{iface + ".readPassword", []any{int32(7), "svc", "user", appID}},
+	})
+}
+
+// TestSetCallShape pins the write path, including the folder creation.
+func TestSetCallShape(t *testing.T) {
+	f := &fakeObj{reply: replies(t, map[string]any{
+		iface + ".localWallet":   []any{"kdewallet"},
+		iface + ".open":          []any{int32(7)},
+		iface + ".hasFolder":     []any{false},
+		iface + ".createFolder":  []any{true},
+		iface + ".writePassword": []any{int32(0)},
+	})}
+	withFake(t, f)
+
+	if err := Set("svc", "user", "v1"); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	assertCalls(t, f.calls, []recordedCall{
+		{iface + ".localWallet", nil},
+		{iface + ".open", []any{"kdewallet", int64(0), appID}},
+		{iface + ".hasFolder", []any{int32(7), "svc", appID}},
+		{iface + ".createFolder", []any{int32(7), "svc", appID}},
+		{iface + ".writePassword", []any{int32(7), "svc", "user", "v1", appID}},
+	})
+}
+
+// TestSetRefusedCodeIsAnError: a negative return code must never look like a
+// successful write.
+func TestSetRefusedCodeIsAnError(t *testing.T) {
+	f := &fakeObj{reply: replies(t, map[string]any{
+		iface + ".localWallet":   []any{"kdewallet"},
+		iface + ".open":          []any{int32(7)},
+		iface + ".hasFolder":     []any{true},
+		iface + ".writePassword": []any{int32(-1)},
+	})}
+	withFake(t, f)
+	if err := Set("svc", "user", "v1"); err == nil {
+		t.Fatal("Set reported success for return code -1")
+	}
+}
+
+// TestDeleteCallShape pins the removal path.
+func TestDeleteCallShape(t *testing.T) {
+	f := &fakeObj{reply: replies(t, map[string]any{
+		iface + ".localWallet": []any{"kdewallet"},
+		iface + ".open":        []any{int32(7)},
+		iface + ".hasEntry":    []any{true},
+		iface + ".removeEntry": []any{int32(0)},
+	})}
+	withFake(t, f)
+
+	if err := Delete("svc", "user"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	assertCalls(t, f.calls, []recordedCall{
+		{iface + ".localWallet", nil},
+		{iface + ".open", []any{"kdewallet", int64(0), appID}},
+		{iface + ".hasEntry", []any{int32(7), "svc", "user", appID}},
+		{iface + ".removeEntry", []any{int32(7), "svc", "user", appID}},
+	})
+}
+
+// TestClosedSessionIsNotANotFound: a dead handle must not be reported as a
+// missing secret; the caller has to retry or unlock the wallet.
+func TestClosedSessionIsNotANotFound(t *testing.T) {
+	f := &fakeObj{reply: replies(t, map[string]any{
+		iface + ".localWallet": []any{"kdewallet"},
+		iface + ".open":        []any{int32(7)},
+		iface + ".hasEntry":    []any{false},
+		iface + ".isOpen":      []any{false},
+	})}
+	withFake(t, f)
+
+	_, err := Get("svc", "user")
+	if err == nil || errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get = %v, want a session error, not ErrNotFound", err)
+	}
+}
+
+// TestIsOpenFailureIsNotANotFound: a failed check is a failure, never "the
+// secret is absent" — that would let a broken bus look like an empty store.
+func TestIsOpenFailureIsNotANotFound(t *testing.T) {
+	f := &fakeObj{reply: func(method string, _ []any) ([]any, error) {
+		switch method {
+		case iface + ".localWallet":
+			return []any{"kdewallet"}, nil
+		case iface + ".open":
+			return []any{int32(7)}, nil
+		case iface + ".hasEntry":
+			return []any{false}, nil
+		case iface + ".isOpen":
+			return nil, errors.New("dbus: connection closed")
 		}
-		if len(got.args) == 0 || got.args[0] != int32(7) {
-			t.Errorf("call %d (%s): first arg %v, want the handle", i, want, got.args)
-		}
-		for _, a := range got.args {
-			if str, ok := a.(string); ok && str == defaultWallet {
-				t.Errorf("call %d (%s): the wallet name is sent as an argument (%v); kwalletd expects the appId", i, want, got.args)
-			}
-		}
-		if want == "isOpen" {
-			if len(got.args) != 1 {
-				t.Errorf("isOpen args = %v, want only the handle", got.args)
-			}
-			continue
-		}
-		if last := got.args[len(got.args)-1]; last != appID {
-			t.Errorf("call %d (%s): last arg = %v, want appID %q", i, want, last, appID)
-		}
+		return nil, errFakeStop
+	}}
+	withFake(t, f)
+
+	_, err := Get("svc", "user")
+	if err == nil || errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get = %v, want the isOpen failure to surface", err)
 	}
 }

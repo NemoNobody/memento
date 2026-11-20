@@ -22,9 +22,10 @@ response within a few days.
 - The OS keyring is **best-effort per platform**: Secret Service on Linux
   (gnome-keyring, or KWallet serving the name; plus a KWallet-native D-Bus
   fallback when nothing owns the name), Keychain on macOS. On Windows the
-  binary uses Credential Manager through the same library, but it is untested
-  there and not a supported contract — use `OPENSEARCH_PASSWORD` or a config
-  file only the user can read. When the backend is unusable, the secret is not
+  binary uses Credential Manager through the same library and the `windows` CI
+  job exercises it, but the policy around a locked store or a dismissed prompt
+  is unexplored — a config file only the user can read or `OPENSEARCH_PASSWORD`
+  stays the reproducible path. When the backend is unusable, the secret is not
   written at all — there is no silent success: `memento creds set` fails with a
   hint instead. On KDE where gnome-keyring owns `org.freedesktop.secrets`, that
   provider is refused explicitly (its login collection uses an ephemeral master
