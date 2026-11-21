@@ -10,9 +10,9 @@ index-pattern-field". Re-run this after a mapping change, rebuild the binary
 Usage (from the repo root):
     python3 docker/dashboards/gen_fields.py [path-to-velruna.conf]
 
-The cluster URL/user come from the config file (default ./velruna.conf);
-the password resolves via `velruna creds get` / OPENSEARCH_PASSWORD.
-Never prints the password.
+The cluster URL/user come from OPENSEARCH_URL/OPENSEARCH_USER, else the config
+file (default ./velruna.conf); the password resolves via `velruna creds get` /
+OPENSEARCH_PASSWORD. Never prints the password.
 """
 import base64
 import json
@@ -100,8 +100,9 @@ def main():
     conf_path = sys.argv[1] if len(sys.argv) > 1 else "velruna.conf"
     with open(conf_path, encoding="utf-8") as f:
         conf = json.load(f)
-    url = os.environ.get("VELRUNA_OS_URL") or conf.get("opensearch_url")
-    user = os.environ.get("VELRUNA_OS_USER") or conf.get("opensearch_user", "admin")
+    url = os.environ.get("OPENSEARCH_URL") or os.environ.get("VELRUNA_OS_URL") or conf.get("opensearch_url")
+    user = (os.environ.get("OPENSEARCH_USER") or os.environ.get("VELRUNA_OS_USER")
+            or conf.get("opensearch_user", "admin"))
     pw = os.environ.get("OPENSEARCH_PASSWORD")
     if not pw:
         velruna = os.environ.get("VELRUNA_BIN") or "velruna"

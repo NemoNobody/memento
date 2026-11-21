@@ -28,9 +28,12 @@ velruna dashboards push --index .kibana_1     # skip the alias probe
 On the dev stack `make dev-opensearch-dashboards` does both at once — it
 starts the UI, waits for it and pushes the bundle automatically.
 
-It resolves cluster credentials the same way the server does (wallet first)
-and writes the saved objects **directly into the global tenant storage** (the
-`.kibana` alias backing index).
+It resolves cluster credentials with the same chain as the server
+(`OPENSEARCH_PASSWORD` → the OS keyring → the config file when `allow_plaintext`
+is on) and writes the saved objects **directly into the global tenant storage**
+(the `.kibana` alias backing index). Dashboards must have started at least once
+against the cluster: the saved-objects index only exists after that, and the
+command says so when the alias is missing.
 
 After the push: open Dashboards, make sure the tenant switcher (avatar menu →
 Switch tenants) shows **Global**, and hard-reload the tab — the SPA caches

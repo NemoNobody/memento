@@ -12,12 +12,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var dashFlags struct {
-	conf  string
-	index string
-	file  string
-}
-
 // DashboardsCmd returns the `velruna dashboards` command group: maintenance of
 // the OpenSearch Dashboards side of the store.
 func DashboardsCmd() *cobra.Command {
@@ -30,6 +24,15 @@ func DashboardsCmd() *cobra.Command {
 }
 
 func dashboardsPushCmd() *cobra.Command {
+	// Flags live in the constructor, not in a package-level struct: the command
+	// tree is documented as independent per NewRootCmd call, and a shared
+	// struct would leak state between two trees built in one process.
+	var flags struct {
+		conf  string
+		index string
+		file  string
+	}
+
 	push := &cobra.Command{
 		Use:   "push",
 		Short: "Write the overview bundle into the global Dashboards tenant",
@@ -48,7 +51,7 @@ chain as every other command. The Dashboards index only exists after
 OpenSearch Dashboards has started at least once against the cluster.`,
 		Args: cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			cfg, err := loadDashboardsConfig()
+			cfg, err := loadDashboardsConfig(flags.conf)
 			if err != nil {
 				fatalErr(err)
 			}
@@ -59,36 +62,41 @@ OpenSearch Dashboards has started at least once against the cluster.`,
 				fatalErr(err)
 			}
 			bundle := dashboards.Bundle()
-			if dashFlags.file != "" {
-				bundle, err = os.ReadFile(dashFlags.file)
+			if flags.file != "" {
+				bundle, err = os.ReadFile(flags.file)
 				if err != nil {
 					fatalErr(fmt.Errorf("read bundle: %w", err))
 				}
 			}
-			res, err := c.PushDashboards(context.Background(), bundle, dashFlags.index)
+			res, err := c.PushDashboards(context.Background(), bundle, flags.index)
+			// Report before failing: when the final refresh is rejected the
+			// objects are already written, and the operator needs the counts to
+			// know that a retry is safe rather than duplicated.
+			if res != nil {
+				if werr := printDashboardPush(res, cfg.OpenSearchURL); werr != nil {
+					fatalErr(werr)
+				}
+			}
 			if err != nil {
 				fatalErr(err)
-			}
-			if werr := printDashboardPush(res, cfg.OpenSearchURL); werr != nil {
-				fatalErr(werr)
 			}
 			if res.Failed > 0 {
 				os.Exit(1)
 			}
 		},
 	}
-	push.Flags().StringVar(&dashFlags.conf, "conf", "",
+	push.Flags().StringVar(&flags.conf, "conf", "",
 		"config file to use (overrides VELRUNA_CONF and the default lookup)")
-	push.Flags().StringVar(&dashFlags.index, "index", "",
+	push.Flags().StringVar(&flags.index, "index", "",
 		"saved-objects write index (default: resolve the .kibana alias)")
-	push.Flags().StringVar(&dashFlags.file, "file", "",
+	push.Flags().StringVar(&flags.file, "file", "",
 		"bundle to push (default: the one embedded in this binary)")
 	return push
 }
 
-func loadDashboardsConfig() (*config.Config, error) {
-	if dashFlags.conf != "" {
-		return config.LoadConfigFrom(dashFlags.conf)
+func loadDashboardsConfig(conf string) (*config.Config, error) {
+	if conf != "" {
+		return config.LoadConfigFrom(conf)
 	}
 	return config.LoadConfig()
 }
@@ -98,8 +106,12 @@ func loadDashboardsConfig() (*config.Config, error) {
 // session, so a fresh push looks absent until the tab is reloaded, and any
 // tenant other than Global shows the personal copy instead.
 func printDashboardPush(res *client.DashboardPush, url string) error {
-	if err := writeLine(os.Stdout, fmt.Sprintf("indexed %d saved object(s) into %s (global tenant) at %s",
-		res.Indexed, res.Index, url)); err != nil {
+	tenant := "requested index"
+	if res.Global {
+		tenant = "global tenant"
+	}
+	if err := writeLine(os.Stdout, fmt.Sprintf("indexed %d saved object(s) into %s (%s) at %s",
+		res.Indexed, res.Index, tenant, url)); err != nil {
 		return err
 	}
 	for _, e := range res.Errors {
@@ -111,6 +123,9 @@ func printDashboardPush(res *client.DashboardPush, url string) error {
 		if _, werr := fmt.Fprintf(os.Stderr, "%d object(s) failed\n", res.Failed); werr != nil {
 			return werr
 		}
+		return nil
+	}
+	if !res.Global {
 		return nil
 	}
 	return writeLine(os.Stdout, "open Dashboards, pick the Global tenant in the tenant switcher and "+

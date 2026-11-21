@@ -30,7 +30,9 @@ jobs:
           ref: ${{ inputs.version || github.ref }}
 
       # GHCR rejects uppercase repository owners, and a dispatched run must
-      # derive its tags from the input rather than from the branch ref.
+      # derive its tags from the input rather than from the branch ref. The
+      # semver shape is enforced: a stray tag (or a branch name typed into the
+      # dispatch box) must never publish "latest".
       - name: Compute image name and tags
         id: img
         env:
@@ -38,13 +40,28 @@ jobs:
           REF: ${{ inputs.version || github.ref_name }}
         run: |
           set -euo pipefail
+          case "$REF" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::not a release tag: $REF (expected vX.Y.Z)"; exit 1 ;;
+          esac
           semver="${REF#v}"
+          if ! printf '%s' "$semver" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::not a semantic version: $semver"; exit 1
+          fi
           major_minor="$(printf '%s' "$semver" | cut -d. -f1,2)"
           {
             echo "owner=$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')"
+            echo "ref=$REF"
             echo "semver=$semver"
             echo "major_minor=$major_minor"
             echo "sha=$(git rev-parse --short HEAD)"
+            # A pre-release must not take the "latest" slot: release.yml marks
+            # rc tags as prereleases for the same reason.
+            if printf '%s' "$semver" | grep -q -- '-'; then
+              echo "prerelease=true"
+            else
+              echo "prerelease=false"
+            fi
           } >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-qemu-action@v3
@@ -56,14 +73,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - id: meta
-        uses: docker/metadata-action@v5
+      - uses: docker/metadata-action@v5
+        id: meta
         with:
           images: ghcr.io/${{ steps.img.outputs.owner }}/velruna
           tags: |
             type=raw,value=${{ steps.img.outputs.semver }}
             type=raw,value=${{ steps.img.outputs.major_minor }}
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ steps.img.outputs.prerelease == 'false' }}
           labels: |
             org.opencontainers.image.title=velruna
             org.opencontainers.image.description=Verified-fact memory for AI agents: MCP server and CLI, OpenSearch-backed
@@ -77,8 +94,10 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # The binaries stamp the tag (v0.9.0) — keep the image identical so
+          # `velruna status` from a container matches a plain install.
           build-args: |
-            VERSION=${{ steps.img.outputs.semver }}
+            VERSION=${{ steps.img.outputs.ref }}
             COMMIT=${{ steps.img.outputs.sha }}
           provenance: mode=max
           sbom: true

@@ -112,10 +112,11 @@ dev-opensearch-secure:
 
 # Container image. Release tags are published by .github/workflows/image.yml;
 # locally the build stamps the same version/commit as `make build`.
-IMAGE ?= ghcr.io/nemonobody/velruna
+IMAGE  ?= ghcr.io/nemonobody/velruna
+DOCKER ?= docker
 
 docker-build:
-	docker build \
+	$(DOCKER) build \
 	  --build-arg VERSION=$(VERSION) \
 	  --build-arg COMMIT=$(COMMIT) \
 	  -t $(IMAGE):dev .
@@ -125,13 +126,15 @@ docker-build:
 # proves the image runs and the binary is intact (distroless has no shell, so
 # `--help` is the cheapest proof).
 docker-smoke: docker-build
-	docker run --rm $(IMAGE):dev --help >/dev/null
+	$(DOCKER) run --rm $(IMAGE):dev --help >/dev/null
 	@echo "image ok: $(IMAGE):dev"
 
-# OpenSearch + velruna (the dashboards UI stays opt-in via
-# dev-opensearch-dashboards).
+# OpenSearch up, then one velruna run against it. The service is deliberately
+# not left running: a stdio MCP server has nothing to do until a client starts
+# it, and an exited container lying around is just confusing.
 stack-up:
 	$(CONTAINER) -f $(OSFILE) --profile single --profile app up -d
+	$(CONTAINER) -f $(OSFILE) --profile single --profile app run --rm velruna status
 
 stack-down:
 	$(CONTAINER) -f $(OSFILE) $(OS_PROFILES) down

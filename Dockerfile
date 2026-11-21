@@ -3,7 +3,10 @@
 # velruna is a static Go binary: the runtime image needs the file and nothing
 # else. The build stage pins the Go version to the go.mod directive so an image
 # and a local build cannot drift.
-FROM golang:1.26 AS build
+#
+# BUILDPLATFORM keeps the compiler on the build host and cross-compiles for the
+# target: the arm64 image then costs seconds instead of an emulated full build.
+FROM --platform=$BUILDPLATFORM golang:1.26 AS build
 WORKDIR /src
 
 # Dependency layer first: source edits then rebuild without re-downloading.
@@ -14,9 +17,11 @@ COPY . .
 
 # Version and commit are stamped exactly like `make build` does: the binary
 # reports them in `velruna status`, so an image can be traced to a tag.
+ARG TARGETOS
+ARG TARGETARCH
 ARG VERSION=0.0.0-dev
 ARG COMMIT=unknown
-RUN CGO_ENABLED=0 go build -trimpath \
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath \
         -ldflags "-s -w \
             -X github.com/NemoNobody/velruna/internal/version.Version=${VERSION} \
             -X github.com/NemoNobody/velruna/internal/version.Commit=${COMMIT}" \
@@ -24,12 +29,15 @@ RUN CGO_ENABLED=0 go build -trimpath \
 
 # distroless/static carries CA certificates (HTTPS to OpenSearch) and nothing
 # else: no shell, no package manager, so code execution has nothing to run.
-# nonroot = uid 65532; mount a config the operator owns and keeps at 0600.
+# nonroot = uid 65532.
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/velruna /velruna
 
-# A container has no session bus, so the OS keyring is unreachable: the
-# password comes from OPENSEARCH_PASSWORD or the mounted config file.
-ENV VELRUNA_CONF=/etc/velruna/velruna.conf
+# No VELRUNA_CONF default on purpose: the binary's own lookup (--conf,
+# VELRUNA_CONF, ./velruna.conf, next to the binary, ~/.velruna.conf) then works
+# unchanged, and `docker run -e OPENSEARCH_URL -e OPENSEARCH_PASSWORD` needs no
+# config file at all. A mounted config is still the normal setup — see
+# docs/setup.md. A container has no session bus, so the OS keyring is
+# unreachable: the password comes from the environment or the config file.
 
 ENTRYPOINT ["/velruna"]

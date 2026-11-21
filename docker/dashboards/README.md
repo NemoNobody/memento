@@ -6,9 +6,10 @@ the dashboard itself. The file is embedded into the binary (`go:embed`), so the
 push needs nothing but `velruna` itself. Stable `velruna-store-*` ids make the
 push idempotent (update in place).
 
-Push with `velruna dashboards push` (same wallet-first credential chain as the
-MCP server; the cluster address comes from the config, `OPENSEARCH_URL` or the
-default). The command talks to the CLUSTER, not the Dashboards port: it indexes
+Push with `velruna dashboards push` (the same credential chain as the MCP
+server: `OPENSEARCH_PASSWORD`, then the OS keyring, then the config file when
+`allow_plaintext` is on; the cluster address comes from the config,
+`OPENSEARCH_URL` or the default). The command talks to the CLUSTER, not the Dashboards port: it indexes
 the objects directly into the `.kibana` alias backing index, which IS the
 global tenant's storage. The saved-objects REST API is not used on purpose —
 the `security_tenant: global` header is ignored for basic-auth requests

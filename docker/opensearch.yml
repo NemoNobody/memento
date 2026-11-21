@@ -72,13 +72,13 @@ services:
       opensearch:
         condition: service_healthy
     command: ["status"]
-    # Dummy credentials, not a secret: the dev node runs with the security
-    # plugin off (the documented dev rule, loopback-bound). For a secured
-    # cluster drop these and use an env-file or a mounted config the operator
-    # owns at 0600.
+    # The mounted config carries no credentials; the dev node runs with the
+    # security plugin off, so a dummy pair is enough. Both are overridable for a
+    # secured store: OPENSEARCH_USER=admin OPENSEARCH_PASSWORD=... make stack-up
     environment:
-      - OPENSEARCH_USER=dev
-      - OPENSEARCH_PASSWORD=dev
+      - VELRUNA_CONF=/etc/velruna/velruna.conf
+      - OPENSEARCH_USER=${OPENSEARCH_USER:-dev}
+      - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD:-dev}
       # Provenance labels are self-reported and default to the OS user, which
       # inside a container is "nonroot". Set these so facts written from the
       # container carry a useful author/host.

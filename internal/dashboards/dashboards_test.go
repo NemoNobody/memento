@@ -119,3 +119,47 @@ func TestParseSkipsBlankLines(t *testing.T) {
 		t.Fatalf("Parse returned %d objects, want 1", len(objs))
 	}
 }
+
+// A duplicate id makes "indexed 22" mean 21 installed and hides a generator
+// bug behind a clean-looking run.
+func TestParseRejectsDuplicateIDs(t *testing.T) {
+	bundle := `{"id":"a","type":"dashboard","attributes":{}}` + "\n" +
+		`{"id":"a","type":"dashboard","attributes":{}}` + "\n"
+	_, err := Parse([]byte(bundle))
+	if err == nil {
+		t.Fatal("Parse accepted a duplicate object")
+	}
+	if !strings.Contains(err.Error(), "duplicate") {
+		t.Errorf("error = %v, want it to name the duplication", err)
+	}
+}
+
+// "references": null decodes to a nil slice; the UI needs an array or the
+// visualization loses its link to the index pattern.
+func TestDocumentNormalizesNullReferences(t *testing.T) {
+	objs, err := Parse([]byte(`{"id":"x","type":"visualization","attributes":{},"references":null}`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	raw, err := objs[0].Document(time.Now())
+	if err != nil {
+		t.Fatalf("Document: %v", err)
+	}
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("Document output is not JSON: %v", err)
+	}
+	if string(doc["references"]) != "[]" {
+		t.Errorf("references = %s, want []", doc["references"])
+	}
+}
+
+func TestDocumentRejectsNonArrayReferences(t *testing.T) {
+	objs, err := Parse([]byte(`{"id":"x","type":"visualization","attributes":{},"references":{}}`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if _, err := objs[0].Document(time.Now()); err == nil {
+		t.Fatal("Document accepted a non-array references field")
+	}
+}

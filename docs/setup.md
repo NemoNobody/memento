@@ -89,7 +89,7 @@ command by hand:
 ```
 velruna dashboards push                       # defaults to the config's opensearch_url
 OPENSEARCH_URL=http://db-host:9200 velruna dashboards push
-velruna dashboards push --conf ~/.config/velruna/velruna.conf
+velruna dashboards push --conf ~/.velruna.conf
 ```
 
 Re-runnable: objects carry stable `velruna-store-*` ids and are overwritten
@@ -119,37 +119,68 @@ show (all loopback-bound, all torn down by `make dev-opensearch-down`):
 ### velruna itself in a container
 
 The release workflow publishes `ghcr.io/nemonobody/velruna` for `linux/amd64`
-and `linux/arm64`, tagged `X.Y.Z`, `X.Y` and `latest`. The image is distroless
-(no shell, 14 MB) and runs as uid 65532; it holds the binary only — the config
-is mounted at run time and nothing secret is baked in.
+and `linux/arm64`, tagged `X.Y.Z`, `X.Y` and `latest` (the last one only for a
+final release, never for a pre-release). The image is distroless (no shell,
+~14 MB) and runs as uid 65532; it holds the binary only — nothing secret is
+baked in.
+
+The package is created **private** on the first push: set it to public once in
+the repository's package settings (`Packages` → the package → *Package
+settings* → *Change visibility* → public) and link it to the repository.
+Without that step an anonymous `docker run` fails with
+`denied: requested access to the resource is denied`.
 
 ```bash
-# CLI against a store you already have
+# CLI against a store you already have (config path: --conf, else VELRUNA_CONF)
 docker run --rm -i \
-  -v ~/.config/velruna/velruna.conf:/etc/velruna/velruna.conf:ro \
+  -v ~/.velruna.conf:/etc/velruna/velruna.conf:ro \
+  -e VELRUNA_CONF=/etc/velruna/velruna.conf \
   -e OPENSEARCH_PASSWORD \
   ghcr.io/nemonobody/velruna:0.9.0 status
 
+# No config file at all: the connection can come from the environment
+OPENSEARCH_URL=https://os.example:9200 OPENSEARCH_USER=admin docker run --rm -i \
+  -e OPENSEARCH_URL -e OPENSEARCH_USER -e OPENSEARCH_PASSWORD \
+  ghcr.io/nemonobody/velruna:0.9.0 status
+
 # MCP over stdio: the client starts the process, so the container is run with -i
-docker run -i --rm -v ~/.config/velruna/velruna.conf:/etc/velruna/velruna.conf:ro \
-  -e OPENSEARCH_PASSWORD ghcr.io/nemonobody/velruna:0.9.0 mcp
+docker run -i --rm -v ~/.velruna.conf:/etc/velruna/velruna.conf:ro \
+  -e VELRUNA_CONF=/etc/velruna/velruna.conf -e OPENSEARCH_PASSWORD \
+  ghcr.io/nemonobody/velruna:0.9.0 mcp
 ```
 
-Or bring up OpenSearch and velruna together (the Dashboards UI stays opt-in):
+Or bring up OpenSearch and run velruna against it (the Dashboards UI stays
+opt-in):
 
 ```bash
-make stack-up        # compose --profile single --profile app up -d
-docker compose -f docker/opensearch.yml --profile single --profile app \
-  run --rm velruna status
+make stack-up        # opensearch up -d, then one velruna status run
 make stack-down
 ```
 
 `docker/velruna.container.conf` is the config the stack mounts: it points at
 `http://opensearch:9200` and carries no credentials — the dev node runs with
-the security plugin off, and the compose service passes the dummy `dev/dev`
-pair. Override with `VELRUNA_CONF_FILE=<path>` and `VELRUNA_IMAGE=<tag>`.
+the security plugin off, and the compose service supplies the dummy `dev/dev`
+pair (override with `OPENSEARCH_USER`/`OPENSEARCH_PASSWORD`). Point
+`VELRUNA_CONF_FILE=<path>` at your own config or `VELRUNA_IMAGE=<tag>` at a
+pinned image.
+
+A mounted config must be **readable by uid 65532**, so `chmod 600` on the host
+owner does not work — either `chmod 644` it (it holds no password if the
+password comes from the environment), or `chown 65532:65532` it, or run the
+container with `--user "$(id -u):$(id -g)"`. Docker creates a *directory* at
+the mount source when the host path does not exist, and the container then
+fails with `is a directory` — check the path before blaming the image.
 
 Two differences from a host install:
+
+- **no keyring**: a container has no session bus, so the password comes from
+  `OPENSEARCH_PASSWORD` or from the config file (`allow_plaintext: true`).
+  `-e OPENSEARCH_PASSWORD` forwards it from the client environment;
+  `docker inspect` exposes it to anyone who can reach the daemon, so keep the
+  socket private (the default) or use an owner-only env-file;
+- **author label**: provenance defaults to the OS user inside the container,
+  which is `nonroot`. Set `VELRUNA_AUTHOR` and `VELRUNA_HOST` (the compose
+  service forwards both) so shared-store facts stay attributable.
 
 - **no keyring**: a container has no session bus, so the password comes from
   `OPENSEARCH_PASSWORD` or from the config file (`allow_plaintext: true`).
@@ -164,7 +195,7 @@ Two differences from a host install:
 
 Config lookup order:
 
-1. `--conf <path>` flag (`velruna mcp` and `velruna status` only)
+1. `--conf <path>` flag (`velruna mcp`, `velruna status`, `velruna dashboards push`)
 2. `VELRUNA_CONF` environment variable
 3. `./velruna.conf` (current directory)
 4. `velruna.conf` next to the binary

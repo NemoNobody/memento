@@ -57,6 +57,7 @@ func Parse(bundle []byte) ([]Object, error) {
 	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 
 	var objs []Object
+	seen := make(map[string]struct{})
 	line := 0
 	for sc.Scan() {
 		line++
@@ -74,6 +75,12 @@ func Parse(bundle []byte) ([]Object, error) {
 		if len(o.Attributes) == 0 {
 			return nil, fmt.Errorf("bundle line %d (%s): object without attributes", line, o.DocumentID())
 		}
+		// A duplicate would overwrite the earlier object: "indexed 22" would
+		// then mean 21 installed, and a generator bug would look like a clean run.
+		if _, dup := seen[o.DocumentID()]; dup {
+			return nil, fmt.Errorf("bundle line %d: duplicate object %s", line, o.DocumentID())
+		}
+		seen[o.DocumentID()] = struct{}{}
 		objs = append(objs, o)
 	}
 	if err := sc.Err(); err != nil {
@@ -93,9 +100,20 @@ func (o Object) Document(now time.Time) ([]byte, error) {
 		return nil, fmt.Errorf("unsupported saved object type %q (%s): the bundle was generated for a "+
 			"different OpenSearch Dashboards version", o.Type, o.DocumentID())
 	}
-	refs := o.References
-	if len(refs) == 0 {
-		refs = json.RawMessage("[]")
+	refs := []json.RawMessage{}
+	if len(o.References) > 0 {
+		if err := json.Unmarshal(o.References, &refs); err != nil {
+			return nil, fmt.Errorf("%s: references must be an array: %w", o.DocumentID(), err)
+		}
+		if refs == nil {
+			// A "references": null decodes to a nil slice, and the UI then sees
+			// no relation to the index pattern; the document needs [].
+			refs = []json.RawMessage{}
+		}
+	}
+	refsJSON, err := json.Marshal(refs)
+	if err != nil {
+		return nil, fmt.Errorf("encode references of %s: %w", o.DocumentID(), err)
 	}
 	doc := make(map[string]json.RawMessage, 5)
 	set := func(key string, v any) error {
@@ -117,7 +135,7 @@ func (o Object) Document(now time.Time) ([]byte, error) {
 	if err := set("migrationVersion", map[string]string{o.Type: ver}); err != nil {
 		return nil, err
 	}
-	doc["references"] = refs
+	doc["references"] = refsJSON
 	doc[o.Type] = o.Attributes
 	return json.Marshal(doc)
 }

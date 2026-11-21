@@ -1,6 +1,7 @@
 # Build context for `docker build`: keep it small and keep secrets out.
-# velruna.conf and every other *.conf are excluded on purpose — the image must
-# never contain a config file, the operator mounts one at run time.
+# velruna.conf, dashboards.env and every other *.conf / *.env are excluded on
+# purpose — the image must never contain a config file, the operator mounts one
+# at run time (or passes the connection through the environment).
 .git
 .github
 dist
@@ -8,6 +9,9 @@ _ref
 docs
 hack
 docker/os-snapshots
+# Build output in the work tree (12 MB) would only invalidate the layer cache.
+velruna
+velruna.exe
 *.conf
-*.conf.*
+*.env
 *.bak-*
