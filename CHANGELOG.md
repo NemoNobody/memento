@@ -29,7 +29,10 @@ notes).
 
 - `scripts/push-dashboards.sh`, superseded by `velruna dashboards push`; its
   `VELRUNA_OS_URL` / `VELRUNA_OS_USER` variables are replaced by the standard
-  `OPENSEARCH_URL` / `OPENSEARCH_USER`.
+  `OPENSEARCH_URL` / `OPENSEARCH_USER`. The script's `VELRUNA_KIBANA_INDEX` is
+  now `--index`, and its `VELRUNA_DASHBOARDS_ENV` / `DASHBOARDS_USER` /
+  `DASHBOARDS_PASSWORD` fallback is gone: credentials come from
+  `OPENSEARCH_PASSWORD`, the OS keyring, or the config file.
 
 ## v0.8.8 — 2026-11-21
 

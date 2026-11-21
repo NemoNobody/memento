@@ -114,22 +114,22 @@ func TestPushDashboards_IsIdempotentOnRerun(t *testing.T) {
 func TestPushDashboards_ExplicitIndexIsProbedNotAliased(t *testing.T) {
 	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
 		switch {
-		case r.Method == http.MethodHead && r.Path == "/custom":
+		case r.Method == http.MethodHead && r.Path == "/.kibana_custom":
 			return http.StatusOK, ""
-		case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/custom/_doc/"):
+		case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/.kibana_custom/_doc/"):
 			return http.StatusOK, `{"result":"created"}`
-		case r.Method == http.MethodPost && r.Path == "/custom/_refresh":
+		case r.Method == http.MethodPost && r.Path == "/.kibana_custom/_refresh":
 			return http.StatusOK, `{}`
 		}
 		return http.StatusInternalServerError, `{"error":"unexpected request: ` + r.Method + ` ` + r.Path + `"}`
 	})
 
-	res, err := c.PushDashboards(context.Background(), []byte(testBundle), "custom")
+	res, err := c.PushDashboards(context.Background(), []byte(testBundle), ".kibana_custom")
 	if err != nil {
 		t.Fatalf("PushDashboards: %v", err)
 	}
-	if res.Index != "custom" || res.Global {
-		t.Errorf("Index/Global = %q/%v, want custom/false", res.Index, res.Global)
+	if res.Index != ".kibana_custom" || res.Global {
+		t.Errorf("Index/Global = %q/%v, want .kibana_custom/false", res.Index, res.Global)
 	}
 	if res.Indexed != 2 {
 		t.Errorf("Indexed = %d, want 2", res.Indexed)
@@ -151,7 +151,7 @@ func TestPushDashboards_MissingExplicitIndexFails(t *testing.T) {
 		return http.StatusOK, `{}`
 	})
 
-	_, err := c.PushDashboards(context.Background(), []byte(testBundle), ".kiban_1")
+	_, err := c.PushDashboards(context.Background(), []byte(testBundle), ".kibana_9")
 	if err == nil {
 		t.Fatal("PushDashboards wrote into a non-existent index")
 	}
@@ -298,6 +298,41 @@ func TestPushDashboards_AliasMarkedNotWritableIsRefused(t *testing.T) {
 		if _, err := c.PushDashboards(context.Background(), []byte(testBundle), ""); err == nil {
 			t.Errorf("is_write_index=%q was accepted as the write target", flag)
 		}
+	}
+}
+
+// Any existing index passes the probe and the facts index has a dynamic
+// mapping: a typo that happens to match a real index would receive 22 saved
+// objects with a green "indexed 22". Saved-objects indices are .kibana*.
+func TestPushDashboards_RefusesNonSavedObjectsIndex(t *testing.T) {
+	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
+		return http.StatusOK, `{}`
+	})
+	if _, err := c.PushDashboards(context.Background(), []byte(testBundle), "velruna"); err == nil {
+		t.Fatal("PushDashboards wrote into the facts index")
+	}
+	if len(fake.requests) != 0 {
+		t.Errorf("the facts index was probed or written: %+v", fake.requests)
+	}
+}
+
+// Naming the alias is the same request as the default.
+func TestPushDashboards_ExplicitAliasIsGlobal(t *testing.T) {
+	c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+		switch {
+		case r.Method == http.MethodGet && r.Path == "/_cat/aliases/.kibana":
+			return http.StatusOK, `[{"alias":".kibana","index":".kibana_3","is_write_index":"true"}]`
+		case r.Method == http.MethodPut, r.Method == http.MethodPost:
+			return http.StatusOK, `{}`
+		}
+		return http.StatusInternalServerError, `{}`
+	})
+	res, err := c.PushDashboards(context.Background(), []byte(testBundle), ".kibana")
+	if err != nil {
+		t.Fatalf("PushDashboards: %v", err)
+	}
+	if !res.Global || res.Index != ".kibana_3" {
+		t.Errorf("Global/Index = %v/%q, want true/.kibana_3", res.Global, res.Index)
 	}
 }
 

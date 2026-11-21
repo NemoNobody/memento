@@ -110,11 +110,15 @@ func printDashboardPush(res *client.DashboardPush, url string, runErr error) err
 	target, tenant := res.Index, "requested index"
 	if res.Global {
 		// Writes go through the alias; the resolved index is what it pointed at
-		// when the command probed it.
-		target, tenant = ".kibana (write index "+res.Index+")", "global tenant"
+		// when the command probed it (a migration may have moved it since).
+		target, tenant = ".kibana", "global tenant"
 	}
-	if err := writeLine(os.Stdout, fmt.Sprintf("indexed %d saved object(s) into %s, %s, at %s",
-		res.Indexed, target, tenant, url)); err != nil {
+	line := fmt.Sprintf("indexed %d saved object(s) into %s, %s, at %s", res.Indexed, target, tenant, url)
+	if res.Global {
+		line = fmt.Sprintf("indexed %d saved object(s) into .kibana, global tenant, at %s "+
+			"(write index %s at probe time)", res.Indexed, url, res.Index)
+	}
+	if err := writeLine(os.Stdout, line); err != nil {
 		return err
 	}
 	for _, e := range res.Errors {

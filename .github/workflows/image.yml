@@ -35,8 +35,12 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Test
-        run: go test ./...
+      - name: Verify
+        run: |
+          set -euo pipefail
+          test -z "$(gofmt -l .)"
+          go vet ./...
+          go test ./...
 
       # GHCR rejects uppercase repository owners, and a dispatched run must
       # derive its tags from the input rather than from the branch ref. The

@@ -153,6 +153,13 @@ func (c *Client) PushDashboards(ctx context.Context, bundle []byte, index string
 	}
 
 	res := &DashboardPush{Index: index, Global: index == "", Objects: len(objs)}
+	if index == kibanaAlias {
+		// Naming the alias explicitly is the same request as the default: it
+		// targets the global tenant, so classify it that way instead of calling
+		// it a "requested index" and dropping the tenant hint.
+		index = ""
+		res.Global = true
+	}
 	// Writes go through the alias when the target was resolved from it: the
 	// alias routes to the current write index even if Dashboards migrates the
 	// index mid-run.
@@ -170,6 +177,13 @@ func (c *Client) PushDashboards(ctx context.Context, bundle []byte, index string
 		// flag names one saved-objects index.
 		if strings.ContainsAny(index, "*?,") || index == "_all" || strings.HasPrefix(index, "-") {
 			return nil, fmt.Errorf("--index must name a single saved-objects index, not a pattern: %q", index)
+		}
+		// Any existing index passes the probe, and the facts index has a dynamic
+		// mapping: a typo that happens to match a real index would get 22 saved
+		// objects with a green "indexed 22". Saved-objects indices are .kibana*.
+		if !strings.HasPrefix(index, ".kibana") {
+			return nil, fmt.Errorf("--index %q is not a saved-objects index (expected .kibana*): omit "+
+				"--index to resolve the .kibana alias, or name the index Dashboards actually uses", index)
 		}
 		ok, herr := c.savedObjectsIndexExists(ctx, index)
 		if herr != nil {
