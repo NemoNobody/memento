@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -114,8 +115,8 @@ func TestPushDashboards_IsIdempotentOnRerun(t *testing.T) {
 func TestPushDashboards_ExplicitIndexIsProbedNotAliased(t *testing.T) {
 	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
 		switch {
-		case r.Method == http.MethodHead && r.Path == "/.kibana_custom":
-			return http.StatusOK, ""
+		case r.Method == http.MethodGet && r.Path == "/.kibana_custom/_mapping":
+			return http.StatusOK, `{".kibana_custom":{"mappings":{"properties":{"type":{"type":"keyword"},"updated_at":{"type":"date"},"migrationVersion":{"type":"object"}}}}}`
 		case r.Method == http.MethodPut && strings.HasPrefix(r.Path, "/.kibana_custom/_doc/"):
 			return http.StatusOK, `{"result":"created"}`
 		case r.Method == http.MethodPost && r.Path == "/.kibana_custom/_refresh":
@@ -145,8 +146,8 @@ func TestPushDashboards_ExplicitIndexIsProbedNotAliased(t *testing.T) {
 // returns 2xx: a green run that installed nothing anyone can see.
 func TestPushDashboards_MissingExplicitIndexFails(t *testing.T) {
 	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
-		if r.Method == http.MethodHead {
-			return http.StatusNotFound, ""
+		if r.Method == http.MethodGet && strings.HasSuffix(r.Path, "/_mapping") {
+			return http.StatusNotFound, `{"error":{"type":"index_not_found_exception","reason":"no such index"}}`
 		}
 		return http.StatusOK, `{}`
 	})
@@ -234,25 +235,29 @@ func TestPushDashboards_MissingAliasIsExplained(t *testing.T) {
 	}
 }
 
-// A write-only role cannot HEAD, and a proxy may not; the caller named the
-// index, so the probe must not turn a legitimate target into a refusal.
-func TestPushDashboards_HeadRefusalDoesNotBlockExplicitIndex(t *testing.T) {
+// A write-only role cannot read mappings, and a proxy may not; the caller named
+// the index, so the probe must not turn a legitimate target into a refusal — it
+// reports the run as unverified instead.
+func TestPushDashboards_ProbeRefusalDoesNotBlockExplicitIndex(t *testing.T) {
 	for _, status := range []int{http.StatusForbidden, http.StatusMethodNotAllowed} {
 		c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
-			switch r.Method {
-			case http.MethodHead:
+			switch {
+			case r.Method == http.MethodGet && strings.HasSuffix(r.Path, "/_mapping"):
 				return status, ""
-			case http.MethodPut, http.MethodPost:
+			case r.Method == http.MethodPut, r.Method == http.MethodPost:
 				return http.StatusOK, `{}`
 			}
 			return http.StatusInternalServerError, `{}`
 		})
 		res, err := c.PushDashboards(context.Background(), []byte(testBundle), ".kibana_1")
 		if err != nil {
-			t.Fatalf("HEAD %d blocked a named index: %v", status, err)
+			t.Fatalf("mapping probe %d blocked a named index: %v", status, err)
 		}
 		if res.Indexed != 2 {
-			t.Errorf("HEAD %d: Indexed = %d, want 2", status, res.Indexed)
+			t.Errorf("probe %d: Indexed = %d, want 2", status, res.Indexed)
+		}
+		if !res.Unverified {
+			t.Errorf("probe %d: Unverified = false, want true (the run could not check the index)", status)
 		}
 	}
 }
@@ -301,18 +306,63 @@ func TestPushDashboards_AliasMarkedNotWritableIsRefused(t *testing.T) {
 	}
 }
 
-// Any existing index passes the probe and the facts index has a dynamic
-// mapping: a typo that happens to match a real index would receive 22 saved
-// objects with a green "indexed 22". Saved-objects indices are .kibana*.
+// Any existing index passes an existence check and the facts index has a
+// dynamic mapping: a typo that happens to match a real index would receive 22
+// saved objects with a green "indexed 22". The mapping, not the name, decides.
 func TestPushDashboards_RefusesNonSavedObjectsIndex(t *testing.T) {
+	// A facts index: dynamic mapping, no type/updated_at/migrationVersion.
 	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
-		return http.StatusOK, `{}`
+		return http.StatusOK, `{"velruna":{"mappings":{"properties":{"key":{"type":"keyword"},"value":{"type":"text"}}}}}`
 	})
 	if _, err := c.PushDashboards(context.Background(), []byte(testBundle), "velruna"); err == nil {
 		t.Fatal("PushDashboards wrote into the facts index")
 	}
-	if len(fake.requests) != 0 {
-		t.Errorf("the facts index was probed or written: %+v", fake.requests)
+	for _, r := range fake.requests {
+		if r.Method == http.MethodPut || r.Method == http.MethodPost {
+			t.Errorf("wrote to a non-saved-objects index: %s %s", r.Method, r.Path)
+		}
+	}
+}
+
+// The task-manager index lives in the same cluster and is .kibana-prefixed: a
+// name check would have written 22 objects nobody reads.
+// The real .kibana mapping is hundreds of KB: reading it with a snippet-sized
+// limit truncated the JSON, and a valid saved-objects index was rejected.
+func TestPushDashboards_LargeMappingIsAccepted(t *testing.T) {
+	props := `"type":{"type":"keyword"},"updated_at":{"type":"date"},"migrationVersion":{"type":"object"}`
+	for i := 0; i < 600; i++ {
+		props += fmt.Sprintf(`,"field_%03d":{"type":"text","fields":{"keyword":{"type":"keyword"}}}`, i)
+	}
+	mapping := `{".kibana_1":{"mappings":{"properties":{` + props + `}}}}`
+	if len(mapping) < 32<<10 {
+		t.Fatalf("test mapping is only %d bytes, it must exceed the snippet limit", len(mapping))
+	}
+
+	c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.Path, "/_mapping"):
+			return http.StatusOK, mapping
+		case r.Method == http.MethodPut, r.Method == http.MethodPost:
+			return http.StatusOK, `{}`
+		}
+		return http.StatusInternalServerError, `{}`
+	})
+
+	res, err := c.PushDashboards(context.Background(), []byte(testBundle), ".kibana_1")
+	if err != nil {
+		t.Fatalf("a large saved-objects mapping was rejected: %v", err)
+	}
+	if res.Indexed != 2 {
+		t.Errorf("Indexed = %d, want 2", res.Indexed)
+	}
+}
+
+func TestPushDashboards_RefusesTaskManagerIndex(t *testing.T) {
+	c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+		return http.StatusOK, `{".kibana_task_manager_1":{"mappings":{"properties":{"task":{"type":"object"},"type":{"type":"keyword"}}}}}`
+	})
+	if _, err := c.PushDashboards(context.Background(), []byte(testBundle), ".kibana_task_manager_1"); err == nil {
+		t.Fatal("PushDashboards wrote into the task-manager index")
 	}
 }
 

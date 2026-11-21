@@ -37,6 +37,9 @@ type DashboardPush struct {
 	Indexed int
 	Failed  int
 	Errors  []string
+	// Unverified reports that the caller-supplied index could not be checked
+	// (the role may write but not read mappings): the caller should warn.
+	Unverified bool
 }
 
 // kibanaWriteIndex resolves the write index behind the .kibana alias — the
@@ -172,30 +175,17 @@ func (c *Client) PushDashboards(ctx context.Context, bundle []byte, index string
 		res.Index = resolved
 		target = kibanaAlias
 	} else {
-		// A wildcard, a comma list or a reserved alias would pass the existence
-		// probe and then fail (or write to several indices) on every PUT; the
-		// flag names one saved-objects index.
+		// A wildcard, a comma list or a reserved alias would pass the probe and
+		// then fail (or write to several indices) on every PUT; the flag names
+		// one saved-objects index.
 		if strings.ContainsAny(index, "*?,") || index == "_all" || strings.HasPrefix(index, "-") {
 			return nil, fmt.Errorf("--index must name a single saved-objects index, not a pattern: %q", index)
 		}
-		// Any existing index passes the probe, and the facts index has a dynamic
-		// mapping: a typo that happens to match a real index would get 22 saved
-		// objects with a green "indexed 22". Saved-objects indices are .kibana*.
-		if !strings.HasPrefix(index, ".kibana") {
-			return nil, fmt.Errorf("--index %q is not a saved-objects index (expected .kibana*): omit "+
-				"--index to resolve the .kibana alias, or name the index Dashboards actually uses", index)
+		unverified, perr := c.probeSavedObjectsIndex(ctx, index)
+		if perr != nil {
+			return nil, perr
 		}
-		ok, herr := c.savedObjectsIndexExists(ctx, index)
-		if herr != nil {
-			return nil, herr
-		}
-		if !ok {
-			// Without this check a typo lands in a brand-new empty index
-			// (action.auto_create_index is on by default) and every PUT returns
-			// 2xx: the run looks successful and installs nothing anyone can see.
-			return nil, fmt.Errorf("index %s does not exist at %s: has Dashboards ever started against this "+
-				"cluster, or is --index mistyped?", index, c.cfg.OpenSearchURL)
-		}
+		res.Unverified = unverified
 	}
 
 	now := time.Now()
@@ -224,31 +214,70 @@ func (c *Client) PushDashboards(ctx context.Context, bundle []byte, index string
 	return res, nil
 }
 
-// savedObjectsIndexExists probes the caller-supplied index before anything is
-// written to it. Only 404 means "missing": a write-only role legitimately
-// cannot call HEAD (403), and a proxy may not allow it (405) — in those cases
-// the caller named the index explicitly and the PUTs are the real test.
-func (c *Client) savedObjectsIndexExists(ctx context.Context, index string) (bool, error) {
-	status, body, err := c.doSavedObjectRequest(ctx, http.MethodHead, "/"+url.PathEscape(index), nil)
+// probeSavedObjectsIndex checks that the caller-supplied index really is a
+// saved-objects store before anything is written to it.
+//
+// The mapping, not the name: Dashboards indexes are .kibana* by convention but
+// the name is configurable, and a typo that happens to match a real index (the
+// facts index has a dynamic mapping) would accept all 22 writes and report a
+// green run that installed nothing. A saved-objects index has a mapping with
+// type, updated_at and migrationVersion.
+//
+// unverified=true means the role can write but not read mappings (403/405); the
+// writes are then the only test, and the caller warns instead of refusing.
+func (c *Client) probeSavedObjectsIndex(ctx context.Context, index string) (unverified bool, err error) {
+	path := "/" + url.PathEscape(index) + "/_mapping"
+	status, body, err := c.doSavedObjectRequest(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return false, fmt.Errorf("probe index %s: %w", index, err)
 	}
 	switch status {
 	case http.StatusOK:
-		return true, nil
-	case http.StatusNotFound:
+		if !hasSavedObjectsMapping([]byte(body)) {
+			return false, fmt.Errorf("index %s at %s has no saved-objects mapping (type/updated_at/"+
+				"migrationVersion): it is not a Dashboards saved-objects index — check --index",
+				index, c.cfg.OpenSearchURL)
+		}
 		return false, nil
+	case http.StatusNotFound:
+		// Without this check a typo lands in a brand-new empty index
+		// (action.auto_create_index is on by default) and every PUT returns
+		// 2xx: the run looks successful and installs nothing anyone can see.
+		return false, fmt.Errorf("index %s does not exist at %s: has Dashboards ever started against "+
+			"this cluster, or is --index mistyped?", index, c.cfg.OpenSearchURL)
 	case http.StatusUnauthorized:
-		// 401 is a credential failure, not an authorization subtlety: letting it
-		// through would turn one clear message into N identical PUT errors.
 		return false, fmt.Errorf("probe index %s: HTTP 401 — the credentials were rejected "+
 			"(check the password)", index)
-	case http.StatusMethodNotAllowed, http.StatusForbidden:
-		// Write-only roles and proxies may forbid HEAD; the caller named the
-		// index, so the PUTs are the real test.
+	case http.StatusForbidden, http.StatusMethodNotAllowed:
 		return true, nil
 	}
 	return false, fmt.Errorf("probe index %s: HTTP %d: %s", index, status, bodySnippet(body))
+}
+
+// hasSavedObjectsMapping reports whether the mapping response describes a
+// saved-objects document type (the fields the UI itself writes).
+func hasSavedObjectsMapping(body []byte) bool {
+	var res map[string]struct {
+		Mappings struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+		} `json:"mappings"`
+	}
+	if err := json.Unmarshal(body, &res); err != nil {
+		return false
+	}
+	for _, idx := range res {
+		props := idx.Mappings.Properties
+		if props == nil {
+			continue
+		}
+		_, hasType := props["type"]
+		_, hasUpdated := props["updated_at"]
+		_, hasMigration := props["migrationVersion"]
+		if hasType && hasUpdated && hasMigration {
+			return true
+		}
+	}
+	return false
 }
 
 // putDocument indexes one saved object in place (PUT on its stable id), so a
@@ -305,7 +334,10 @@ func (c *Client) doSavedObjectRequest(ctx context.Context, method, path string, 
 	if err != nil {
 		return 0, "", err
 	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
+	// A mapping response runs to hundreds of KB (every saved-object type and
+	// field), so the read limit must not be the snippet limit: a truncated body
+	// reads as "not a saved-objects index". The snippet is cut later.
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
 		return resp.StatusCode, "", err
 	}

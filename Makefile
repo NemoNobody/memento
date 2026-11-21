@@ -139,7 +139,7 @@ stack-up:
 	  if curl -sf -o /dev/null --max-time 3 "http://127.0.0.1:$${VELRUNA_OS_PORT:-9200}/_cluster/health"; then ok=1; break; fi; \
 	  sleep 3; \
 	done; \
-	if [ -z "$$ok" ]; then echo "OpenSearch did not answer within ~3 minutes"; exit 1; fi
+	if [ -z "$$ok" ]; then echo "OpenSearch did not answer within ~6 minutes"; exit 1; fi
 	$(CONTAINER) -f $(OSFILE) --profile single --profile app run --rm velruna status
 
 stack-down:

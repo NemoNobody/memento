@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/NemoNobody/velruna/internal/client"
@@ -73,7 +74,7 @@ OpenSearch Dashboards has started at least once against the cluster.`,
 			// objects are already written, and the operator needs the counts to
 			// know that a retry is safe rather than duplicated.
 			if res != nil {
-				if werr := printDashboardPush(res, cfg.OpenSearchURL, err); werr != nil {
+				if werr := printDashboardPush(os.Stdout, res, cfg.OpenSearchURL, err); werr != nil {
 					fatalErr(werr)
 				}
 			}
@@ -106,7 +107,7 @@ func loadDashboardsConfig(conf string) (*config.Config, error) {
 // session, so a fresh push looks absent until the tab is reloaded, and any
 // tenant other than Global shows the personal copy instead. runErr suppresses
 // the success hint: a failed refresh means the objects are not visible yet.
-func printDashboardPush(res *client.DashboardPush, url string, runErr error) error {
+func printDashboardPush(w io.Writer, res *client.DashboardPush, url string, runErr error) error {
 	target, tenant := res.Index, "requested index"
 	if res.Global {
 		// Writes go through the alias; the resolved index is what it pointed at
@@ -118,8 +119,14 @@ func printDashboardPush(res *client.DashboardPush, url string, runErr error) err
 		line = fmt.Sprintf("indexed %d saved object(s) into .kibana, global tenant, at %s "+
 			"(write index %s at probe time)", res.Indexed, url, res.Index)
 	}
-	if err := writeLine(os.Stdout, line); err != nil {
+	if err := writeLine(w, line); err != nil {
 		return err
+	}
+	if res.Unverified {
+		if _, werr := fmt.Fprintf(os.Stderr, "warning: %s could not be read (mapping probe refused); "+
+			"the writes are the only check\n", res.Index); werr != nil {
+			return werr
+		}
 	}
 	for _, e := range res.Errors {
 		if _, werr := fmt.Fprintf(os.Stderr, "failed: %s\n", e); werr != nil {
@@ -144,6 +151,6 @@ func printDashboardPush(res *client.DashboardPush, url string, runErr error) err
 	if runErr != nil || !res.Global {
 		return nil
 	}
-	return writeLine(os.Stdout, "open Dashboards, pick the Global tenant in the tenant switcher and "+
+	return writeLine(w, "open Dashboards, pick the Global tenant in the tenant switcher and "+
 		"hard-reload the tab (the UI caches the index-pattern list per session)")
 }
