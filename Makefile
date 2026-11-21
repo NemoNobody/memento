@@ -14,11 +14,11 @@ BIN     ?= velruna
 CONTAINER ?= $(shell if command -v docker >/dev/null 2>&1; then echo "docker compose"; elif command -v podman-compose >/dev/null 2>&1; then echo "podman-compose"; else echo "podman compose"; fi)
 OSFILE := docker/opensearch.yml
 
-.PHONY: build test lint fmt vet ci install clean release dev-opensearch dev-opensearch-down dev-opensearch-logs dev-opensearch-dashboards dev-opensearch-cluster dev-opensearch-secure
+.PHONY: build test lint fmt vet ci install clean release dev-opensearch dev-opensearch-down dev-opensearch-logs dev-opensearch-dashboards dev-opensearch-cluster dev-opensearch-secure docker-build docker-smoke stack-up stack-down
 
 # Compose profiles in docker/opensearch.yml. `down` must name them all or
 # profiled services survive it.
-OS_PROFILES := --profile single --profile dashboards --profile cluster --profile secure
+OS_PROFILES := --profile single --profile dashboards --profile cluster --profile secure --profile app
 
 build:
 	go build -trimpath -ldflags "$(LDFLAGS)" -o $(BIN) .
@@ -74,8 +74,8 @@ dev-opensearch-logs:
 # is off on the dev node, so the UI opens without login. The target waits
 # for the UI to answer and then pushes the ready-made bundle (index
 # patterns, visualizations, overview dashboard) into it automatically —
-# re-runnable (stable object ids). For any other (secured) cluster use
-# scripts/push-dashboards.sh by hand.
+# re-runnable (stable object ids). For any other (secured) cluster run
+# `velruna dashboards push` by hand (same credentials as the MCP server).
 dev-opensearch-dashboards:
 	$(CONTAINER) -f $(OSFILE) --profile single --profile dashboards up -d
 	@echo "waiting for Dashboards on http://127.0.0.1:$${VELRUNA_DASH_PORT:-5601} ..."
@@ -87,11 +87,11 @@ dev-opensearch-dashboards:
 	  echo "dashboards did not answer within ~3 minutes"; exit 1; \
 	fi; \
 	for i in $$(seq 1 10); do \
-	  if VELRUNA_OS_URL="http://127.0.0.1:$${VELRUNA_OS_PORT:-9200}" scripts/push-dashboards.sh; then ok=1; break; fi; \
+	  if OPENSEARCH_URL="http://127.0.0.1:$${VELRUNA_OS_PORT:-9200}" OPENSEARCH_USER=dev OPENSEARCH_PASSWORD=dev go run . dashboards push; then ok=1; break; fi; \
 	  ok=""; echo "bundle push failed (dashboards may still be initializing), retrying in 5s..."; sleep 5; \
 	done; \
 	if [ -z "$$ok" ]; then \
-	  echo "bundle push still failing; manual retry: VELRUNA_OS_URL=http://127.0.0.1:$${VELRUNA_OS_PORT:-9200} scripts/push-dashboards.sh"; exit 1; \
+	  echo "bundle push still failing; manual retry: OPENSEARCH_URL=http://127.0.0.1:$${VELRUNA_OS_PORT:-9200} velruna dashboards push"; exit 1; \
 	fi
 
 # 3-node cluster (topology test): velruna stamps replicas automatically
@@ -109,6 +109,32 @@ dev-opensearch-cluster:
 dev-opensearch-secure:
 	@test -n "$(VELRUNA_SECURE_DEV_PASSWORD)" || { echo "usage: make dev-opensearch-secure VELRUNA_SECURE_DEV_PASSWORD=<pw>"; exit 1; }
 	$(CONTAINER) -f $(OSFILE) --profile secure up -d
+
+# Container image. Release tags are published by .github/workflows/image.yml;
+# locally the build stamps the same version/commit as `make build`.
+IMAGE ?= ghcr.io/nemonobody/velruna
+
+docker-build:
+	docker build \
+	  --build-arg VERSION=$(VERSION) \
+	  --build-arg COMMIT=$(COMMIT) \
+	  -t $(IMAGE):dev .
+
+# MCP over stdio: an agent client starts the container itself (see docs/mcp.md),
+# so there is no port to publish and no long-running service. This smoke only
+# proves the image runs and the binary is intact (distroless has no shell, so
+# `--help` is the cheapest proof).
+docker-smoke: docker-build
+	docker run --rm $(IMAGE):dev --help >/dev/null
+	@echo "image ok: $(IMAGE):dev"
+
+# OpenSearch + velruna (the dashboards UI stays opt-in via
+# dev-opensearch-dashboards).
+stack-up:
+	$(CONTAINER) -f $(OSFILE) --profile single --profile app up -d
+
+stack-down:
+	$(CONTAINER) -f $(OSFILE) $(OS_PROFILES) down
 
 # obscura: one-time installer for the opt-in render fallback (fetch_render=
 # obscura). Third-party binary, ~75MB, linux x86_64 glibc 2.35+; the sha256

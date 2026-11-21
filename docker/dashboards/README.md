@@ -1,11 +1,14 @@
 # Dashboards bundle
 
-`objects.ndjson` — saved objects for the "Velruna — store overview"
-dashboard: 3 index patterns, 18 visualizations, the dashboard itself.
-Stable `velruna-store-*` ids make the push idempotent (update in place).
+`internal/dashboards/objects.ndjson` — source of the saved-object bundle for
+the "Velruna — store overview" dashboard: 3 index patterns, 18 visualizations,
+the dashboard itself. The file is embedded into the binary (`go:embed`), so the
+push needs nothing but `velruna` itself. Stable `velruna-store-*` ids make the
+push idempotent (update in place).
 
-Push with `scripts/push-dashboards.sh` (wallet-first credentials, see its
-header). The script talks to the CLUSTER, not the Dashboards port: it indexes
+Push with `velruna dashboards push` (same wallet-first credential chain as the
+MCP server; the cluster address comes from the config, `OPENSEARCH_URL` or the
+default). The command talks to the CLUSTER, not the Dashboards port: it indexes
 the objects directly into the `.kibana` alias backing index, which IS the
 global tenant's storage. The saved-objects REST API is not used on purpose —
 the `security_tenant: global` header is ignored for basic-auth requests
@@ -77,9 +80,9 @@ Live sizes meanwhile:
 Stack Management -> Index Management, or `velruna status` for the cluster view.
 
 After a mapping change (new fact/journal/doc fields) regenerate the field
-lists from a live cluster and push again:
+lists from a live cluster, rebuild the binary and push again:
 
 ```
-python3 docker/dashboards/gen_fields.py   # reads velruna.conf + wallet
-scripts/push-dashboards.sh
+python3 docker/dashboards/gen_fields.py   # rewrites internal/dashboards/objects.ndjson
+make build && ./velruna dashboards push
 ```

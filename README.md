@@ -137,6 +137,18 @@ Or download the binary for your platform from
 cloned, `scripts/install.sh` picks it, verifies the sha256 and puts it in
 `~/.local/bin`.
 
+Or run the container (release tags only, `linux/amd64` + `linux/arm64`):
+
+```
+docker run -i --rm -v ~/.config/velruna/velruna.conf:/etc/velruna/velruna.conf:ro \
+  -e OPENSEARCH_PASSWORD ghcr.io/nemonobody/velruna:latest mcp
+```
+
+The image is distroless and runs as uid 65532; a container has no session bus,
+so the password comes from the environment or the mounted config, not from the
+OS keyring — [docs/setup.md](docs/setup.md) §2 and
+[docs/mcp.md](docs/mcp.md#running-from-the-container-image).
+
 You also need a reachable OpenSearch (a single local node is enough). Quickest:
 `make dev-opensearch` runs one in a container (localhost-only, security plugin
 off, 512 MB heap, named volume — [docs/setup.md](docs/setup.md) §2). A system install follows
@@ -287,12 +299,12 @@ honest.
 
 ## Dashboards
 
-`docker/dashboards/objects.ndjson` — a ready-made OpenSearch Dashboards
-overview ("Velruna — store overview"): KPI row for facts/journal/docs,
-activity trends, breakdowns by project/category/status, journal ops and the
-top fact keys. `make dev-opensearch-dashboards` pushes it automatically on the
-dev stack; elsewhere use `scripts/push-dashboards.sh`. Install instructions
-and caveats: [docs/dashboard.md](docs/dashboard.md).
+`internal/dashboards/objects.ndjson` (embedded in the binary) — a ready-made
+OpenSearch Dashboards overview ("Velruna — store overview"): KPI row for
+facts/journal/docs, activity trends, breakdowns by project/category/status,
+journal ops and the top fact keys. `make dev-opensearch-dashboards` pushes it
+automatically on the dev stack; elsewhere run `velruna dashboards push`.
+Install instructions and caveats: [docs/dashboard.md](docs/dashboard.md).
 
 ## Storage
 

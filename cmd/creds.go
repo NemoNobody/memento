@@ -33,7 +33,7 @@ keyring (service "velruna", account host[:port]), then the plaintext config
 file — only when allow_plaintext is on. These commands write and inspect the
 keyring entry; status never prints the value. The exception is 'creds get',
 which prints the resolved password to stdout for scripted use (curl recipes,
-push-dashboards.sh): treat its stdout as a secret.`,
+dashboard pushes): treat its stdout as a secret.`,
 	}
 	cmd.PersistentFlags().StringVar(&credsFlags.url, "url", "",
 		"target OpenSearch URL (default: the effective opensearch_url)")

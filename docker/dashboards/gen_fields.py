@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Bake index-pattern field lists into docker/dashboards/objects.ndjson.
+"""Bake index-pattern field lists into internal/dashboards/objects.ndjson.
 
 OSD 3.x has no externally callable field-introspection API, so the bundle
 carries the fields up front: a pattern with fields:[] cannot resolve its
 timeFieldName and every visualization dies with "Could not locate that
-index-pattern-field". Re-run this after a mapping change and push again.
+index-pattern-field". Re-run this after a mapping change, rebuild the binary
+(the bundle is embedded) and push again.
 
 Usage (from the repo root):
     python3 docker/dashboards/gen_fields.py [path-to-velruna.conf]
@@ -122,7 +123,8 @@ def main():
         "velruna-history-*": "velruna-history-*",
         "velruna-docs": "velruna-docs",
     }
-    ndjson_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "objects.ndjson")
+    ndjson_path = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                              "..", "..", "internal", "dashboards", "objects.ndjson"))
     objs = []
     with open(ndjson_path, encoding="utf-8") as f:
         for line in f:

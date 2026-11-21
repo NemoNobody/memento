@@ -6,6 +6,31 @@ under `## Unreleased`; the release commit moves that section under its version
 number (`.github/workflows/release.yml` reads the heading to build the release
 notes).
 
+## Unreleased
+
+### Added
+
+- `velruna dashboards push`: installs the bundled "Velruna — store overview"
+  (3 index patterns, 18 visualizations, the dashboard) straight from the
+  binary — the bundle is embedded, credentials come from the same chain as the
+  MCP server. Flags: `--conf`, `--index`, `--file`.
+- container image `ghcr.io/nemonobody/velruna` (distroless, nonroot, linux
+  amd64 + arm64), published by `.github/workflows/image.yml` for release tags;
+  compose profile `app` and the `make stack-up` / `make stack-down` shortcuts.
+
+### Changed
+
+- the dashboards push no longer needs python3, bash or a repository checkout:
+  the saved-objects write lives in `internal/client`, the bundle in
+  `internal/dashboards` (regenerate with `docker/dashboards/gen_fields.py`,
+  then rebuild — the bundle is compiled in).
+
+### Removed
+
+- `scripts/push-dashboards.sh`, superseded by `velruna dashboards push`; its
+  `VELRUNA_OS_URL` / `VELRUNA_OS_USER` variables are replaced by the standard
+  `OPENSEARCH_URL` / `OPENSEARCH_USER`.
+
 ## v0.8.8 — 2026-11-21
 
 Rename only; behaviour is unchanged. Published as `memento` up to v0.8.6, and

@@ -1,0 +1,86 @@
+name: Image
+
+# The container image is published for release tags only, built from the same
+# commit as the binaries: a semver-tagged image in a public registry is what
+# users pin. There is deliberately no edge/master image — a moving "latest"
+# built from every push would be a support burden and a supply-chain surprise.
+#
+# workflow_dispatch is the repair path for an existing tag, mirroring
+# release.yml: pass the tag name and the image is rebuilt and re-pushed.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Existing tag to publish an image for, e.g. v0.9.0"
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.version || github.ref }}
+
+      # GHCR rejects uppercase repository owners, and a dispatched run must
+      # derive its tags from the input rather than from the branch ref.
+      - name: Compute image name and tags
+        id: img
+        env:
+          OWNER: ${{ github.repository_owner }}
+          REF: ${{ inputs.version || github.ref_name }}
+        run: |
+          set -euo pipefail
+          semver="${REF#v}"
+          major_minor="$(printf '%s' "$semver" | cut -d. -f1,2)"
+          {
+            echo "owner=$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')"
+            echo "semver=$semver"
+            echo "major_minor=$major_minor"
+            echo "sha=$(git rev-parse --short HEAD)"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ steps.img.outputs.owner }}/velruna
+          tags: |
+            type=raw,value=${{ steps.img.outputs.semver }}
+            type=raw,value=${{ steps.img.outputs.major_minor }}
+            type=raw,value=latest
+          labels: |
+            org.opencontainers.image.title=velruna
+            org.opencontainers.image.description=Verified-fact memory for AI agents: MCP server and CLI, OpenSearch-backed
+            org.opencontainers.image.licenses=GPL-3.0-only
+            org.opencontainers.image.version=${{ steps.img.outputs.semver }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.img.outputs.semver }}
+            COMMIT=${{ steps.img.outputs.sha }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

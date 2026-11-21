@@ -55,6 +55,43 @@ services:
       # VELRUNA_DASH_PORT avoids a clash with an existing dashboards install
       - "127.0.0.1:${VELRUNA_DASH_PORT:-5601}:5601"
 
+  # --- velruna itself (make stack-up) ---
+  # The CLI and the MCP server from the image the release workflow publishes
+  # (ghcr.io/nemonobody/velruna). The service is meant to be run, not left up:
+  #   docker compose -f docker/opensearch.yml --profile single --profile app \
+  #     run --rm velruna status
+  #   ... run --rm -T velruna mcp        # for an MCP client
+  # stdio transport: the client starts the process, so no port is published.
+  # A container has no session bus, so the OS keyring is unreachable — the
+  # password comes from the mounted config or OPENSEARCH_PASSWORD.
+  velruna:
+    image: ${VELRUNA_IMAGE:-ghcr.io/nemonobody/velruna:latest}
+    container_name: velruna-app
+    profiles: ["app"]
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    command: ["status"]
+    # Dummy credentials, not a secret: the dev node runs with the security
+    # plugin off (the documented dev rule, loopback-bound). For a secured
+    # cluster drop these and use an env-file or a mounted config the operator
+    # owns at 0600.
+    environment:
+      - OPENSEARCH_USER=dev
+      - OPENSEARCH_PASSWORD=dev
+      # Provenance labels are self-reported and default to the OS user, which
+      # inside a container is "nonroot". Set these so facts written from the
+      # container carry a useful author/host.
+      - VELRUNA_AUTHOR=${VELRUNA_AUTHOR:-}
+      - VELRUNA_HOST=${VELRUNA_HOST:-}
+    volumes:
+      - ${VELRUNA_CONF_FILE:-./velruna.container.conf}:/etc/velruna/velruna.conf:ro
+    # The binary only reads: a writable root filesystem would be pure attack
+    # surface, and no escalation is needed for anything it does.
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+
   # --- 3-node cluster (make dev-opensearch-cluster) ---
   # Bare topology test: how velruna indices, their shards and replicas live
   # on a real cluster. Security stays off (test posture), all ports loopback.

@@ -1,0 +1,13 @@
+# Build context for `docker build`: keep it small and keep secrets out.
+# velruna.conf and every other *.conf are excluded on purpose — the image must
+# never contain a config file, the operator mounts one at run time.
+.git
+.github
+dist
+_ref
+docs
+hack
+docker/os-snapshots
+*.conf
+*.conf.*
+*.bak-*

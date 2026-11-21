@@ -80,29 +80,23 @@ with the security plugin off it opens without login. The target then waits
 for the UI and pushes the ready-made bundle into it automatically — after it
 finishes, open http://127.0.0.1:5601 and look for "Velruna — store overview".
 
-The bundle ships in `docker/dashboards/objects.ndjson`: index patterns for
-`velruna`, `velruna-history-*` and `velruna-docs`, KPI tiles, activity
-trends and journal panels, and the dashboard itself. To install it against
-your own cluster, run the same script by hand:
+The bundle ships inside the binary (`internal/dashboards/objects.ndjson`,
+embedded): index patterns for `velruna`, `velruna-history-*` and
+`velruna-docs`, KPI tiles, activity trends and journal panels, and the
+dashboard itself. To install it against your own cluster, run the same
+command by hand:
 
 ```
-scripts/push-dashboards.sh            # defaults to https://127.0.0.1:9200
-VELRUNA_OS_URL=http://db-host:9200 scripts/push-dashboards.sh
+velruna dashboards push                       # defaults to the config's opensearch_url
+OPENSEARCH_URL=http://db-host:9200 velruna dashboards push
+velruna dashboards push --conf ~/.config/velruna/velruna.conf
 ```
 
 Re-runnable: objects carry stable `velruna-store-*` ids and are overwritten
 in place (they go straight into the global Dashboards tenant storage — see
-docker/dashboards/README.md). Against a secured cluster the script resolves
-the password wallet-first: `velruna creds get` — the same
-keyring entry the MCP server uses (point at a config outside the cwd with
-`VELRUNA_CONF=...`). Overrides: `VELRUNA_OS_USER`/`OPENSEARCH_PASSWORD` env;
-headless fallback (no session bus): a `~/.config/velruna/dashboards.env`
-file (mode 600):
-
-```sh
-DASHBOARDS_USER=admin
-DASHBOARDS_PASSWORD=...
-```
+docker/dashboards/README.md). Credentials and TLS settings come from the same
+chain as the MCP server: `OPENSEARCH_PASSWORD`, then the OS keyring
+(`velruna creds set`), then the config file when `allow_plaintext` is on.
 
 ### Multi-node and secure topologies (optional)
 
@@ -121,6 +115,50 @@ show (all loopback-bound, all torn down by `make dev-opensearch-down`):
   the image entry point). Endpoint `https://127.0.0.1:9443`; connect with
   `opensearch_user: "admin"`, the password via keyring/env, and
   `insecure_skip_verify: true` for the demo certs.
+
+### velruna itself in a container
+
+The release workflow publishes `ghcr.io/nemonobody/velruna` for `linux/amd64`
+and `linux/arm64`, tagged `X.Y.Z`, `X.Y` and `latest`. The image is distroless
+(no shell, 14 MB) and runs as uid 65532; it holds the binary only — the config
+is mounted at run time and nothing secret is baked in.
+
+```bash
+# CLI against a store you already have
+docker run --rm -i \
+  -v ~/.config/velruna/velruna.conf:/etc/velruna/velruna.conf:ro \
+  -e OPENSEARCH_PASSWORD \
+  ghcr.io/nemonobody/velruna:0.9.0 status
+
+# MCP over stdio: the client starts the process, so the container is run with -i
+docker run -i --rm -v ~/.config/velruna/velruna.conf:/etc/velruna/velruna.conf:ro \
+  -e OPENSEARCH_PASSWORD ghcr.io/nemonobody/velruna:0.9.0 mcp
+```
+
+Or bring up OpenSearch and velruna together (the Dashboards UI stays opt-in):
+
+```bash
+make stack-up        # compose --profile single --profile app up -d
+docker compose -f docker/opensearch.yml --profile single --profile app \
+  run --rm velruna status
+make stack-down
+```
+
+`docker/velruna.container.conf` is the config the stack mounts: it points at
+`http://opensearch:9200` and carries no credentials — the dev node runs with
+the security plugin off, and the compose service passes the dummy `dev/dev`
+pair. Override with `VELRUNA_CONF_FILE=<path>` and `VELRUNA_IMAGE=<tag>`.
+
+Two differences from a host install:
+
+- **no keyring**: a container has no session bus, so the password comes from
+  `OPENSEARCH_PASSWORD` or from the config file (`allow_plaintext: true`).
+  `-e OPENSEARCH_PASSWORD` forwards it from the client environment;
+  `docker inspect` exposes it to anyone who can reach the daemon, so keep the
+  socket private (the default) or use an owner-only env-file;
+- **author label**: provenance defaults to the OS user inside the container,
+  which is `nonroot`. Set `VELRUNA_AUTHOR` and `VELRUNA_HOST` (the compose
+  service forwards both) so shared-store facts stay attributable.
 
 ## 3. Configure velruna
 

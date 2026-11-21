@@ -85,6 +85,45 @@ Do not put the OpenSearch password in the MCP config: it resolves from the OS
 keyring (`velruna creds set`), `OPENSEARCH_PASSWORD`, or `velruna.conf` (the
 latter only when `allow_plaintext` is on).
 
+### Running from the container image
+
+`ghcr.io/nemonobody/velruna` carries the server and the CLI. stdio is the
+transport, so the client starts the container per session and no port is
+published. A container has no session bus, which means the OS keyring is
+unreachable inside it: forward the password or mount a config that carries it.
+
+```json
+{
+  "mcpServers": {
+    "velruna": {
+      "type": "stdio",
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        "--network", "velruna-os_default",
+        "-e", "OPENSEARCH_PASSWORD",
+        "-v", "/home/me/.config/velruna/velruna.conf:/etc/velruna/velruna.conf:ro",
+        "ghcr.io/nemonobody/velruna:0.9.0",
+        "mcp"
+      ]
+    }
+  }
+}
+```
+
+- `--network` is only needed when the store is the compose service (the stack
+  puts it on `velruna-os_default`); for a store on the host use
+  `--network host` on Linux, or the host's LAN address.
+- `-e OPENSEARCH_PASSWORD` forwards the variable from the client's environment;
+  `docker inspect` shows it to anyone who can reach the daemon, so keep the
+  socket private (the default) or pass an owner-only env-file instead.
+- the image runs as uid 65532: the mounted config must be readable by that uid
+  and should stay `0600`;
+- pin a version (`:0.9.0`), not `:latest`;
+- facts written from a container carry the container's OS user as author
+  (`nonroot`) — set `VELRUNA_AUTHOR` / `VELRUNA_HOST` to keep provenance
+  readable for the other sessions reading the store.
+
 ## Tools
 
 | Tool | Purpose | Notes |

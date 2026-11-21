@@ -16,11 +16,13 @@ overview". It covers facts, the journal (history) and cached documents:
 
 ## Install
 
-The bundle (`docker/dashboards/objects.ndjson`: 3 index patterns, 18
-visualizations, the dashboard) is pushed with the bundled script:
+The bundle (`internal/dashboards/objects.ndjson`: 3 index patterns, 18
+visualizations, the dashboard) is embedded in the binary and pushed with:
 
 ```bash
-scripts/push-dashboards.sh
+velruna dashboards push                       # velruna.conf / OPENSEARCH_URL
+velruna dashboards push --conf /path/velruna.conf
+velruna dashboards push --index .kibana_1     # skip the alias probe
 ```
 
 On the dev stack `make dev-opensearch-dashboards` does both at once — it
@@ -28,12 +30,7 @@ starts the UI, waits for it and pushes the bundle automatically.
 
 It resolves cluster credentials the same way the server does (wallet first)
 and writes the saved objects **directly into the global tenant storage** (the
-`.kibana` alias backing index). Do not use the Dashboards UI `_import`: OSD
-3.x import strips each visualization's index reference and the panels then
-die with "Trying to initialize aggs without index pattern". The
-`securitytenant`/`security_tenant` HTTP header is ignored for basic-auth
-requests — a REST push always lands in the pushing user's personal tenant,
-which is why the script indexes the objects itself.
+`.kibana` alias backing index).
 
 After the push: open Dashboards, make sure the tenant switcher (avatar menu →
 Switch tenants) shows **Global**, and hard-reload the tab — the SPA caches
@@ -55,8 +52,8 @@ the index-pattern list per session. A quick start for the whole stack:
   introspect them over the API). After a mapping change regenerate and push:
 
   ```bash
-  python3 docker/dashboards/gen_fields.py
-  scripts/push-dashboards.sh
+  python3 docker/dashboards/gen_fields.py   # rewrites the embedded bundle
+  make build && ./velruna dashboards push   # rebuild: the bundle is embedded
   ```
 
 - Journal entries are also readable without Dashboards: `velruna journal
@@ -66,7 +63,7 @@ the index-pattern list per session. A quick start for the whole stack:
 
 | Symptom | Cause / fix |
 |---------|-------------|
-| `Trying to initialize aggs without index pattern` | the objects came through `_import` — push with `scripts/push-dashboards.sh` instead |
+| `Trying to initialize aggs without index pattern` | the objects came through `_import` — push with `velruna dashboards push` instead |
 | `Could not locate that index-pattern-field (id: …)` | stale/empty field list in a pattern — re-run `gen_fields.py` + push |
 | Dashboard opens completely empty (no panels) | hand-edited `panelsJSON` in map form — it must be a JSON array (the shipped bundle is correct) |
 | `AnalyticEngineError: does not support DSL queries` | stale SPA cache — hard reload the tab |
