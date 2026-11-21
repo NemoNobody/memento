@@ -6,6 +6,17 @@ under `## Unreleased`; the release commit moves that section under its version
 number (`.github/workflows/release.yml` reads the heading to build the release
 notes).
 
+## v0.8.10 — 2026-11-21
+
+### Changed
+
+- license: **Apache-2.0** replaces GPL-3.0. Releases up to and including
+  v0.8.9 remain under GPL-3.0; from this release on the project is permissive
+  (attribution + an explicit patent grant), which also unblocks the Docker MCP
+  Catalog, whose registry rejects copyleft licenses outright. Copyright stays
+  with the author; `LICENSE` carries the full text.
+
+
 ## v0.8.9 — 2026-11-21
 
 ### Added

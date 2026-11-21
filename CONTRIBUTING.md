@@ -73,4 +73,4 @@ left over from an older run is not covered by it.
 
 ## License
 
-License note: the project is GPL-3.0; contributions fall under the same license.
+License note: the project is Apache-2.0; contributions fall under the same license.

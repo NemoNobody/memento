@@ -3,8 +3,8 @@
 
 # Working tree version carries the next-release number with a -dev suffix; the
 # real (suffix-less) number is set only when cutting a tag:
-# make release VERSION=v0.8.9. Tag builds stamp the tag name via release.yml.
-VERSION ?= 0.8.9
+# make release VERSION=v0.8.10. Tag builds stamp the tag name via release.yml.
+VERSION ?= 0.8.10
 # Commit stamps the exact tree into the binary (velruna_status reports it).
 # `?=` + shell fallback: local builds get the live HEAD; CI can pass it explicitly.
 COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null)
@@ -169,9 +169,9 @@ clean:
 
 # release: cut a versioned release: tag HEAD and push; .github/workflows/
 # release.yml builds the binaries and publishes the GitHub release.
-# Requires a clean tree; usage: make release VERSION=v0.8.9
+# Requires a clean tree; usage: make release VERSION=v0.8.10
 release: test
-	@printf '%s' "$(VERSION)" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$$' || { echo "usage: make release VERSION=v0.8.9"; exit 2; }
+	@printf '%s' "$(VERSION)" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$$' || { echo "usage: make release VERSION=v0.8.10"; exit 2; }
 	git diff --exit-code
 	git diff --cached --exit-code
 	git tag -a $(VERSION) -m "release $(VERSION)"

@@ -415,5 +415,5 @@ misbehaves on your platform, open an issue.
 
 ## License
 
-[GPL-3.0](LICENSE)
+[Apache-2.0](LICENSE)
 

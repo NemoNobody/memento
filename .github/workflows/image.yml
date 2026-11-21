@@ -103,7 +103,7 @@ jobs:
           labels: |
             org.opencontainers.image.title=velruna
             org.opencontainers.image.description=Verified-fact memory for AI agents: MCP server and CLI, OpenSearch-backed
-            org.opencontainers.image.licenses=GPL-3.0-only
+            org.opencontainers.image.licenses=Apache-2.0
             org.opencontainers.image.version=${{ steps.img.outputs.semver }}
 
       - uses: docker/build-push-action@v6
