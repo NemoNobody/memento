@@ -123,8 +123,8 @@ func printDashboardPush(out, errOut io.Writer, res *client.DashboardPush, url st
 		return err
 	}
 	if res.Unverified {
-		if _, werr := fmt.Fprintf(errOut, "warning: %s could not be read (mapping probe refused); "+
-			"the writes are the only check\n", res.Index); werr != nil {
+		if _, werr := fmt.Fprintf(errOut, "warning: %s could not be read (mapping probe refused): "+
+			"it may be the wrong index — the writes are the only check\n", res.Index); werr != nil {
 			return werr
 		}
 	}

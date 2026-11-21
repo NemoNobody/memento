@@ -269,7 +269,10 @@ func (c *Client) probeSavedObjectsIndex(ctx context.Context, index string) (unve
 			return true, nil
 		}
 		switch hstatus {
-		case http.StatusOK, http.StatusForbidden, http.StatusMethodNotAllowed, http.StatusUnauthorized:
+		case http.StatusUnauthorized:
+			return false, fmt.Errorf("probe index %s: HTTP 401 — the credentials were rejected "+
+				"(check the password)", index)
+		case http.StatusOK, http.StatusForbidden, http.StatusMethodNotAllowed:
 			return true, nil
 		case http.StatusNotFound:
 			return false, fmt.Errorf("index %s does not exist at %s: has Dashboards ever started against "+

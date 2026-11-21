@@ -45,13 +45,15 @@ the index-pattern list per session. A quick start for the whole stack:
 
 The push never touches the facts or docs indices, but it needs:
 
-- **default path**: `cat/aliases` (to resolve `.kibana`) and write access to
-  the `.kibana*` indices;
-- **`--index` path**: read access to the index mapping
-  (`indices:admin/mappings/get`, part of `view_index_metadata`) plus the same
-  write access. Without the mapping read the command still runs, prints a
-  warning that the target could not be verified, and the writes are the only
-  check.
+- **default path**: `indices:admin/aliases/get` (resolve `.kibana`), write
+  access to the `.kibana*` indices, and `indices:admin/refresh` for the final
+  refresh (a write-only role writes everything and then exits non-zero on the
+  refresh);
+- **`--index` path**: `indices:admin/exists` (the existence probe) and
+  `view_index_metadata` / `indices:admin/mappings/get` to verify the mapping,
+  plus the same write and refresh rights. Role with neither can still write,
+  but the command then warns that the target could not be verified — and a
+  wrong-but-existing index would look green.
 
 ## How it reads the store
 

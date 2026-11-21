@@ -286,6 +286,62 @@ func TestPushDashboards_UnreadableMappingStillRejectsMissingIndex(t *testing.T) 
 	}
 }
 
+// The cap is what keeps a truncated mapping from reading as "not saved
+// objects": exactly the cap is fine, one byte over must say so.
+func TestPushDashboards_MappingSizeCap(t *testing.T) {
+	// Fill to exactly maxSavedObjectsBody bytes with a valid saved-objects
+	// document plus padding whitespace (JSON allows it).
+	head := `{".kibana_1":{"mappings":{"properties":{"type":{"type":"keyword"},"updated_at":{"type":"date"},"migrationVersion":{"type":"object"}}}}}`
+	pad := maxSavedObjectsBody - len(head)
+	if pad < 0 {
+		t.Fatalf("header alone exceeds the cap")
+	}
+	exact := head + strings.Repeat(" ", pad)
+
+	okFake := func(body string) func(recordedRequest) (int, string) {
+		return func(r recordedRequest) (int, string) {
+			switch {
+			case r.Method == http.MethodGet && strings.HasSuffix(r.Path, "/_mapping"):
+				return http.StatusOK, body
+			case r.Method == http.MethodPut, r.Method == http.MethodPost:
+				return http.StatusOK, `{}`
+			}
+			return http.StatusInternalServerError, `{}`
+		}
+	}
+
+	c, _ := newFakeClient(t, okFake(exact))
+	if _, err := c.PushDashboards(context.Background(), []byte(testBundle), ".kibana_1"); err != nil {
+		t.Fatalf("a mapping of exactly the cap was rejected: %v", err)
+	}
+
+	c2, _ := newFakeClient(t, okFake(exact+" "))
+	_, err := c2.PushDashboards(context.Background(), []byte(testBundle), ".kibana_1")
+	if err == nil {
+		t.Fatal("an over-cap mapping was accepted")
+	}
+	if !strings.Contains(err.Error(), "larger than") {
+		t.Errorf("error = %v, want it to name the size, not the mapping shape", err)
+	}
+}
+
+// A 401 on the fallback probe is a credential failure, not "unverified".
+func TestPushDashboards_ProbeFallback401IsFatal(t *testing.T) {
+	c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.Path, "/_mapping") {
+			return http.StatusForbidden, ""
+		}
+		return http.StatusUnauthorized, ""
+	})
+	_, err := c.PushDashboards(context.Background(), []byte(testBundle), ".kibana_1")
+	if err == nil {
+		t.Fatal("a 401 on the fallback probe was ignored")
+	}
+	if !strings.Contains(err.Error(), "credentials") {
+		t.Errorf("error = %v, want it to name the credentials", err)
+	}
+}
+
 func TestPushDashboards_RejectsWildcardIndex(t *testing.T) {
 	for _, bad := range []string{".kibana*", ".kibana?", ".kibana_1,.kibana_2", "_all", "-.kibana"} {
 		c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
