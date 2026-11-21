@@ -73,7 +73,7 @@ OpenSearch Dashboards has started at least once against the cluster.`,
 			// objects are already written, and the operator needs the counts to
 			// know that a retry is safe rather than duplicated.
 			if res != nil {
-				if werr := printDashboardPush(res, cfg.OpenSearchURL); werr != nil {
+				if werr := printDashboardPush(res, cfg.OpenSearchURL, err); werr != nil {
 					fatalErr(werr)
 				}
 			}
@@ -104,14 +104,17 @@ func loadDashboardsConfig(conf string) (*config.Config, error) {
 // printDashboardPush reports what landed and how to see it. The tenant and
 // reload notes are not decoration: the UI keeps the index-pattern list per
 // session, so a fresh push looks absent until the tab is reloaded, and any
-// tenant other than Global shows the personal copy instead.
-func printDashboardPush(res *client.DashboardPush, url string) error {
-	tenant := "requested index"
+// tenant other than Global shows the personal copy instead. runErr suppresses
+// the success hint: a failed refresh means the objects are not visible yet.
+func printDashboardPush(res *client.DashboardPush, url string, runErr error) error {
+	target, tenant := res.Index, "requested index"
 	if res.Global {
-		tenant = "global tenant"
+		// Writes go through the alias; the resolved index is what it pointed at
+		// when the command probed it.
+		target, tenant = ".kibana (write index "+res.Index+")", "global tenant"
 	}
-	if err := writeLine(os.Stdout, fmt.Sprintf("indexed %d saved object(s) into %s (%s) at %s",
-		res.Indexed, res.Index, tenant, url)); err != nil {
+	if err := writeLine(os.Stdout, fmt.Sprintf("indexed %d saved object(s) into %s, %s, at %s",
+		res.Indexed, target, tenant, url)); err != nil {
 		return err
 	}
 	for _, e := range res.Errors {
@@ -125,7 +128,7 @@ func printDashboardPush(res *client.DashboardPush, url string) error {
 		}
 		return nil
 	}
-	if !res.Global {
+	if runErr != nil || !res.Global {
 		return nil
 	}
 	return writeLine(os.Stdout, "open Dashboards, pick the Global tenant in the tenant switcher and "+

@@ -21,7 +21,7 @@ ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=0.0.0-dev
 ARG COMMIT=unknown
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath \
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -trimpath \
         -ldflags "-s -w \
             -X github.com/NemoNobody/velruna/internal/version.Version=${VERSION} \
             -X github.com/NemoNobody/velruna/internal/version.Commit=${COMMIT}" \

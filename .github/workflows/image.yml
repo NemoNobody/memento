@@ -29,6 +29,15 @@ jobs:
         with:
           ref: ${{ inputs.version || github.ref }}
 
+      # A tag can point at a commit whose CI is red (a force-pushed or mistyped
+      # tag): the image must not be the first thing that notices.
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Test
+        run: go test ./...
+
       # GHCR rejects uppercase repository owners, and a dispatched run must
       # derive its tags from the input rather than from the branch ref. The
       # semver shape is enforced: a stray tag (or a branch name typed into the
@@ -79,7 +88,7 @@ jobs:
           images: ghcr.io/${{ steps.img.outputs.owner }}/velruna
           tags: |
             type=raw,value=${{ steps.img.outputs.semver }}
-            type=raw,value=${{ steps.img.outputs.major_minor }}
+            type=raw,value=${{ steps.img.outputs.major_minor }},enable=${{ steps.img.outputs.prerelease == 'false' }}
             type=raw,value=latest,enable=${{ steps.img.outputs.prerelease == 'false' }}
           labels: |
             org.opencontainers.image.title=velruna

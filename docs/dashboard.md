@@ -20,9 +20,9 @@ The bundle (`internal/dashboards/objects.ndjson`: 3 index patterns, 18
 visualizations, the dashboard) is embedded in the binary and pushed with:
 
 ```bash
-velruna dashboards push                       # velruna.conf / OPENSEARCH_URL
+velruna dashboards push                       # resolves the .kibana write index
 velruna dashboards push --conf /path/velruna.conf
-velruna dashboards push --index .kibana_1     # skip the alias probe
+velruna dashboards push --index .kibana_1     # pin one index, skip the alias probe
 ```
 
 On the dev stack `make dev-opensearch-dashboards` does both at once — it

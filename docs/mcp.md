@@ -121,12 +121,15 @@ mounted config that carries it.
 - the image runs as uid 65532, so a `chmod 600` config owned by you is
   unreadable inside — use `chmod 644` (the file holds no password when the
   password comes from the environment), `chown 65532`, or `--user`;
-- `-e OPENSEARCH_PASSWORD` forwards the variable from the client's environment;
-  `docker inspect` shows it to anyone who can reach the daemon, so keep the
-  socket private (the default) or pass an owner-only env-file instead;
-- a config file is not mandatory: `--env` with `OPENSEARCH_URL`,
-  `OPENSEARCH_USER` and `OPENSEARCH_PASSWORD` is enough for a container-only
-  setup;
+- `-e OPENSEARCH_PASSWORD` forwards the variable from the environment the MCP
+  client was started from — a desktop-launched editor inherits the login
+  session, not your shell exports, so the variable may simply be absent. When
+  that is unclear, use `--env-file` with an owner-only file (mode `600`);
+- `docker inspect` shows the variable to anyone who can reach the daemon, so
+  keep the socket private (the default);
+- a config file is not mandatory: `-e OPENSEARCH_URL`, `-e OPENSEARCH_USER` and
+  `-e OPENSEARCH_PASSWORD` (or an `--env-file`) are enough for a
+  container-only setup;
 - pin a version (`:0.9.0`), not `:latest`;
 - facts written from a container carry the container's OS user as author
   (`nonroot`) — set `VELRUNA_AUTHOR` / `VELRUNA_HOST` to keep provenance

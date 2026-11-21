@@ -75,6 +75,11 @@ func Parse(bundle []byte) ([]Object, error) {
 		if len(o.Attributes) == 0 {
 			return nil, fmt.Errorf("bundle line %d (%s): object without attributes", line, o.DocumentID())
 		}
+		// "attributes": null or an array passes a length check but serialises to
+		// a document the UI silently drops.
+		if attr := bytes.TrimSpace(o.Attributes); len(attr) == 0 || attr[0] != '{' {
+			return nil, fmt.Errorf("bundle line %d (%s): attributes must be a JSON object", line, o.DocumentID())
+		}
 		// A duplicate would overwrite the earlier object: "indexed 22" would
 		// then mean 21 installed, and a generator bug would look like a clean run.
 		if _, dup := seen[o.DocumentID()]; dup {

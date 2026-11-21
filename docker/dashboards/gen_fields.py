@@ -98,8 +98,12 @@ def flatten(props, prefix=""):
 
 def main():
     conf_path = sys.argv[1] if len(sys.argv) > 1 else "velruna.conf"
-    with open(conf_path, encoding="utf-8") as f:
-        conf = json.load(f)
+    # A container/CI run may supply everything through OPENSEARCH_* variables;
+    # a missing config file is then normal, not a crash.
+    conf = {}
+    if os.path.exists(conf_path):
+        with open(conf_path, encoding="utf-8") as f:
+            conf = json.load(f)
     url = os.environ.get("OPENSEARCH_URL") or os.environ.get("VELRUNA_OS_URL") or conf.get("opensearch_url")
     user = (os.environ.get("OPENSEARCH_USER") or os.environ.get("VELRUNA_OS_USER")
             or conf.get("opensearch_user", "admin"))

@@ -61,6 +61,12 @@ func (c *Client) kibanaWriteIndex(ctx context.Context) (string, error) {
 	case http.StatusUnauthorized, http.StatusForbidden:
 		return "", fmt.Errorf("probe the %s alias at %s: HTTP %d — the credentials were rejected "+
 			"(check the password and the cat/aliases privilege)", kibanaAlias, c.cfg.OpenSearchURL, status)
+	case http.StatusNotFound, http.StatusBadRequest:
+		// OpenSearch answers a named _cat alias that does not exist with 404
+		// (aliases_not_found_exception) or 400 (index_not_found_exception),
+		// not with an empty list: both mean "Dashboards never initialized here".
+		return "", fmt.Errorf("no %s alias at %s (HTTP %d): start OpenSearch Dashboards once against "+
+			"this cluster, or pass --index", kibanaAlias, c.cfg.OpenSearchURL, status)
 	default:
 		return "", fmt.Errorf("probe the %s alias at %s: HTTP %d: %s",
 			kibanaAlias, c.cfg.OpenSearchURL, status, bodySnippet(body))
@@ -92,8 +98,18 @@ func (c *Client) kibanaWriteIndex(ctx context.Context) (string, error) {
 			kibanaAlias, len(write), strings.Join(write, ", "))
 	case len(rows) == 1:
 		// Dashboards creates the alias without an explicit write flag on a
-		// single index; one entry cannot be ambiguous.
-		return rows[0].Index, nil
+		// single index; one entry cannot be ambiguous. An explicit "false" is
+		// different: that index is marked as NOT writable and every PUT would
+		// fail after the probe.
+		switch rows[0].IsWriteIndex {
+		case "", "-":
+			return rows[0].Index, nil
+		case "false":
+			return "", fmt.Errorf("the %s alias points at %s, which is marked is_write_index=false: "+
+				"fix the alias or pass --index", kibanaAlias, rows[0].Index)
+		}
+		return "", fmt.Errorf("the %s alias has an unrecognised write flag %q on %s: pass --index",
+			kibanaAlias, rows[0].IsWriteIndex, rows[0].Index)
 	case len(rows) > 1:
 		idx := make([]string, 0, len(rows))
 		for _, r := range rows {
@@ -144,14 +160,23 @@ func (c *Client) PushDashboards(ctx context.Context, bundle []byte, index string
 		}
 		res.Index = resolved
 		target = kibanaAlias
-	} else if ok, herr := c.savedObjectsIndexExists(ctx, index); herr != nil {
-		return nil, herr
-	} else if !ok {
-		// Without this check a typo lands in a brand-new empty index
-		// (action.auto_create_index is on by default) and every PUT returns
-		// 2xx: the run looks successful and installs nothing anyone can see.
-		return nil, fmt.Errorf("index %s does not exist at %s: has Dashboards ever started against this "+
-			"cluster, or is --index mistyped?", index, c.cfg.OpenSearchURL)
+	} else {
+		// A wildcard would pass the existence probe and then fail on every PUT;
+		// the flag names one index.
+		if strings.ContainsAny(index, "*?") {
+			return nil, fmt.Errorf("--index must name a single saved-objects index, not a pattern: %q", index)
+		}
+		ok, herr := c.savedObjectsIndexExists(ctx, index)
+		if herr != nil {
+			return nil, herr
+		}
+		if !ok {
+			// Without this check a typo lands in a brand-new empty index
+			// (action.auto_create_index is on by default) and every PUT returns
+			// 2xx: the run looks successful and installs nothing anyone can see.
+			return nil, fmt.Errorf("index %s does not exist at %s: has Dashboards ever started against this "+
+				"cluster, or is --index mistyped?", index, c.cfg.OpenSearchURL)
+		}
 	}
 
 	now := time.Now()
@@ -181,9 +206,11 @@ func (c *Client) PushDashboards(ctx context.Context, bundle []byte, index string
 }
 
 // savedObjectsIndexExists probes the caller-supplied index before anything is
-// written to it.
+// written to it. Only 404 means "missing": a write-only role legitimately
+// cannot call HEAD (403), and a proxy may not allow it (405) — in those cases
+// the caller named the index explicitly and the PUTs are the real test.
 func (c *Client) savedObjectsIndexExists(ctx context.Context, index string) (bool, error) {
-	status, _, err := c.doSavedObjectRequest(ctx, http.MethodHead, "/"+url.PathEscape(index), nil)
+	status, body, err := c.doSavedObjectRequest(ctx, http.MethodHead, "/"+url.PathEscape(index), nil)
 	if err != nil {
 		return false, fmt.Errorf("probe index %s: %w", index, err)
 	}
@@ -192,8 +219,11 @@ func (c *Client) savedObjectsIndexExists(ctx context.Context, index string) (boo
 		return true, nil
 	case http.StatusNotFound:
 		return false, nil
+	case http.StatusMethodNotAllowed, http.StatusForbidden, http.StatusUnauthorized:
+		// The probe is a convenience, not a policy decision.
+		return true, nil
 	}
-	return false, fmt.Errorf("probe index %s: HTTP %d", index, status)
+	return false, fmt.Errorf("probe index %s: HTTP %d: %s", index, status, bodySnippet(body))
 }
 
 // putDocument indexes one saved object in place (PUT on its stable id), so a
@@ -242,10 +272,14 @@ func (c *Client) doSavedObjectRequest(ctx context.Context, method, path string, 
 		req.Header.Set("Content-Type", "application/json")
 	}
 	resp, err := c.api.Client.Stream(req)
+	if resp != nil {
+		// Stream documents resp != nil together with err (a cancelled context
+		// during retry backoff); the body still has to be closed.
+		defer func() { _ = resp.Body.Close() }()
+	}
 	if err != nil {
 		return 0, "", err
 	}
-	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
 	if err != nil {
 		return resp.StatusCode, "", err

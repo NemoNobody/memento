@@ -118,7 +118,8 @@ show (all loopback-bound, all torn down by `make dev-opensearch-down`):
 
 ### velruna itself in a container
 
-The release workflow publishes `ghcr.io/nemonobody/velruna` for `linux/amd64`
+The image workflow (`.github/workflows/image.yml`) publishes
+`ghcr.io/nemonobody/velruna` for `linux/amd64`
 and `linux/arm64`, tagged `X.Y.Z`, `X.Y` and `latest` (the last one only for a
 final release, never for a pre-release). The image is distroless (no shell,
 ~14 MB) and runs as uid 65532; it holds the binary only — nothing secret is
@@ -128,7 +129,9 @@ The package is created **private** on the first push: set it to public once in
 the repository's package settings (`Packages` → the package → *Package
 settings* → *Change visibility* → public) and link it to the repository.
 Without that step an anonymous `docker run` fails with
-`denied: requested access to the resource is denied`.
+`denied: requested access to the resource is denied`. Until a release image is
+published, `make docker-build` side-steps the registry entirely:
+`VELRUNA_IMAGE=ghcr.io/nemonobody/velruna:dev make stack-up`.
 
 ```bash
 # CLI against a store you already have (config path: --conf, else VELRUNA_CONF)
@@ -162,7 +165,8 @@ make stack-down
 the security plugin off, and the compose service supplies the dummy `dev/dev`
 pair (override with `OPENSEARCH_USER`/`OPENSEARCH_PASSWORD`). Point
 `VELRUNA_CONF_FILE=<path>` at your own config or `VELRUNA_IMAGE=<tag>` at a
-pinned image.
+pinned image. A relative `VELRUNA_CONF_FILE` resolves from the compose file's
+directory (`docker/`), not from the shell's working directory.
 
 A mounted config must be **readable by uid 65532**, so `chmod 600` on the host
 owner does not work — either `chmod 644` it (it holds no password if the
@@ -172,15 +176,6 @@ the mount source when the host path does not exist, and the container then
 fails with `is a directory` — check the path before blaming the image.
 
 Two differences from a host install:
-
-- **no keyring**: a container has no session bus, so the password comes from
-  `OPENSEARCH_PASSWORD` or from the config file (`allow_plaintext: true`).
-  `-e OPENSEARCH_PASSWORD` forwards it from the client environment;
-  `docker inspect` exposes it to anyone who can reach the daemon, so keep the
-  socket private (the default) or use an owner-only env-file;
-- **author label**: provenance defaults to the OS user inside the container,
-  which is `nonroot`. Set `VELRUNA_AUTHOR` and `VELRUNA_HOST` (the compose
-  service forwards both) so shared-store facts stay attributable.
 
 - **no keyring**: a container has no session bus, so the password comes from
   `OPENSEARCH_PASSWORD` or from the config file (`allow_plaintext: true`).

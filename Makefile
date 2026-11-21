@@ -133,7 +133,7 @@ docker-smoke: docker-build
 # not left running: a stdio MCP server has nothing to do until a client starts
 # it, and an exited container lying around is just confusing.
 stack-up:
-	$(CONTAINER) -f $(OSFILE) --profile single --profile app up -d
+	$(CONTAINER) -f $(OSFILE) --profile single up -d
 	$(CONTAINER) -f $(OSFILE) --profile single --profile app run --rm velruna status
 
 stack-down:

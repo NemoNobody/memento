@@ -96,6 +96,8 @@ func TestParseErrors(t *testing.T) {
 		{"bad json", "{not json}\n", "bundle line 1"},
 		{"no id", `{"type":"dashboard","attributes":{}}` + "\n", "without id or type"},
 		{"no attributes", `{"id":"x","type":"dashboard"}` + "\n", "without attributes"},
+		{"null attributes", `{"id":"x","type":"dashboard","attributes":null}` + "\n", "attributes must be a JSON object"},
+		{"array attributes", `{"id":"x","type":"dashboard","attributes":[]}` + "\n", "attributes must be a JSON object"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

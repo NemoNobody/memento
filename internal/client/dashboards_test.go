@@ -19,6 +19,11 @@ func writeIndexResponder(t *testing.T) func(recordedRequest) (int, string) {
 	return func(r recordedRequest) (int, string) {
 		switch {
 		case r.Method == http.MethodGet && r.Path == "/_cat/aliases/.kibana":
+			// Without format=json the cluster answers in a text table and the
+			// decode fails on a live install.
+			if got := r.Query.Get("format"); got != "json" {
+				t.Errorf("_cat format = %q, want json", got)
+			}
 			return http.StatusOK, `[{"alias":".kibana","index":".kibana_2","is_write_index":"true"}]`
 		// Writes go through the ALIAS, not the resolved index: that is what
 		// survives a concurrent .kibana_N migration.
@@ -209,6 +214,58 @@ func TestPushDashboards_SingleEntryWithoutWriteFlagIsUsed(t *testing.T) {
 	}
 	if res.Index != ".kibana_9" {
 		t.Errorf("Index = %q, want .kibana_9", res.Index)
+	}
+}
+
+// A missing alias is a 404/400 on the named _cat endpoint, not an empty list:
+// the message must send the operator to Dashboards rather than dump JSON.
+func TestPushDashboards_MissingAliasIsExplained(t *testing.T) {
+	for _, status := range []int{http.StatusNotFound, http.StatusBadRequest} {
+		c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+			return status, `{"error":{"type":"aliases_not_found_exception","reason":"aliases [.kibana] missing"}}`
+		})
+		_, err := c.PushDashboards(context.Background(), []byte(testBundle), "")
+		if err == nil {
+			t.Fatalf("HTTP %d: PushDashboards succeeded without an alias", status)
+		}
+		if !strings.Contains(err.Error(), "Dashboards") {
+			t.Errorf("HTTP %d: error = %v, want it to point at Dashboards", status, err)
+		}
+	}
+}
+
+// A write-only role cannot HEAD, and a proxy may not; the caller named the
+// index, so the probe must not turn a legitimate target into a refusal.
+func TestPushDashboards_HeadRefusalDoesNotBlockExplicitIndex(t *testing.T) {
+	for _, status := range []int{http.StatusForbidden, http.StatusMethodNotAllowed} {
+		c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+			switch r.Method {
+			case http.MethodHead:
+				return status, ""
+			case http.MethodPut, http.MethodPost:
+				return http.StatusOK, `{}`
+			}
+			return http.StatusInternalServerError, `{}`
+		})
+		res, err := c.PushDashboards(context.Background(), []byte(testBundle), ".kibana_1")
+		if err != nil {
+			t.Fatalf("HEAD %d blocked a named index: %v", status, err)
+		}
+		if res.Indexed != 2 {
+			t.Errorf("HEAD %d: Indexed = %d, want 2", status, res.Indexed)
+		}
+	}
+}
+
+func TestPushDashboards_RejectsWildcardIndex(t *testing.T) {
+	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
+		return http.StatusOK, `{}`
+	})
+	if _, err := c.PushDashboards(context.Background(), []byte(testBundle), ".kibana*"); err == nil {
+		t.Fatal("PushDashboards accepted a wildcard index")
+	}
+	if len(fake.requests) != 0 {
+		t.Errorf("a wildcard was probed or written: %+v", fake.requests)
 	}
 }
 

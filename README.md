@@ -140,10 +140,14 @@ cloned, `scripts/install.sh` picks it, verifies the sha256 and puts it in
 Or run the container (release tags only, `linux/amd64` + `linux/arm64`):
 
 ```
-docker run -i --rm -v ~/.velruna.conf:/etc/velruna/velruna.conf:ro \
+docker run -i --rm --user "$(id -u):$(id -g)" \
+  -v ~/.velruna.conf:/etc/velruna/velruna.conf:ro \
   -e VELRUNA_CONF=/etc/velruna/velruna.conf -e OPENSEARCH_PASSWORD \
   ghcr.io/nemonobody/velruna:0.9.0 mcp
 ```
+
+`--user` keeps a `0600` config readable (without it the image's uid 65532 needs
+a `0644`/`chown 65532` file — see [docs/setup.md](docs/setup.md) §2).
 
 The image is distroless and runs as uid 65532; a container has no session bus,
 so the password comes from the environment or the mounted config, not from the
