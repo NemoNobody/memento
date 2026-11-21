@@ -6,6 +6,36 @@ under `## Unreleased`; the release commit moves that section under its version
 number (`.github/workflows/release.yml` reads the heading to build the release
 notes).
 
+## Unreleased
+
+### Added
+
+- MCP bundle (`.mcpb`): every release now attaches a universal
+  `velruna-<version>.mcpb` plus per-OS `-darwin`, `-linux` and `-windows`
+  bundles. A desktop client installs one with a configuration dialog —
+  OpenSearch URL, user, password and the TLS-skip flag, no JSON editing. The
+  universal bundle carries all five builds and a launcher that picks the right
+  one; a per-OS bundle carries only that OS's builds and declares just that
+  platform. `make mcpb` builds the universal one locally.
+- `superseded_by`: a fact can name the record that replaces it (one link per
+  fact; a later patch may repoint it — each event is journaled), target
+  verified, cycle-free. A link-only patch journals `op=supersede`; a patch
+  that also changes the value or retires the fact keeps that event's op and
+  its entry states the link. Returned by `get` and `journal`; a link that
+  points back in time is flagged in the journal. See docs/how-it-works.md.
+- several store nodes: `opensearch_urls` / `OPENSEARCH_URLS` accepts a comma
+  separated list and validates every node, so a client can reach a cluster
+  without a proxy in front of it. `status` reports the list; an unreachable
+  store now suggests where to look.
+- a schema version stamped into the facts index (`mappings._meta`: `SchemaVersion = 1`):
+  a store written by a newer binary is refused before anything is written,
+  while a store from an older one is upgraded in place (additive mapping).
+- deployment: a secured stack profile with Dashboards (`secure-dash`), server
+  knobs (`VELRUNA_OS_HEAP`, `VELRUNA_CLUSTER_SEEDS`), and a
+  `workflow_dispatch` smoke pipeline that boots the single-node stack, runs
+  `cli-smoke`, pushes the dashboard bundle and checks every panel through the
+  cluster.
+
 ## v0.8.10 — 2026-11-21
 
 ### Changed

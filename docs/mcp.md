@@ -137,6 +137,37 @@ mounted config that carries it.
   (`nonroot`) — set `VELRUNA_AUTHOR` / `VELRUNA_HOST` to keep provenance
   readable for the other sessions reading the store.
 
+### Installing from the MCP bundle
+
+Each release also ships MCP Bundles (`.mcpb`) — the MCP Bundle format: a zip
+holding `manifest.json`, the builds and a launcher. Clients that speak the
+format (Claude Desktop and others) install one from the file and show a
+configuration form instead of asking you to edit JSON:
+
+| Asset | Size | Contents |
+|---|---|---|
+| `velruna-<version>.mcpb` | ~22 MB | every build (universal; the registry entry points here) |
+| `velruna-<version>-darwin.mcpb` | ~9 MB | macOS amd64 + arm64 |
+| `velruna-<version>-linux.mcpb` | ~9 MB | linux amd64 + arm64 |
+| `velruna-<version>-windows.mcpb` | ~5 MB | the Windows build |
+
+A per-OS bundle declares only its own platform and drops the other launch
+descriptions; the universal one exists because a registry package entry has no
+platform field, so a client cannot choose between several artifacts.
+
+The form asks for:
+
+| Field | Goes to |
+|---|---|
+| OpenSearch URL (required) | `OPENSEARCH_URL` |
+| OpenSearch user (default `admin`) | `OPENSEARCH_USER` |
+| OpenSearch password (masked) | `OPENSEARCH_PASSWORD` |
+| Skip TLS verification (default off) | `OPENSEARCH_INSECURE_SKIP_VERIFY` |
+
+The server still needs a reachable OpenSearch — the bundle does not embed one.
+The same artifact is what the official MCP registry points at, so a client that
+resolves the registry entry downloads exactly this file.
+
 ## Tools
 
 | Tool | Purpose | Notes |
@@ -146,11 +177,11 @@ mounted config that carries it.
 | `velruna_get` | Exact fact by key, or a batch via `keys: [...]` (up to 10, `items[]` with per-key `found`) | `found: false` when absent — not an error; history off unless `include_history: true`; carries `summary`, `keywords`, `confirmed_by` (who verified the current value), `author`/`author_source`, `updated_by` when present |
 | `velruna_add` | Store a verified fact | Shape is validated before the guard and the store: non-empty `key`/`value`, and `category` one of `location`/`config`/`endpoint`/`behavior`/`context_map`/`recipe`/`rule`, stored lowercase (an unknown category never ages — silent rot). Optional `ttl_days` shortens the category's staleness window for this fact (it never lengthens it past the cap: config/endpoint 14, location/behavior 30, recipe 180, rule 90; `context_map` is uncapped). Corrects by key: the accepted value is appended to the journal and the fact points at the entry; the same value updates notes/source only and leaves the journal untouched. Optional `keywords` (up to 10 normalized tags, exact-match filterable via `velruna_search`). The answer says what happened: `created`, `changed` (false = same-value touch), `previous_summary` (the superseded table of contents). `notes` are replaced only by a non-empty new note (an omitted `notes` leaves the stored qualifiers alone — they never enter history, so erasing them is irreversible). A value over `summary_min_len` requires `summary` (under `summary_max_len`) — the store's table of contents. Writes are stamped with authorship labels (`author`/`author_source`/`model`/`host`/`session` — self-reported audit metadata, birth labels write-once; later writes move `updated_by`). `secret_guard` runs before any store contact: a high-confidence credential refuses the write, a heuristic hit in a text field is replaced and reported in `redactions`, and a hit in an identity field (key/project/source/keywords) refuses. For cheap partial updates (dated note, status flip) use `velruna_patch` — no value resend |
 | `velruna_add_batch` | Store 1..10 facts in one call (the session-end ritual in a single round-trip) | Per-item guard and `confirm_secret` (one approved false positive never whitewashes the rest); duplicate keys are rejected (the whole batch — a dupe makes created/changed order-dependent and ambiguous); partial success is legal: per-item `{key, created, changed, status, error?}` |
-| `velruna_patch` | Partial update of an existing fact (never creates) | Fields: `value`, `summary`, `notes` (replace), `notes_append` (dated line appended atomically server-side — a concurrent add cannot drop it), `source`, `status` (`verified`\|`obsolete`; a transition is journaled; obsolete→verified sets `observed_at=now`), `reason` (with obsolete), `ttl_days` (retunes the staleness window, bounded by the category cap; a qualifier touch, not journaled), `keywords` (replaces the tag set; same normalization as add — a qualifier touch, the tags appear in the history with the next accepted value), `reverify` (re-confirm the current value: `observed_at` moves to now, `op=rediscovery` is journaled, the writer joins `confirmed_by`; refused together with value/summary/status, and on an obsolete fact). Omitted fields are untouched. On a value change the old summary is CLEARED unless a new one is provided (a stale table of contents is a lie); a long new value requires a new summary (the add rule) |
+| `velruna_patch` | Partial update of an existing fact (never creates) | Fields: `value`, `summary`, `notes` (replace), `notes_append` (dated line appended atomically server-side — a concurrent add cannot drop it), `source`, `status` (`verified`\|`obsolete`; a transition is journaled; obsolete→verified sets `observed_at=now`), `reason` (with obsolete), `ttl_days` (retunes the staleness window, bounded by the category cap; a qualifier touch, not journaled), `keywords` (replaces the tag set; same normalization as add — a qualifier touch, the tags appear in the history with the next accepted value), `reverify` (re-confirm the current value: `observed_at` moves to now, `op=rediscovery` is journaled, the writer joins `confirmed_by`; refused together with value/summary/status, and on an obsolete fact). Omitted fields are untouched. On a value change the old summary is CLEARED unless a new one is provided (a stale table of contents is a lie); a long new value requires a new summary (the add rule). `superseded_by` sets the successor link: one per fact (a later patch repoints it, journaled), target must exist and be `verified`, cycles refused; a link-only patch journals `op=supersede` (a patch that also changes the value or retires the fact keeps that event's op and its entry states the link); a backward link is allowed and flagged `marker=superseded-newer-with-older` |
 | `velruna_patch_batch` | Patch 1..10 existing facts in one call (the session-end ritual when the facts already exist) | Per-item guard and `confirm_secret` (one approved false positive never whitewashes the rest); duplicate keys rejected (the whole batch); partial success legal: per-item `{key, changed, reverified?, status, error?}`, with `changed`/`reverified` counters on the answer. Same field semantics as `velruna_patch`; never creates (a missing key is a per-item store error) |
 | `velruna_list` | Facts of a project | Same trust default as search; **compact by default** (`compact: false` restores full rows): key/summary/category/status/notes-head/age rows — full values cost ~5x tokens and a project listing is the most expensive agent call; **sorted by `updated_at` desc** by default (`sort: "key"` for stable navigation; a same-value touch moves `updated_at` without changing `age`/`stale`); `prefix` keeps only keys starting with it (trailing `*` allowed); history ships only on full rows (`include_history: true` with `compact: false` — compact rows are navigation; `velruna_journal` reads history); a zero-hit answer carries a navigation `hint` |
 | `velruna_keys` | Find facts by key across all projects | `prefix` (key start) and/or `match` (key substring; `*`, `?` wildcards); at least one required; sorted by key; `project` is an optional filter; key matching is case-sensitive (keys conventionally lowercase); rows are always compact (navigation is scanned, not read) |
-| `velruna_journal` | Read the journal for a key: the append-only history of accepted values, newest first (`limit`, default 20; `since`/`until` bound `created_at` as RFC3339 UTC) | `op: write` is an accepted value, `op: rediscovery` is a re-confirmation of the same value (`reverify` on `velruna_patch`), `op: retire` marks a verified→obsolete transition; counts after an admin deleted old journal indices are lower bounds. Prefer `velruna_history_info` first, the full journal only when the history matters |
+| `velruna_journal` | Read the journal for a key: the append-only history of accepted values, newest first (`limit`, default 20; `since`/`until` bound `created_at` as RFC3339 UTC) | `op: write` is an accepted value, `op: rediscovery` is a re-confirmation of the same value (`reverify` on `velruna_patch`), `op: retire` marks a verified→obsolete transition, `op: supersede` records a `superseded_by` link (a relation between records, not a value change; `marker` flags a link that points back in time); counts after an admin deleted old journal indices are lower bounds. Prefer `velruna_history_info` first, the full journal only when the history matters |
 | `velruna_history_info` | Compact per-key history overview: writes, rediscoveries, first/last timestamp, `current_ref` — no entry bodies | Answers "did this fact change, how often, when last" cheaply; counts are LOWER BOUNDS (admin index pruning is invisible to the app) |
 | `velruna_prune` | Drop old journal entries under a key, keeping the newest `keep` | **DESTRUCTIVE** — without `confirm: true` nothing is written, the call returns the plan; show it to the user and re-call only after their approval. Journal-first; keys that predate the journal fall back to the legacy in-doc array. The journal is write-forever by design: pruning is a manual admin decision, never automatic |
 | `velruna_obsolete` | Mark a fact obsolete because its subject is gone | Value is kept for reference; the reason is appended to notes; the transition is journaled. The same `secret_guard` policy as `velruna_add` applies: a credential refuses, a heuristic hit in the reason is redacted with a marker and reported in `redactions` (the rows merge with the current value's audit). Use `velruna_add` when the value changed, `velruna_patch` to flip status |

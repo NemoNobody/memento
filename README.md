@@ -61,6 +61,12 @@ Each fact carries evidence, not verdicts:
 - **keywords**: up to 10 normalized tags per fact (lowercase single tokens),
   exact-match filterable — cross-project slices (`perf`, `security`, `infra`)
   without a graph backlog, and recipes/rules stay findable by topic;
+- **successor** (`superseded_by`): at most one link per fact to the record
+  that replaces it, set by `velruna_patch` (a later patch may repoint it;
+  both events are journaled as `op=supersede`).
+  The target must be a verified fact and the chain must stay cycle-free; a
+  link pointing back in time is legal but flagged in the journal. It answers
+  "this key is stale garbage, read that one instead" without copying the value;
 - **secret guard**: writes scan for credential-like text (the index is
   plaintext) — a real credential refuses the write, a hit in an identity field
   (key, project, source, keywords) also refuses, while a heuristic hit (a long
@@ -136,6 +142,10 @@ Or download the binary for your platform from
 [Releases](https://github.com/NemoNobody/velruna/releases); with the repo
 cloned, `scripts/install.sh` picks it, verifies the sha256 and puts it in
 `~/.local/bin`.
+
+Or install the MCP bundle from [Releases](https://github.com/NemoNobody/velruna/releases)
+(`velruna-<version>.mcpb`): clients that speak the MCP Bundle format show a
+configuration form for the OpenSearch URL, user and password — no JSON editing.
 
 Or run the container (release tags only, `linux/amd64` + `linux/arm64`):
 

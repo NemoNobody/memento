@@ -100,6 +100,8 @@ func buildJournalTemplateBody(prefix string, replicas int) map[string]interface{
 					"value":         map[string]interface{}{"type": "text"},
 					"notes":         map[string]interface{}{"type": "text"},
 					"source":        map[string]interface{}{"type": "keyword"},
+					"superseded_by": map[string]interface{}{"type": "keyword"},
+					"marker":        map[string]interface{}{"type": "keyword"},
 					"created_at":    map[string]interface{}{"type": "date"},
 					"ingest_at":     map[string]interface{}{"type": "date"},
 					"author":        map[string]interface{}{"type": "keyword"},
@@ -138,6 +140,10 @@ func buildJournalPipelineBody(prefix string) map[string]interface{} {
 type installGate struct {
 	mu   sync.Mutex
 	done bool
+	// unreadable marks a check that finished without a verdict (the role may
+	// not read it): the work must not be retried, and callers that act on the
+	// verdict must treat it as unknown.
+	unreadable bool
 }
 
 // infraGate returns the gate for a key, creating it on first use. Keys are
