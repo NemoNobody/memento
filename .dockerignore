@@ -16,3 +16,10 @@ velruna.exe
 *.conf.*
 *.env
 *.bak-*
+# Local notes and keys that must never enter a build layer or the GHA cache.
+opensearch_password.md
+*.key
+*.pem
+*.tar
+*.tar.gz
+*.tar.zst

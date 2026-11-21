@@ -126,6 +126,15 @@ func printDashboardPush(res *client.DashboardPush, url string, runErr error) err
 		if _, werr := fmt.Fprintf(os.Stderr, "%d object(s) failed\n", res.Failed); werr != nil {
 			return werr
 		}
+		// Every object failing points at the target, not at the objects: the
+		// usual cause is a mistyped --index whose existence probe was refused
+		// (a write-only role cannot call HEAD) and which auto-create then made.
+		if res.Objects > 0 && res.Failed == res.Objects {
+			if _, werr := fmt.Fprintf(os.Stderr, "nothing was written: check the target index %q "+
+				"(and that --index is an index, not an alias or pattern)\n", res.Index); werr != nil {
+				return werr
+			}
+		}
 		return nil
 	}
 	if runErr != nil || !res.Global {

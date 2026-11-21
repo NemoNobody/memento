@@ -217,8 +217,8 @@ func TestPushDashboards_SingleEntryWithoutWriteFlagIsUsed(t *testing.T) {
 	}
 }
 
-// A missing alias is a 404/400 on the named _cat endpoint, not an empty list:
-// the message must send the operator to Dashboards rather than dump JSON.
+// A missing alias is normally 200 + [] (covered below); a proxy or an older
+// gateway may answer 404/400 instead. Both must send the operator to Dashboards.
 func TestPushDashboards_MissingAliasIsExplained(t *testing.T) {
 	for _, status := range []int{http.StatusNotFound, http.StatusBadRequest} {
 		c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
@@ -258,14 +258,46 @@ func TestPushDashboards_HeadRefusalDoesNotBlockExplicitIndex(t *testing.T) {
 }
 
 func TestPushDashboards_RejectsWildcardIndex(t *testing.T) {
-	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
-		return http.StatusOK, `{}`
-	})
-	if _, err := c.PushDashboards(context.Background(), []byte(testBundle), ".kibana*"); err == nil {
-		t.Fatal("PushDashboards accepted a wildcard index")
+	for _, bad := range []string{".kibana*", ".kibana?", ".kibana_1,.kibana_2", "_all", "-.kibana"} {
+		c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
+			return http.StatusOK, `{}`
+		})
+		if _, err := c.PushDashboards(context.Background(), []byte(testBundle), bad); err == nil {
+			t.Errorf("PushDashboards accepted %q", bad)
+		}
+		if len(fake.requests) != 0 {
+			t.Errorf("%q was probed or written: %+v", bad, fake.requests)
+		}
 	}
-	if len(fake.requests) != 0 {
-		t.Errorf("a wildcard was probed or written: %+v", fake.requests)
+}
+
+// A rejected password must be named once, not repeated 22 times as PUT errors.
+func TestPushDashboards_Probe401IsFatal(t *testing.T) {
+	c, fake := newFakeClient(t, func(r recordedRequest) (int, string) {
+		return http.StatusUnauthorized, `{"error":"unauthorized"}`
+	})
+	_, err := c.PushDashboards(context.Background(), []byte(testBundle), ".kibana_1")
+	if err == nil {
+		t.Fatal("a 401 probe was ignored")
+	}
+	if !strings.Contains(err.Error(), "credentials") {
+		t.Errorf("error = %v, want it to name the credentials", err)
+	}
+	if len(fake.requests) != 1 {
+		t.Errorf("issued %d requests after a 401, want just the probe", len(fake.requests))
+	}
+}
+
+// is_write_index=false means the index rejects writes: taking it as the target
+// would fail every PUT after a successful probe.
+func TestPushDashboards_AliasMarkedNotWritableIsRefused(t *testing.T) {
+	for _, flag := range []string{"false", "TRUE", "true "} {
+		c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+			return http.StatusOK, `[{"alias":".kibana","index":".kibana_1","is_write_index":"` + flag + `"}]`
+		})
+		if _, err := c.PushDashboards(context.Background(), []byte(testBundle), ""); err == nil {
+			t.Errorf("is_write_index=%q was accepted as the write target", flag)
+		}
 	}
 }
 

@@ -6,6 +6,8 @@
 #
 # BUILDPLATFORM keeps the compiler on the build host and cross-compiles for the
 # target: the arm64 image then costs seconds instead of an emulated full build.
+# TARGETOS/TARGETARCH are set by BuildKit; with the legacy builder they are empty
+# and Go falls back to the host platform, which matches that builder's base image.
 FROM --platform=$BUILDPLATFORM golang:1.26 AS build
 WORKDIR /src
 
@@ -21,7 +23,7 @@ ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=0.0.0-dev
 ARG COMMIT=unknown
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -trimpath \
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath \
         -ldflags "-s -w \
             -X github.com/NemoNobody/velruna/internal/version.Version=${VERSION} \
             -X github.com/NemoNobody/velruna/internal/version.Commit=${COMMIT}" \

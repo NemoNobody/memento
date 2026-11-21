@@ -120,8 +120,8 @@ show (all loopback-bound, all torn down by `make dev-opensearch-down`):
 
 The image workflow (`.github/workflows/image.yml`) publishes
 `ghcr.io/nemonobody/velruna` for `linux/amd64`
-and `linux/arm64`, tagged `X.Y.Z`, `X.Y` and `latest` (the last one only for a
-final release, never for a pre-release). The image is distroless (no shell,
+and `linux/arm64`, tagged `X.Y.Z`, plus `X.Y` and `latest` for a final release
+(never for a pre-release). The image is distroless (no shell,
 ~14 MB) and runs as uid 65532; it holds the binary only — nothing secret is
 baked in.
 
@@ -135,7 +135,7 @@ published, `make docker-build` side-steps the registry entirely:
 
 ```bash
 # CLI against a store you already have (config path: --conf, else VELRUNA_CONF)
-docker run --rm -i \
+docker run --rm -i --user "$(id -u):$(id -g)" \
   -v ~/.velruna.conf:/etc/velruna/velruna.conf:ro \
   -e VELRUNA_CONF=/etc/velruna/velruna.conf \
   -e OPENSEARCH_PASSWORD \
@@ -147,7 +147,8 @@ OPENSEARCH_URL=https://os.example:9200 OPENSEARCH_USER=admin docker run --rm -i 
   ghcr.io/nemonobody/velruna:0.9.0 status
 
 # MCP over stdio: the client starts the process, so the container is run with -i
-docker run -i --rm -v ~/.velruna.conf:/etc/velruna/velruna.conf:ro \
+docker run -i --rm --user "$(id -u):$(id -g)" \
+  -v ~/.velruna.conf:/etc/velruna/velruna.conf:ro \
   -e VELRUNA_CONF=/etc/velruna/velruna.conf -e OPENSEARCH_PASSWORD \
   ghcr.io/nemonobody/velruna:0.9.0 mcp
 ```
@@ -163,7 +164,9 @@ make stack-down
 `docker/velruna.container.conf` is the config the stack mounts: it points at
 `http://opensearch:9200` and carries no credentials — the dev node runs with
 the security plugin off, and the compose service supplies the dummy `dev/dev`
-pair (override with `OPENSEARCH_USER`/`OPENSEARCH_PASSWORD`). Point
+pair (override with `OPENSEARCH_USER`/`OPENSEARCH_PASSWORD`). A restrictive
+umask (077) checks this file out as 0600, which uid 65532 cannot read: `chmod
+644 docker/velruna.container.conf` if `make stack-up` fails on the config. Point
 `VELRUNA_CONF_FILE=<path>` at your own config or `VELRUNA_IMAGE=<tag>` at a
 pinned image. A relative `VELRUNA_CONF_FILE` resolves from the compose file's
 directory (`docker/`), not from the shell's working directory.

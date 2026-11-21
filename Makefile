@@ -113,7 +113,7 @@ dev-opensearch-secure:
 # Container image. Release tags are published by .github/workflows/image.yml;
 # locally the build stamps the same version/commit as `make build`.
 IMAGE  ?= ghcr.io/nemonobody/velruna
-DOCKER ?= docker
+DOCKER ?= $(shell if command -v docker >/dev/null 2>&1; then echo docker; else echo podman; fi)
 
 docker-build:
 	$(DOCKER) build \

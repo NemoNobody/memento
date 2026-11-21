@@ -60,7 +60,7 @@ the index-pattern list per session. A quick start for the whole stack:
   ```
 
 - Journal entries are also readable without Dashboards: `velruna journal
-  <key>` (entries) and `velruna_history_info <key>` (counts).
+  <key>` (entries) and `velruna history-info <key>` (counts).
 
 ## Troubleshooting
 

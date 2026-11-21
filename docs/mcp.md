@@ -101,6 +101,7 @@ mounted config that carries it.
       "command": "docker",
       "args": [
         "run", "-i", "--rm",
+        "--user", "1000:1000",
         "--network", "velruna-os_default",
         "-e", "VELRUNA_CONF=/etc/velruna/velruna.conf",
         "-e", "OPENSEARCH_PASSWORD",
@@ -119,8 +120,9 @@ mounted config that carries it.
 - the mount source must exist: Docker creates a **directory** for a missing
   host path and the server then fails with `is a directory`;
 - the image runs as uid 65532, so a `chmod 600` config owned by you is
-  unreadable inside — use `chmod 644` (the file holds no password when the
-  password comes from the environment), `chown 65532`, or `--user`;
+  unreadable inside — the example passes `--user 1000:1000` to reuse your own
+  uid; without it use `chmod 644` (the file holds no password when the password
+  comes from the environment) or `chown 65532`;
 - `-e OPENSEARCH_PASSWORD` forwards the variable from the environment the MCP
   client was started from — a desktop-launched editor inherits the login
   session, not your shell exports, so the variable may simply be absent. When

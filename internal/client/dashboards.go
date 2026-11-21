@@ -30,7 +30,10 @@ type DashboardPush struct {
 	Index string
 	// Global reports whether Index was resolved from the .kibana alias (the
 	// global tenant) rather than passed by the caller with --index.
-	Global  bool
+	Global bool
+	// Objects is how many objects the bundle contains; a run where Failed
+	// equals Objects wrote nothing at all.
+	Objects int
 	Indexed int
 	Failed  int
 	Errors  []string
@@ -62,9 +65,10 @@ func (c *Client) kibanaWriteIndex(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("probe the %s alias at %s: HTTP %d — the credentials were rejected "+
 			"(check the password and the cat/aliases privilege)", kibanaAlias, c.cfg.OpenSearchURL, status)
 	case http.StatusNotFound, http.StatusBadRequest:
-		// OpenSearch answers a named _cat alias that does not exist with 404
-		// (aliases_not_found_exception) or 400 (index_not_found_exception),
-		// not with an empty list: both mean "Dashboards never initialized here".
+		// Defensive: a live OpenSearch answers a named _cat alias that does not
+		// exist with 200 + [] (see below), but a proxy or an older gateway may
+		// turn that into 404 — either way it means "Dashboards never
+		// initialized here".
 		return "", fmt.Errorf("no %s alias at %s (HTTP %d): start OpenSearch Dashboards once against "+
 			"this cluster, or pass --index", kibanaAlias, c.cfg.OpenSearchURL, status)
 	default:
@@ -148,7 +152,7 @@ func (c *Client) PushDashboards(ctx context.Context, bundle []byte, index string
 		return nil, err
 	}
 
-	res := &DashboardPush{Index: index, Global: index == ""}
+	res := &DashboardPush{Index: index, Global: index == "", Objects: len(objs)}
 	// Writes go through the alias when the target was resolved from it: the
 	// alias routes to the current write index even if Dashboards migrates the
 	// index mid-run.
@@ -161,9 +165,10 @@ func (c *Client) PushDashboards(ctx context.Context, bundle []byte, index string
 		res.Index = resolved
 		target = kibanaAlias
 	} else {
-		// A wildcard would pass the existence probe and then fail on every PUT;
-		// the flag names one index.
-		if strings.ContainsAny(index, "*?") {
+		// A wildcard, a comma list or a reserved alias would pass the existence
+		// probe and then fail (or write to several indices) on every PUT; the
+		// flag names one saved-objects index.
+		if strings.ContainsAny(index, "*?,") || index == "_all" || strings.HasPrefix(index, "-") {
 			return nil, fmt.Errorf("--index must name a single saved-objects index, not a pattern: %q", index)
 		}
 		ok, herr := c.savedObjectsIndexExists(ctx, index)
@@ -190,7 +195,7 @@ func (c *Client) PushDashboards(ctx context.Context, bundle []byte, index string
 		path := "/" + url.PathEscape(target) + "/_doc/" + url.PathEscape(o.DocumentID())
 		if werr := c.putDocument(ctx, path, doc); werr != nil {
 			res.Failed++
-			res.Errors = append(res.Errors, fmt.Sprintf("%s: %v", o.DocumentID(), werr))
+			res.Errors = append(res.Errors, fmt.Sprintf("%s: %s: %v", target, o.DocumentID(), werr))
 			continue
 		}
 		res.Indexed++
@@ -219,8 +224,14 @@ func (c *Client) savedObjectsIndexExists(ctx context.Context, index string) (boo
 		return true, nil
 	case http.StatusNotFound:
 		return false, nil
-	case http.StatusMethodNotAllowed, http.StatusForbidden, http.StatusUnauthorized:
-		// The probe is a convenience, not a policy decision.
+	case http.StatusUnauthorized:
+		// 401 is a credential failure, not an authorization subtlety: letting it
+		// through would turn one clear message into N identical PUT errors.
+		return false, fmt.Errorf("probe index %s: HTTP 401 — the credentials were rejected "+
+			"(check the password)", index)
+	case http.StatusMethodNotAllowed, http.StatusForbidden:
+		// Write-only roles and proxies may forbid HEAD; the caller named the
+		// index, so the PUTs are the real test.
 		return true, nil
 	}
 	return false, fmt.Errorf("probe index %s: HTTP %d: %s", index, status, bodySnippet(body))
