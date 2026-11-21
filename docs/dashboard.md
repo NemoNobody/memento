@@ -41,6 +41,18 @@ the index-pattern list per session. A quick start for the whole stack:
 `make dev-opensearch && make dev-opensearch-dashboards` (see
 `docker/dashboards/README.md` for the bundle's invariants).
 
+### Privileges
+
+The push never touches the facts or docs indices, but it needs:
+
+- **default path**: `cat/aliases` (to resolve `.kibana`) and write access to
+  the `.kibana*` indices;
+- **`--index` path**: read access to the index mapping
+  (`indices:admin/mappings/get`, part of `view_index_metadata`) plus the same
+  write access. Without the mapping read the command still runs, prints a
+  warning that the target could not be verified, and the writes are the only
+  check.
+
 ## How it reads the store
 
 > An older store that still uses the pre-rename index names

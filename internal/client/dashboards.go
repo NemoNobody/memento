@@ -24,6 +24,11 @@ import (
 // index that is being retired.
 const kibanaAlias = ".kibana"
 
+// maxSavedObjectsBody bounds a non-error response body. A saved-objects mapping
+// is hundreds of KB; anything past 4 MiB is not one, and the caller reports it
+// as such rather than guessing from a truncated document.
+const maxSavedObjectsBody = 4 << 20
+
 // DashboardPush is the outcome of installing the Dashboards bundle.
 type DashboardPush struct {
 	// Index is the saved-objects index the bundle went into.
@@ -233,6 +238,12 @@ func (c *Client) probeSavedObjectsIndex(ctx context.Context, index string) (unve
 	}
 	switch status {
 	case http.StatusOK:
+		if len(body) > maxSavedObjectsBody {
+			// Truncated JSON would read as "not a saved-objects index"; say what
+			// actually happened instead.
+			return false, fmt.Errorf("the mapping of %s at %s is larger than %d MiB: cannot verify it — "+
+				"omit --index to resolve the .kibana alias instead", index, c.cfg.OpenSearchURL, maxSavedObjectsBody>>20)
+		}
 		if !hasSavedObjectsMapping([]byte(body)) {
 			return false, fmt.Errorf("index %s at %s has no saved-objects mapping (type/updated_at/"+
 				"migrationVersion): it is not a Dashboards saved-objects index — check --index",
@@ -249,7 +260,22 @@ func (c *Client) probeSavedObjectsIndex(ctx context.Context, index string) (unve
 		return false, fmt.Errorf("probe index %s: HTTP 401 — the credentials were rejected "+
 			"(check the password)", index)
 	case http.StatusForbidden, http.StatusMethodNotAllowed:
-		return true, nil
+		// The role can write but not read mappings. Fall back to the existence
+		// probe: "absent" is still an error (a typo that auto-create would
+		// otherwise turn into a green, empty run), while "present but unreadable"
+		// continues with a warning.
+		hstatus, hbody, herr := c.doSavedObjectRequest(ctx, http.MethodHead, "/"+url.PathEscape(index), nil)
+		if herr != nil {
+			return true, nil
+		}
+		switch hstatus {
+		case http.StatusOK, http.StatusForbidden, http.StatusMethodNotAllowed, http.StatusUnauthorized:
+			return true, nil
+		case http.StatusNotFound:
+			return false, fmt.Errorf("index %s does not exist at %s: has Dashboards ever started against "+
+				"this cluster, or is --index mistyped?", index, c.cfg.OpenSearchURL)
+		}
+		return false, fmt.Errorf("probe index %s: HTTP %d: %s", index, hstatus, bodySnippet(hbody))
 	}
 	return false, fmt.Errorf("probe index %s: HTTP %d: %s", index, status, bodySnippet(body))
 }
@@ -336,8 +362,9 @@ func (c *Client) doSavedObjectRequest(ctx context.Context, method, path string, 
 	}
 	// A mapping response runs to hundreds of KB (every saved-object type and
 	// field), so the read limit must not be the snippet limit: a truncated body
-	// reads as "not a saved-objects index". The snippet is cut later.
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	// reads as "not a saved-objects index". One byte over the cap lets the
+	// caller tell "larger than the cap" from "exactly the cap".
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxSavedObjectsBody+1))
 	if err != nil {
 		return resp.StatusCode, "", err
 	}

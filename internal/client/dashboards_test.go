@@ -244,6 +244,9 @@ func TestPushDashboards_ProbeRefusalDoesNotBlockExplicitIndex(t *testing.T) {
 			switch {
 			case r.Method == http.MethodGet && strings.HasSuffix(r.Path, "/_mapping"):
 				return status, ""
+			case r.Method == http.MethodHead:
+				// The fallback existence probe: the index is there.
+				return http.StatusOK, ""
 			case r.Method == http.MethodPut, r.Method == http.MethodPost:
 				return http.StatusOK, `{}`
 			}
@@ -259,6 +262,27 @@ func TestPushDashboards_ProbeRefusalDoesNotBlockExplicitIndex(t *testing.T) {
 		if !res.Unverified {
 			t.Errorf("probe %d: Unverified = false, want true (the run could not check the index)", status)
 		}
+	}
+}
+
+// When the mapping cannot be read, the existence probe still catches a typo:
+// auto-create would otherwise turn it into a green, empty run.
+func TestPushDashboards_UnreadableMappingStillRejectsMissingIndex(t *testing.T) {
+	c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.Path, "/_mapping"):
+			return http.StatusForbidden, ""
+		case r.Method == http.MethodHead:
+			return http.StatusNotFound, ""
+		}
+		return http.StatusOK, `{}`
+	})
+	_, err := c.PushDashboards(context.Background(), []byte(testBundle), ".kibana_7")
+	if err == nil {
+		t.Fatal("a missing index slipped through when the mapping was unreadable")
+	}
+	if !strings.Contains(err.Error(), "does not exist") {
+		t.Errorf("error = %v, want it to say the index does not exist", err)
 	}
 }
 
@@ -320,6 +344,24 @@ func TestPushDashboards_RefusesNonSavedObjectsIndex(t *testing.T) {
 	for _, r := range fake.requests {
 		if r.Method == http.MethodPut || r.Method == http.MethodPost {
 			t.Errorf("wrote to a non-saved-objects index: %s %s", r.Method, r.Path)
+		}
+	}
+}
+
+// All three marker fields are required: an index with only two of them is not a
+// saved-objects store, and each field must be pinned by its own case.
+func TestPushDashboards_RequiresEverySavedObjectField(t *testing.T) {
+	bodies := map[string]string{
+		"type+updated_at":       `{"x":{"mappings":{"properties":{"type":{"type":"keyword"},"updated_at":{"type":"date"}}}}}`,
+		"type+migrationVersion": `{"x":{"mappings":{"properties":{"type":{"type":"keyword"},"migrationVersion":{"type":"object"}}}}}`,
+		"updated_at+migration":  `{"x":{"mappings":{"properties":{"updated_at":{"type":"date"},"migrationVersion":{"type":"object"}}}}}`,
+	}
+	for name, body := range bodies {
+		c, _ := newFakeClient(t, func(r recordedRequest) (int, string) {
+			return http.StatusOK, body
+		})
+		if _, err := c.PushDashboards(context.Background(), []byte(testBundle), ".kibana_1"); err == nil {
+			t.Errorf("%s: an index without all three fields was accepted", name)
 		}
 	}
 }

@@ -74,7 +74,7 @@ OpenSearch Dashboards has started at least once against the cluster.`,
 			// objects are already written, and the operator needs the counts to
 			// know that a retry is safe rather than duplicated.
 			if res != nil {
-				if werr := printDashboardPush(os.Stdout, res, cfg.OpenSearchURL, err); werr != nil {
+				if werr := printDashboardPush(os.Stdout, os.Stderr, res, cfg.OpenSearchURL, err); werr != nil {
 					fatalErr(werr)
 				}
 			}
@@ -107,7 +107,7 @@ func loadDashboardsConfig(conf string) (*config.Config, error) {
 // session, so a fresh push looks absent until the tab is reloaded, and any
 // tenant other than Global shows the personal copy instead. runErr suppresses
 // the success hint: a failed refresh means the objects are not visible yet.
-func printDashboardPush(w io.Writer, res *client.DashboardPush, url string, runErr error) error {
+func printDashboardPush(out, errOut io.Writer, res *client.DashboardPush, url string, runErr error) error {
 	target, tenant := res.Index, "requested index"
 	if res.Global {
 		// Writes go through the alias; the resolved index is what it pointed at
@@ -119,29 +119,29 @@ func printDashboardPush(w io.Writer, res *client.DashboardPush, url string, runE
 		line = fmt.Sprintf("indexed %d saved object(s) into .kibana, global tenant, at %s "+
 			"(write index %s at probe time)", res.Indexed, url, res.Index)
 	}
-	if err := writeLine(w, line); err != nil {
+	if err := writeLine(out, line); err != nil {
 		return err
 	}
 	if res.Unverified {
-		if _, werr := fmt.Fprintf(os.Stderr, "warning: %s could not be read (mapping probe refused); "+
+		if _, werr := fmt.Fprintf(errOut, "warning: %s could not be read (mapping probe refused); "+
 			"the writes are the only check\n", res.Index); werr != nil {
 			return werr
 		}
 	}
 	for _, e := range res.Errors {
-		if _, werr := fmt.Fprintf(os.Stderr, "failed: %s\n", e); werr != nil {
+		if _, werr := fmt.Fprintf(errOut, "failed: %s\n", e); werr != nil {
 			return werr
 		}
 	}
 	if res.Failed > 0 {
-		if _, werr := fmt.Fprintf(os.Stderr, "%d object(s) failed\n", res.Failed); werr != nil {
+		if _, werr := fmt.Fprintf(errOut, "%d object(s) failed\n", res.Failed); werr != nil {
 			return werr
 		}
 		// Every object failing points at the target, not at the objects: the
-		// usual cause is a mistyped --index whose existence probe was refused
-		// (a write-only role cannot call HEAD) and which auto-create then made.
+		// usual cause is a mistyped --index whose probe was refused (a write-only
+		// role cannot read the mapping) and which auto-create then made.
 		if res.Objects > 0 && res.Failed == res.Objects {
-			if _, werr := fmt.Fprintf(os.Stderr, "nothing was written: check the target index %q "+
+			if _, werr := fmt.Fprintf(errOut, "nothing was written: check the target index %q "+
 				"(and that --index is an index, not an alias or pattern)\n", res.Index); werr != nil {
 				return werr
 			}
@@ -151,6 +151,6 @@ func printDashboardPush(w io.Writer, res *client.DashboardPush, url string, runE
 	if runErr != nil || !res.Global {
 		return nil
 	}
-	return writeLine(w, "open Dashboards, pick the Global tenant in the tenant switcher and "+
+	return writeLine(out, "open Dashboards, pick the Global tenant in the tenant switcher and "+
 		"hard-reload the tab (the UI caches the index-pattern list per session)")
 }
